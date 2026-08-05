@@ -56,6 +56,11 @@ jobs:
         run: |
           provider='${{ steps.provider.outputs.id }}'
           version_name=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionName"])' "$provider")
-          gh release create "${GITHUB_REF_NAME}" "dist/$provider-$version_name.hlp" \
-            --title "$provider Provider $version_name" \
-            --notes "HyperLyrics Enhanced official $provider Provider Pack."
+          asset="dist/$provider-$version_name.hlp"
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "$asset" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "$asset" \
+              --title "$provider Provider $version_name" \
+              --notes "HyperLyrics Enhanced official $provider Provider Pack."
+          fi
