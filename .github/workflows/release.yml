@@ -1,0 +1,61 @@
+name: Build Provider Pack
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "netease-v*"
+      - "qqmusic-v*"
+      - "kuwo-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Resolve provider from tag
+        id: provider
+        run: |
+          provider="${GITHUB_REF_NAME%%-v*}"
+          case "$provider" in
+            netease|qqmusic|kuwo) ;;
+            *) echo "Unsupported provider tag: $GITHUB_REF_NAME" >&2; exit 1 ;;
+          esac
+          echo "id=$provider" >> "$GITHUB_OUTPUT"
+      - name: Restore signing key
+        env:
+          HLE_PROVIDER_SIGNING_KEY_PEM: ${{ secrets.HLE_PROVIDER_SIGNING_KEY_PEM }}
+        run: |
+          test -n "$HLE_PROVIDER_SIGNING_KEY_PEM"
+          printf '%s' "$HLE_PROVIDER_SIGNING_KEY_PEM" > signing-private.pem
+          chmod 600 signing-private.pem
+      - name: Build signed Provider Pack
+        run: |
+          provider='${{ steps.provider.outputs.id }}'
+          version_name=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionName"])' "$provider")
+          apk="providers/$provider/build/outputs/apk/release/${provider}-release-unsigned.apk"
+          ./gradlew --no-daemon --max-workers=2 ":providers:$provider:assembleRelease"
+          python3 scripts/build_provider_pack.py \
+            --apk "$apk" \
+            --manifest "providers/$provider/provider.json" \
+            --private-key signing-private.pem \
+            --output "dist/$provider-$version_name.hlp"
+          expected_sha=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(next(item for item in json.loads(pathlib.Path("catalog/catalog.json").read_text())["providers"] if item["id"] == p)["sha256"])' "$provider")
+          test "$(sha256sum "dist/$provider-$version_name.hlp" | cut -d' ' -f1)" = "$expected_sha"
+      - name: Publish Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          provider='${{ steps.provider.outputs.id }}'
+          version_name=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionName"])' "$provider")
+          gh release create "${GITHUB_REF_NAME}" "dist/$provider-$version_name.hlp" \
+            --title "$provider Provider $version_name" \
+            --notes "HyperLyrics Enhanced official $provider Provider Pack."

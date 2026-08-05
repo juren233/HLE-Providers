@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    {"id":"netease","displayName":"网易云音乐","targetPackages":["com.netease.cloudmusic","com.hihonor.cloudmusic"],"available":true,"versionName":"1.0.0","versionCode":1,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/netease-v1.0.0/netease-1.0.0.hlp","sha256":"3887c1aa023de3f0641c5228588c3da2f4620896d76c6a8d8240e49c3813c2f9"},
+    {"id":"qqmusic","displayName":"QQ 音乐","targetPackages":["com.tencent.qqmusic"],"available":true,"versionName":"1.0.0","versionCode":1,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/qqmusic-v1.0.0/qqmusic-1.0.0.hlp","sha256":"6dcaac6916413064de7852b08dd90d6bd1ec2639e5dfc17bc48b6dab4ba2d109"},
+    {"id":"qqmusic-hd","displayName":"QQ 音乐 HD","targetPackages":["com.tencent.qqmusicpad"],"available":false},
+    {"id":"kugou","displayName":"酷狗音乐","targetPackages":["com.kugou.android","com.kugou.android.lite"],"available":false},
+    {"id":"kuwo","displayName":"酷我音乐","targetPackages":["cn.kuwo.player"],"available":true,"versionName":"1.0.0","versionCode":1,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/kuwo-v1.0.0/kuwo-1.0.0.hlp","sha256":"138e27cc87f43c880f83fd0666d645d77bd08c0fb83b8aff7dc061775d11ed83"},
+    {"id":"spotify","displayName":"Spotify","targetPackages":["com.spotify.music"],"available":false},
+    {"id":"lxmusic","displayName":"LX 音乐","targetPackages":["cn.toside.music.mobile","com.ikunshare.music.mobile","com.lxnetease.music.mobile"],"available":false},
+    {"id":"poweramp","displayName":"Poweramp","targetPackages":["com.maxmpz.audioplayer"],"available":false},
+    {"id":"salt-player","displayName":"Salt Player","targetPackages":["com.salt.music"],"available":false},
+    {"id":"qishui","displayName":"汽水音乐","targetPackages":["com.luna.music"],"available":false},
+    {"id":"musicfree","displayName":"MusicFree","targetPackages":["fun.upup.musicfree"],"available":false},
+    {"id":"gramophone","displayName":"Gramophone","targetPackages":["org.akanework.gramophone"],"available":false},
+    {"id":"symfonium","displayName":"Symfonium","targetPackages":["app.symfonik.music.player"],"available":false}
+  ]
+}
