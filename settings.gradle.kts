@@ -20,3 +20,4 @@ rootProject.name = "HLE-Providers"
 include(":providers:kuwo")
 include(":providers:netease")
 include(":providers:qqmusic")
+include(":providers:salt-player")

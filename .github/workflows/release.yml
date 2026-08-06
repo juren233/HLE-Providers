@@ -11,11 +11,13 @@ on:
           - netease
           - qqmusic
           - kuwo
+          - salt-player
   push:
     tags:
       - "netease-v*"
       - "qqmusic-v*"
       - "kuwo-v*"
+      - "salt-player-v*"
 
 permissions:
   contents: write
@@ -40,8 +42,9 @@ jobs:
           fi
           case "$provider" in
             netease) display_name="网易云音乐" ;;
-            qqmusic) display_name="QQ 音乐" ;;
+            qqmusic) display_name="QQ音乐" ;;
             kuwo) display_name="酷我音乐" ;;
+            salt-player) display_name="椒盐音乐" ;;
             *) echo "Unsupported provider tag: $GITHUB_REF_NAME" >&2; exit 1 ;;
           esac
           echo "id=$provider" >> "$GITHUB_OUTPUT"
@@ -117,6 +120,15 @@ jobs:
           provider_id, version_name, version_code, asset_url, pack_sha = sys.argv[1:]
           catalog_path = pathlib.Path("catalog/catalog.json")
           catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+          canonical_display_names = {
+              "qqmusic": "QQ音乐",
+              "qqmusic-hd": "QQ音乐HD",
+              "lxmusic": "LX音乐",
+              "salt-player": "椒盐音乐",
+          }
+          for item in catalog["providers"]:
+              if item["id"] in canonical_display_names:
+                  item["displayName"] = canonical_display_names[item["id"]]
           provider = next(item for item in catalog["providers"] if item["id"] == provider_id)
           provider.update(
               available=True,
