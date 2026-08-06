@@ -39,10 +39,13 @@ jobs:
             provider="${GITHUB_REF_NAME%%-v*}"
           fi
           case "$provider" in
-            netease|qqmusic|kuwo) ;;
+            netease) display_name="网易云音乐" ;;
+            qqmusic) display_name="QQ 音乐" ;;
+            kuwo) display_name="酷我音乐" ;;
             *) echo "Unsupported provider tag: $GITHUB_REF_NAME" >&2; exit 1 ;;
           esac
           echo "id=$provider" >> "$GITHUB_OUTPUT"
+          echo "display_name=$display_name" >> "$GITHUB_OUTPUT"
       - name: Restore signing key
         env:
           HLE_PROVIDER_SIGNING_KEY_PEM: ${{ secrets.HLE_PROVIDER_SIGNING_KEY_PEM }}
@@ -81,6 +84,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           provider='${{ steps.pack.outputs.provider }}'
+          display_name='${{ steps.provider.outputs.display_name }}'
           version_name='${{ steps.pack.outputs.version_name }}'
           release_tag='${{ steps.pack.outputs.release_tag }}'
           asset='${{ steps.pack.outputs.asset }}'
@@ -88,9 +92,12 @@ jobs:
             gh release upload "$release_tag" "$asset" --clobber
           else
             gh release create "$release_tag" "$asset" \
-              --title "$provider Provider $version_name" \
-              --notes "HyperLyrics Enhanced official $provider Provider Pack."
+              --title "$display_name Provider $version_name" \
+              --notes "HyperLyrics Enhanced 官方 $display_name Provider 插件包。"
           fi
+          gh release edit "$release_tag" \
+            --title "$display_name Provider $version_name" \
+            --notes "HyperLyrics Enhanced 官方 $display_name Provider 插件包。"
       - name: Update signed provider catalog
         run: |
           provider='${{ steps.pack.outputs.provider }}'
@@ -131,6 +138,10 @@ jobs:
           lines.extend(["  ]", "}"])
           catalog_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
+
+          GH_TOKEN='${{ github.token }}' python3 scripts/verify_catalog_assets.py \
+            --catalog catalog/catalog.json \
+            --repository "$GITHUB_REPOSITORY"
 
           signature_file=$(mktemp)
           openssl pkeyutl -sign -rawin \
