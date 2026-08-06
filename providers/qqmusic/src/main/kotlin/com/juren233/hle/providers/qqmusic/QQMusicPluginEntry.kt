@@ -19,6 +19,10 @@ import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
+import com.juren233.hle.providers.qqmusic.qrc.QqQrcDecrypter
+import com.juren233.hle.providers.qqmusic.qrc.QqQrcLine
+import com.juren233.hle.providers.qqmusic.qrc.QqQrcParser
+import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 import io.github.proify.lyricon.lyric.model.Song
 import io.github.proify.lyricon.provider.LyriconFactory
@@ -194,10 +198,11 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 val body = listOf(
                     "version" to "15",
                     "miniversion" to "100",
-                    // lrctype=1 deliberately asks QQ for ordinary LRC. It is
-                    // supported by the same endpoint and avoids a native or
-                    // third-party crypto dependency in the Pack.
-                    "lrctype" to "1",
+                    // lrctype=4 is the QQ Music QRC response. It carries word
+                    // timings in the original lyric and the translation used
+                    // by the QQ Music client; QqQrcDecrypter transparently
+                    // leaves ordinary LRC values unchanged.
+                    "lrctype" to "4",
                     "musicid" to id,
                 ).joinToString("&") { (key, value) ->
                     "$key=${URLEncoder.encode(value, "UTF-8")}"
@@ -208,9 +213,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 }
                 val raw = connection.inputStream.bufferedReader().use { it.readText() }
                 QQPayload(
-                    lyric = cdata(raw, "content"),
-                    translation = cdata(raw, "contentts"),
-                    roma = cdata(raw, "contentroma"),
+                    lyric = QqQrcDecrypter.decode(cdata(raw, "content")),
+                    translation = QqQrcDecrypter.decode(cdata(raw, "contentts")),
+                    roma = QqQrcDecrypter.decode(cdata(raw, "contentroma")),
                 )
             } finally {
                 connection.disconnect()
@@ -227,6 +232,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         val begin: Long,
         val end: Long,
         val text: String,
+        val words: List<LyricWord> = emptyList(),
     )
 
     private object LrcParser {
@@ -260,16 +266,23 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
     }
 
     private fun toSong(track: TrackMetadata, payload: QQPayload): Song {
-        val source = LrcParser.parse(payload.lyric)
-        val translations = LrcParser.parse(payload.translation)
-        val romas = LrcParser.parse(payload.roma)
+        val source = QqQrcParser.parse(payload.lyric).map { it.toTimelineLine() }
+            .ifEmpty { LrcParser.parse(payload.lyric) }
+        val translations = LrcParser.parse(payload.translation).ifEmpty {
+            QqQrcParser.parse(payload.translation).map { it.toTimelineLine() }
+        }
+        val romas = LrcParser.parse(payload.roma).ifEmpty {
+            QqQrcParser.parse(payload.roma).map { it.toTimelineLine() }
+        }
         val rich = source.map { line ->
             RichLyricLine().apply {
                 begin = line.begin
                 end = line.end
                 duration = (line.end - line.begin).coerceAtLeast(0L)
                 text = line.text
+                words = line.words.takeIf(List<LyricWord>::isNotEmpty)
                 translation = closest(translations, line.begin)?.text
+                    ?.takeUnless { it.trim() == "//" }
                 roma = closest(romas, line.begin)?.text
             }
         }
@@ -285,4 +298,11 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
     private fun closest(lines: List<TimelineLine>, position: Long): TimelineLine? = lines
         .minByOrNull { kotlin.math.abs(it.begin - position) }
         ?.takeIf { kotlin.math.abs(it.begin - position) <= 1_000L }
+
+    private fun QqQrcLine.toTimelineLine() = TimelineLine(
+        begin = begin,
+        end = end,
+        text = text,
+        words = words,
+    )
 }
