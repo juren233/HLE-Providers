@@ -15,12 +15,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - name: Resolve provider from tag
         id: provider
         run: |
@@ -38,25 +38,32 @@ jobs:
           printf '%s' "$HLE_PROVIDER_SIGNING_KEY_PEM" > signing-private.pem
           chmod 600 signing-private.pem
       - name: Build signed Provider Pack
+        id: pack
         run: |
           provider='${{ steps.provider.outputs.id }}'
           version_name=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionName"])' "$provider")
+          version_code=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionCode"])' "$provider")
           apk="providers/$provider/build/outputs/apk/release/${provider}-release-unsigned.apk"
+          asset="dist/$provider-$version_name.hlp"
           ./gradlew --no-daemon --max-workers=2 ":providers:$provider:assembleRelease"
           python3 scripts/build_provider_pack.py \
             --apk "$apk" \
             --manifest "providers/$provider/provider.json" \
             --private-key signing-private.pem \
-            --output "dist/$provider-$version_name.hlp"
-          expected_sha=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(next(item for item in json.loads(pathlib.Path("catalog/catalog.json").read_text())["providers"] if item["id"] == p)["sha256"])' "$provider")
-          test "$(sha256sum "dist/$provider-$version_name.hlp" | cut -d' ' -f1)" = "$expected_sha"
+            --output "$asset"
+          pack_sha=$(sha256sum "$asset" | cut -d' ' -f1)
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+          echo "sha256=$pack_sha" >> "$GITHUB_OUTPUT"
       - name: Publish Release asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          provider='${{ steps.provider.outputs.id }}'
-          version_name=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionName"])' "$provider")
-          asset="dist/$provider-$version_name.hlp"
+          provider='${{ steps.pack.outputs.provider }}'
+          version_name='${{ steps.pack.outputs.version_name }}'
+          asset='${{ steps.pack.outputs.asset }}'
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" "$asset" --clobber
           else
@@ -64,3 +71,66 @@ jobs:
               --title "$provider Provider $version_name" \
               --notes "HyperLyrics Enhanced official $provider Provider Pack."
           fi
+      - name: Update signed provider catalog
+        run: |
+          provider='${{ steps.pack.outputs.provider }}'
+          version_name='${{ steps.pack.outputs.version_name }}'
+          version_code='${{ steps.pack.outputs.version_code }}'
+          pack_sha='${{ steps.pack.outputs.sha256 }}'
+          asset_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${provider}-${version_name}.hlp"
+
+          git fetch origin main
+          git switch -C main origin/main
+          python3 - "$provider" "$version_name" "$version_code" "$asset_url" "$pack_sha" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          provider_id, version_name, version_code, asset_url, pack_sha = sys.argv[1:]
+          catalog_path = pathlib.Path("catalog/catalog.json")
+          catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+          provider = next(item for item in catalog["providers"] if item["id"] == provider_id)
+          provider.update(
+              available=True,
+              versionName=version_name,
+              versionCode=int(version_code),
+              assetUrl=asset_url,
+              sha256=pack_sha,
+          )
+
+          lines = [
+              "{",
+              f'  "schemaVersion": {catalog["schemaVersion"]},',
+              '  "providers": [',
+          ]
+          for index, item in enumerate(catalog["providers"]):
+              suffix = "," if index + 1 < len(catalog["providers"]) else ""
+              encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+              lines.append(f"    {encoded}{suffix}")
+          lines.extend(["  ]", "}"])
+          catalog_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+          signature_file=$(mktemp)
+          openssl pkeyutl -sign -rawin \
+            -inkey signing-private.pem \
+            -in catalog/catalog.json \
+            -out "$signature_file"
+          base64 -w0 "$signature_file" > catalog/catalog.sig
+          printf '\n' >> catalog/catalog.sig
+          openssl pkeyutl -verify -rawin -pubin \
+            -inkey keys/provider-signing-public.pem \
+            -in catalog/catalog.json \
+            -sigfile "$signature_file"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add catalog/catalog.json catalog/catalog.sig
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit \
+            -m "更新 $provider Provider 发布目录" \
+            -m "- 同步 $version_name 版本与 CI 生成的 Pack 摘要。
+- 使用项目 Ed25519 私钥重新签名官方目录。"
+          git push origin main
