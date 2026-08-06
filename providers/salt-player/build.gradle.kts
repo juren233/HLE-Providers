@@ -10,14 +10,18 @@ android {
         applicationId = "com.juren233.hle.providers.pack.saltplayer"
         minSdk = 33
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {
@@ -30,5 +34,6 @@ dependencies {
     compileOnly("io.github.proify.lyricon:provider:0.1.70")
     compileOnly("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("io.github.proify.lyricon:provider:0.1.70")
     testImplementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
 }
