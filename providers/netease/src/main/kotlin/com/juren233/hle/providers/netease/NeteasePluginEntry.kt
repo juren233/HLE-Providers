@@ -285,27 +285,24 @@ object NeteasePluginEntry : OfficialProviderPlugin {
 
     private object TimelineParser {
         private val yrcHeader = Regex("\\[(\\d+),(\\d+)]")
-        private val yrcWord = Regex("\\((\\d+),(\\d+),\\d+\\)([^ (]*)")
         private val lrcTime = Regex("\\[(\\d{1,3})[:.]([0-5]\\d)(?:[:.]([0-9]{1,3}))?]")
 
         fun parseYrc(raw: String?): List<TimelineLine> {
             if (raw.isNullOrBlank()) return emptyList()
             return raw.lineSequence().mapNotNull { line ->
-                val header = yrcHeader.find(line.trim()) ?: return@mapNotNull null
+                val header = yrcHeader.find(line) ?: return@mapNotNull null
                 val start = header.groupValues[1].toLongOrNull() ?: return@mapNotNull null
                 val duration = header.groupValues[2].toLongOrNull() ?: 0L
-                val words = yrcWord.findAll(line.substring(header.range.last + 1)).mapNotNull { match ->
-                    val begin = match.groupValues[1].toLongOrNull() ?: return@mapNotNull null
-                    val wordDuration = match.groupValues[2].toLongOrNull() ?: 0L
-                    val text = match.groupValues[3]
-                    if (text.isEmpty()) return@mapNotNull null
+                val words = NeteaseYrcWordParser.parse(
+                    line.substring(header.range.last + 1),
+                ).map { segment ->
                     LyricWord().apply {
-                        this.begin = begin
-                        this.end = begin + wordDuration
-                        this.duration = wordDuration
-                        this.text = text
+                        this.begin = segment.begin
+                        this.end = segment.begin + segment.duration
+                        this.duration = segment.duration
+                        this.text = segment.text
                     }
-                }.toList()
+                }
                 TimelineLine(start, start + duration, words.joinToString("") { it.text.orEmpty() }, words)
             }.sortedBy(TimelineLine::begin).toList()
         }
