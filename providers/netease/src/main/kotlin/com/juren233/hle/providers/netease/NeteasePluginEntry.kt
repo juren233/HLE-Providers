@@ -14,7 +14,10 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.media.MediaMetadata
 import android.media.session.PlaybackState
+import android.os.SystemClock
 import android.util.Log
+import com.juren233.hle.providers.netease.BuildConfig
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 import io.github.proify.lyricon.lyric.model.Song
@@ -33,6 +36,8 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
@@ -52,7 +57,11 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             val process = Application.getProcessName()
             if (process != host.packageName && process != "${host.packageName}:play") return@hookApplication
             if (!installed.compareAndSet(false, true)) return@hookApplication
-            NeteaseRuntime(application, host.packageName).start()
+            NeteaseRuntime(
+                application = application,
+                playerPackage = host.packageName,
+                enableNextTrack = process == host.packageName,
+            ).start()
         }
 
         host.hookMediaSession(
@@ -72,14 +81,26 @@ object NeteasePluginEntry : OfficialProviderPlugin {
     private class NeteaseRuntime(
         private val application: Application,
         private val playerPackage: String,
+        private val enableNextTrack: Boolean,
     ) {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
             Thread(task, "HLE-Netease-Lyrics").apply { isDaemon = true }
         }
         private val metadata = ConcurrentHashMap<Long, TrackMetadata>()
         private val cacheDir = File(application.filesDir, "hle-provider/netease")
+        private val nextTrackScheduler: ScheduledExecutorService =
+            Executors.newSingleThreadScheduledExecutor { task ->
+                Thread(task, "HLE-Netease-NextTrack").apply { isDaemon = true }
+            }
         private var currentId: Long? = null
         private var lastSong: Song? = null
+        private var lastNextTrackFrame: String? = null
+        private var lastNextTrackFrameSentAtMs = 0L
+
+        @Volatile
+        private var currentTrack: TrackMetadata? = null
+
+        private var nextTrackResolver: NeteaseNextTrackResolver? = null
 
         @Volatile
         var provider: LyriconProvider? = null
@@ -96,17 +117,25 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 it.register()
             }
             NeteasePluginEntry.runtime = this
+            if (enableNextTrack) startNextTrackCapture()
             Log.i(TAG, "网易云音乐 Lyricon Provider 已注册: process=${Application.getProcessName()}")
         }
 
         fun onMetadata(value: MediaMetadata?) {
-            val id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.toLongOrNull() ?: return
+            val id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.toLongOrNull()
+            if (id == null) {
+                currentTrack = null
+                requestNextTrackCapture()
+                return
+            }
             val track = TrackMetadata(
                 id = id,
                 title = value.getString(MediaMetadata.METADATA_KEY_TITLE),
                 artist = value.getString(MediaMetadata.METADATA_KEY_ARTIST),
                 duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
             )
+            currentTrack = track
+            requestNextTrackCapture()
             metadata[id] = track
             if (currentId == id) return
             currentId = id
@@ -152,6 +181,75 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             provider?.player?.setSong(song)
         }
 
+        private fun startNextTrackCapture() {
+            nextTrackResolver = runCatching { NeteaseNextTrackResolver.create(application) }
+                .onFailure { error -> Log.w(TAG, "网易云下一首解析器校验失败", error) }
+                .getOrNull()
+            if (nextTrackResolver == null) {
+                Log.w(TAG, "网易云版本未匹配，跳过下一首适配")
+                return
+            }
+            nextTrackScheduler.scheduleWithFixedDelay(
+                ::captureNextTrack,
+                0L,
+                NEXT_TRACK_POLL_INTERVAL_MS,
+                TimeUnit.MILLISECONDS,
+            )
+        }
+
+        private fun requestNextTrackCapture() {
+            if (nextTrackResolver != null) nextTrackScheduler.execute(::captureNextTrack)
+        }
+
+        private fun captureNextTrack() {
+            val resolver = nextTrackResolver ?: return
+            val current = currentTrack
+            runCatching { resolver.resolve() }
+                .onSuccess { next -> publishNextTrack(current, next) }
+                .onFailure { error ->
+                    if (BuildConfig.DEBUG) Log.w(TAG, "网易云下一首采集失败", error)
+                }
+        }
+
+        private fun publishNextTrack(current: TrackMetadata?, next: NeteaseNextTrackSnapshot?) {
+            val frame = when {
+                current == null -> OfficialProviderControlProtocol.encodeNextTrackClear()
+                next == null || next.title.isBlank() ->
+                    OfficialProviderControlProtocol.encodeNextTrackClear(
+                        currentId = current.id.toString(),
+                        currentTitle = current.title.orEmpty(),
+                        currentArtist = current.artist.orEmpty(),
+                    )
+                else -> OfficialProviderControlProtocol.encodeNextTrack(
+                    currentId = current.id.toString(),
+                    currentTitle = current.title.orEmpty(),
+                    currentArtist = current.artist.orEmpty(),
+                    nextId = next.id,
+                    nextTitle = next.title,
+                    nextArtist = next.artist,
+                    nextAlbum = next.album,
+                    nextDurationMs = next.durationMs,
+                )
+            }
+            val now = SystemClock.elapsedRealtime()
+            if (
+                frame == lastNextTrackFrame &&
+                now - lastNextTrackFrameSentAtMs < NEXT_TRACK_HEARTBEAT_MS
+            ) {
+                return
+            }
+            if (provider?.player?.sendText(frame) == true) {
+                lastNextTrackFrame = frame
+                lastNextTrackFrameSentAtMs = now
+                if (BuildConfig.DEBUG) {
+                    Log.i(
+                        TAG,
+                        "网易云下一首控制帧已发送: current=${current?.id}, next=${next?.id}",
+                    )
+                }
+            }
+        }
+
         private fun placeholder(track: TrackMetadata): Song = Song().apply {
             id = track.id.toString()
             name = track.title
@@ -178,6 +276,9 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         val artist: String?,
         val duration: Long,
     )
+
+    private const val NEXT_TRACK_POLL_INTERVAL_MS = 1_500L
+    private const val NEXT_TRACK_HEARTBEAT_MS = 5_000L
 
     private data class NeteasePayload(
         val lrc: String?,

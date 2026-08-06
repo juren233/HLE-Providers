@@ -14,7 +14,10 @@ import android.app.Application
 import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.PlaybackState
+import android.os.SystemClock
 import android.util.Log
+import com.juren233.hle.providers.qqmusic.BuildConfig
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
@@ -36,6 +39,8 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 object QQMusicPluginEntry : OfficialProviderPlugin {
@@ -47,14 +52,24 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
     @Volatile
     private var runtime: QQRuntime? = null
 
+    @Volatile
+    private var nextTrackRuntime: QQNextTrackRuntime? = null
+
     override fun install(host: OfficialProviderHost) {
         require(host.packageName == "com.tencent.qqmusic") {
             "Unsupported QQ Music package: ${host.packageName}"
         }
         host.hookApplication { application ->
-            if (Application.getProcessName() != host.packageName + PLAYER_PROCESS_SUFFIX) return@hookApplication
+            val processName = Application.getProcessName()
+            if (processName != host.packageName && processName != host.packageName + PLAYER_PROCESS_SUFFIX) {
+                return@hookApplication
+            }
             if (!installed.compareAndSet(false, true)) return@hookApplication
-            QQRuntime(application, host.packageName).start()
+            if (processName == host.packageName) {
+                QQNextTrackRuntime(application, host.packageName).start()
+            } else {
+                QQRuntime(application, host.packageName).start()
+            }
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
@@ -153,12 +168,93 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
     }
 
+    private class QQNextTrackRuntime(
+        private val application: Application,
+        private val playerPackage: String,
+    ) {
+        private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task, "HLE-QQMusic-NextTrack").apply { isDaemon = true }
+        }
+        private var lastFrame: String? = null
+        private var lastFrameSentAtMs = 0L
+
+        @Volatile
+        private var provider: LyriconProvider? = null
+
+        fun start() {
+            val resolver = runCatching { QQMusicNextTrackResolver.create(application) }
+                .onFailure { error -> Log.w(TAG, "QQ 音乐下一首解析器校验失败", error) }
+                .getOrNull()
+            if (resolver == null) {
+                Log.w(TAG, "QQ 音乐版本未匹配，跳过下一首适配")
+                return
+            }
+            provider = LyriconFactory.createProvider(
+                context = application,
+                providerPackageName = PROVIDER_PACKAGE,
+                playerPackageName = playerPackage,
+            ).also { it.register() }
+            nextTrackRuntime = this
+            scheduler.scheduleWithFixedDelay(
+                { capture(resolver) },
+                0L,
+                NEXT_TRACK_POLL_INTERVAL_MS,
+                TimeUnit.MILLISECONDS,
+            )
+            Log.i(TAG, "QQ 音乐下一首 Provider 已注册: process=${Application.getProcessName()}")
+        }
+
+        private fun capture(resolver: QQMusicNextTrackResolver) {
+            runCatching { resolver.resolve() }
+                .onSuccess { snapshot -> publish(snapshot) }
+                .onFailure { error ->
+                    if (BuildConfig.DEBUG) Log.w(TAG, "QQ 音乐下一首采集失败", error)
+                }
+        }
+
+        private fun publish(snapshot: QQMusicQueueSnapshot?) {
+            val frame = when {
+                snapshot == null -> OfficialProviderControlProtocol.encodeNextTrackClear()
+                snapshot.next == null || snapshot.next.title.isBlank() ->
+                    OfficialProviderControlProtocol.encodeNextTrackClear(
+                        currentId = snapshot.current.id,
+                        currentTitle = snapshot.current.title,
+                        currentArtist = snapshot.current.artist,
+                    )
+                else -> OfficialProviderControlProtocol.encodeNextTrack(
+                    currentId = snapshot.current.id,
+                    currentTitle = snapshot.current.title,
+                    currentArtist = snapshot.current.artist,
+                    nextId = snapshot.next.id,
+                    nextTitle = snapshot.next.title,
+                    nextArtist = snapshot.next.artist,
+                )
+            }
+            val now = SystemClock.elapsedRealtime()
+            if (frame == lastFrame && now - lastFrameSentAtMs < NEXT_TRACK_HEARTBEAT_MS) return
+            if (provider?.player?.sendText(frame) == true) {
+                lastFrame = frame
+                lastFrameSentAtMs = now
+                if (BuildConfig.DEBUG) {
+                    Log.i(
+                        TAG,
+                        "QQ 下一首控制帧已发送: current=${snapshot?.current?.id}, " +
+                            "next=${snapshot?.next?.id}",
+                    )
+                }
+            }
+        }
+    }
+
     private data class TrackMetadata(
         val id: String,
         val title: String?,
         val artist: String?,
         val duration: Long,
     )
+
+    private const val NEXT_TRACK_POLL_INTERVAL_MS = 1_500L
+    private const val NEXT_TRACK_HEARTBEAT_MS = 5_000L
 
     private data class QQPayload(
         val lyric: String?,
