@@ -2,6 +2,15 @@ name: Build Provider Pack
 
 on:
   workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider to publish
+        required: true
+        type: choice
+        options:
+          - netease
+          - qqmusic
+          - kuwo
   push:
     tags:
       - "netease-v*"
@@ -24,7 +33,11 @@ jobs:
       - name: Resolve provider from tag
         id: provider
         run: |
-          provider="${GITHUB_REF_NAME%%-v*}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            provider='${{ inputs.provider }}'
+          else
+            provider="${GITHUB_REF_NAME%%-v*}"
+          fi
           case "$provider" in
             netease|qqmusic|kuwo) ;;
             *) echo "Unsupported provider tag: $GITHUB_REF_NAME" >&2; exit 1 ;;
@@ -43,6 +56,11 @@ jobs:
           provider='${{ steps.provider.outputs.id }}'
           version_name=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionName"])' "$provider")
           version_code=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionCode"])' "$provider")
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            release_tag="${provider}-v${version_name}"
+          else
+            release_tag="$GITHUB_REF_NAME"
+          fi
           apk="providers/$provider/build/outputs/apk/release/${provider}-release-unsigned.apk"
           asset="dist/$provider-$version_name.hlp"
           ./gradlew --no-daemon --max-workers=2 ":providers:$provider:assembleRelease"
@@ -55,6 +73,7 @@ jobs:
           echo "provider=$provider" >> "$GITHUB_OUTPUT"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
           echo "sha256=$pack_sha" >> "$GITHUB_OUTPUT"
       - name: Publish Release asset
@@ -63,11 +82,12 @@ jobs:
         run: |
           provider='${{ steps.pack.outputs.provider }}'
           version_name='${{ steps.pack.outputs.version_name }}'
+          release_tag='${{ steps.pack.outputs.release_tag }}'
           asset='${{ steps.pack.outputs.asset }}'
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" "$asset" --clobber
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release upload "$release_tag" "$asset" --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" "$asset" \
+            gh release create "$release_tag" "$asset" \
               --title "$provider Provider $version_name" \
               --notes "HyperLyrics Enhanced official $provider Provider Pack."
           fi
@@ -76,8 +96,9 @@ jobs:
           provider='${{ steps.pack.outputs.provider }}'
           version_name='${{ steps.pack.outputs.version_name }}'
           version_code='${{ steps.pack.outputs.version_code }}'
+          release_tag='${{ steps.pack.outputs.release_tag }}'
           pack_sha='${{ steps.pack.outputs.sha256 }}'
-          asset_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${provider}-${version_name}.hlp"
+          asset_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/${provider}-${version_name}.hlp"
 
           git fetch origin main
           git switch -C main origin/main
@@ -131,6 +152,6 @@ jobs:
           fi
           git commit \
             -m "更新 $provider Provider 发布目录" \
-            -m "- 同步 $version_name 版本与 CI 生成的 Pack 摘要。
-- 使用项目 Ed25519 私钥重新签名官方目录。"
+            -m "- 同步 $version_name 版本与 CI 生成的 Pack 摘要。" \
+            -m "- 使用项目 Ed25519 私钥重新签名官方目录。"
           git push origin main
