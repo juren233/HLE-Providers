@@ -14,8 +14,6 @@ HyperLyrics Enhanced 的官方 Lyricon Provider Pack 仓库。
 
 ## 本地构建
 
-网易云音乐、QQ 音乐和酷我音乐 Pack 都可以用同一套流程构建，例如：
-
 ```bash
 provider=netease
 ./gradlew --no-daemon --max-workers=2 ":providers:$provider:assembleRelease"
@@ -25,14 +23,6 @@ python3 scripts/build_provider_pack.py \
   --private-key /path/to/signing-private.pem \
   --output "dist/$provider-1.0.0.hlp"
 ```
-
-当前已发布的第一批 Pack：
-
-- 网易云音乐：`com.netease.cloudmusic`、`com.hihonor.cloudmusic`
-- QQ 音乐：`com.tencent.qqmusic`
-- 酷我音乐：`cn.kuwo.player`
-
-网易云 Pack 使用网易云 EAPI 获取 YRC/LRC、翻译和罗马音；QQ 音乐 Pack 使用官方歌词下载接口的普通 LRC 响应，并保留翻译/罗马音字段。两者均在目标应用进程内缓存歌词，不需要额外安装独立模块。
 
 Pack ZIP 条目使用固定时间戳，重复构建会得到相同摘要；目录中的 `sha256` 必须与 Pack 文件一致。
 
