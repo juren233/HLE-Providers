@@ -9,6 +9,8 @@ package com.juren233.hyperlyricsenhanced.provider
 import android.app.Application
 import android.media.MediaMetadata
 import android.media.session.PlaybackState
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 
 interface OfficialProviderPlugin {
     fun install(host: OfficialProviderHost)
@@ -35,4 +37,124 @@ fun interface OfficialProviderPlaybackStateCallback {
 
 fun interface OfficialProviderMetadataCallback {
     fun onMetadataChanged(metadata: MediaMetadata?)
+}
+
+data class OfficialProviderNextTrackFrame(
+    val clear: Boolean,
+    val currentId: String,
+    val currentTitle: String,
+    val currentArtist: String,
+    val nextId: String,
+    val nextTitle: String,
+    val nextArtist: String,
+    val nextAlbum: String,
+    val nextDurationMs: Long,
+)
+
+object OfficialProviderControlProtocol {
+    const val NEXT_TRACK_PREFIX = "\u001eHLE_OFFICIAL_NEXT_TRACK_V1|"
+
+    private const val UPDATE_OPERATION = "U"
+    private const val CLEAR_OPERATION = "C"
+    private const val FIELD_COUNT = 9
+    private const val MAX_FRAME_LENGTH = 16 * 1024
+    private const val MAX_FIELD_LENGTH = 1024
+
+    fun encodeNextTrack(
+        currentId: String,
+        currentTitle: String,
+        currentArtist: String,
+        nextId: String,
+        nextTitle: String,
+        nextArtist: String,
+        nextAlbum: String = "",
+        nextDurationMs: Long = -1L,
+    ): String = encode(
+        UPDATE_OPERATION,
+        currentId,
+        currentTitle,
+        currentArtist,
+        nextId,
+        nextTitle,
+        nextArtist,
+        nextAlbum,
+        nextDurationMs,
+    )
+
+    fun encodeNextTrackClear(
+        currentId: String = "",
+        currentTitle: String = "",
+        currentArtist: String = "",
+    ): String = encode(
+        CLEAR_OPERATION,
+        currentId,
+        currentTitle,
+        currentArtist,
+        "",
+        "",
+        "",
+        "",
+        -1L,
+    )
+
+    fun isReservedFrame(text: String?): Boolean = text?.startsWith(NEXT_TRACK_PREFIX) == true
+
+    fun decodeNextTrack(text: String?): OfficialProviderNextTrackFrame? {
+        if (!isReservedFrame(text) || text == null || text.length > MAX_FRAME_LENGTH) return null
+        val fields = text.removePrefix(NEXT_TRACK_PREFIX).split('|')
+        if (fields.size != FIELD_COUNT) return null
+        val operation = fields[0]
+        if (operation != UPDATE_OPERATION && operation != CLEAR_OPERATION) return null
+        val decoded = fields.drop(1).dropLast(1).map { decodeField(it) ?: return null }
+        val duration = fields.last().toLongOrNull()?.takeIf { it >= -1L } ?: return null
+        val frame = OfficialProviderNextTrackFrame(
+            clear = operation == CLEAR_OPERATION,
+            currentId = decoded[0],
+            currentTitle = decoded[1],
+            currentArtist = decoded[2],
+            nextId = decoded[3],
+            nextTitle = decoded[4],
+            nextArtist = decoded[5],
+            nextAlbum = decoded[6],
+            nextDurationMs = duration,
+        )
+        return frame.takeIf { it.clear || it.nextTitle.isNotBlank() }
+    }
+
+    private fun encode(
+        operation: String,
+        currentId: String,
+        currentTitle: String,
+        currentArtist: String,
+        nextId: String,
+        nextTitle: String,
+        nextArtist: String,
+        nextAlbum: String,
+        nextDurationMs: Long,
+    ): String = buildString {
+        append(NEXT_TRACK_PREFIX)
+        append(operation)
+        listOf(
+            currentId,
+            currentTitle,
+            currentArtist,
+            nextId,
+            nextTitle,
+            nextArtist,
+            nextAlbum,
+        ).forEach { value ->
+            append('|')
+            append(encodeField(value.take(MAX_FIELD_LENGTH)))
+        }
+        append('|')
+        append(nextDurationMs.coerceAtLeast(-1L))
+    }
+
+    private fun encodeField(value: String): String = Base64.getUrlEncoder()
+        .withoutPadding()
+        .encodeToString(value.toByteArray(StandardCharsets.UTF_8))
+
+    private fun decodeField(value: String): String? = runCatching {
+        String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8)
+    }.getOrNull()?.takeIf { it.length <= MAX_FIELD_LENGTH }
 }
