@@ -9,7 +9,7 @@
     {"id":"spotify","displayName":"Spotify","targetPackages":["com.spotify.music"],"available":false},
     {"id":"lxmusic","displayName":"LX音乐","targetPackages":["cn.toside.music.mobile","com.ikunshare.music.mobile","com.lxnetease.music.mobile"],"available":false},
     {"id":"poweramp","displayName":"Poweramp","targetPackages":["com.maxmpz.audioplayer"],"available":false},
-    {"id":"salt-player","displayName":"椒盐音乐","targetPackages":["com.salt.music"],"available":true,"versionName":"1.0.4","versionCode":6,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/salt-player-v1.0.4/salt-player-1.0.4.hlp","sha256":"5dce923ea4aed7fbb55aca429c04c68a9c77afed0122d50da5df2708df468789"},
+    {"id":"salt-player","displayName":"椒盐音乐","targetPackages":["com.salt.music"],"available":true,"versionName":"1.0.5","versionCode":7,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/salt-player-v1.0.5/salt-player-1.0.5.hlp","sha256":"be375a9d61334bbf2d00550f57a5dfe8b76d147bd9e1df15af14cccb48cd10ad"},
     {"id":"qishui","displayName":"汽水音乐","targetPackages":["com.luna.music"],"available":false},
     {"id":"musicfree","displayName":"MusicFree","targetPackages":["fun.upup.musicfree"],"available":false},
     {"id":"gramophone","displayName":"Gramophone","targetPackages":["org.akanework.gramophone"],"available":false},
