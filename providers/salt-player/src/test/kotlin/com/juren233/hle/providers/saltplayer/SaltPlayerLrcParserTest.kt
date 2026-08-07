@@ -22,8 +22,29 @@ class SaltPlayerLrcParserTest {
         )!!
 
         assertEquals(listOf(1_000L, 3_500L), document.lines.map { it.beginMs })
-        assertEquals(listOf(3_500L, 8_000L), document.lines.map { it.endMs })
+        assertEquals(listOf(3_500L, 6_500L), document.lines.map { it.endMs })
         assertEquals(listOf("First", "Second"), document.lines.map { it.mainText })
+    }
+
+    @Test
+    fun `last plain lrc line uses salt default duration`() {
+        val document = SaltPlayerLrcParser.parse(
+            "[00:10.00]Last",
+            durationMs = 0L,
+        )!!
+
+        assertEquals(10_000L, document.lines.single().beginMs)
+        assertEquals(13_000L, document.lines.single().endMs)
+    }
+
+    @Test
+    fun `last plain lrc line is clamped when media ends sooner`() {
+        val document = SaltPlayerLrcParser.parse(
+            "[00:10.00]Last",
+            durationMs = 11_500L,
+        )!!
+
+        assertEquals(11_500L, document.lines.single().endMs)
     }
 
     @Test

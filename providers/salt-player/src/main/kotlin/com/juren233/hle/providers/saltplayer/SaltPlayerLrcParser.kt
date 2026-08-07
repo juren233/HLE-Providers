@@ -96,7 +96,8 @@ internal object SaltPlayerLrcParser {
             val nextBegin = adjustedBegins.getOrNull(index + 1)
             val fallbackEnd = when {
                 nextBegin != null -> nextBegin
-                durationMs > begin -> durationMs
+                durationMs > begin ->
+                    (begin + DEFAULT_LAST_LINE_DURATION_MS).coerceAtMost(durationMs)
                 else -> begin + DEFAULT_LAST_LINE_DURATION_MS
             }
             val end = fallbackEnd.coerceAtLeast(begin)
@@ -181,6 +182,6 @@ internal object SaltPlayerLrcParser {
         val words: List<RawWord>,
     )
 
-    private const val DEFAULT_LAST_LINE_DURATION_MS = 5_000L
+    private const val DEFAULT_LAST_LINE_DURATION_MS = 3_000L
     private const val SALT_INLINE_TRANSLATION_SEPARATOR = '\u2009'
 }

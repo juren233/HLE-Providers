@@ -20,6 +20,17 @@
 - 修复边界：`MusicController` 必须在 Application 回调的主线程完成初始化；队列 StateFlow 的反射读取与轮询也统一由主线程 Handler 调度，禁止恢复后台 `ScheduledExecutorService`。
 - 验收条件：椒盐可稳定启动；日志不再出现 `addObserver must be called on the main thread`、`ExceptionInInitializerError` 或 `NoClassDefFoundError: MusicController`；下一首采集、完整歌词 Hook 和 Provider 注册仍能正常工作。
 
+## SALT-NEXT-PREVIEW-002: 普通 LRC 末行伪逐字时间阻塞下一首预览
+
+- 状态：修复中，等待真机验收。
+- 症状与复现：椒盐 Provider 能持续更新下一首信息，但歌曲接近结尾时“下一首预览”不显示。设置为完整预览、预览时长 4 秒、强制结尾显示关闭时，播放 Taylor Swift《Paris》可稳定复现。
+- 可靠运行证据：只读设备日志持续出现 `PlayerBinder: Next-track control: result=UPDATED`，下一首 ID 会变化，说明队列读取、Provider 控制帧和 Central 缓存均已成功。该曲媒体时长为 `196259 ms`，最后一条真实歌词开始时间为 `167340 ms`，预览窗口从 `192259 ms` 开始；真实歌词末行不与预览窗口重合。
+- 代码证据与因果链：`SaltPlayerLrcParser` 原先在没有下一行时间戳时把末行结束时间设为 `durationMs`；`SaltPlayerLyricsMapper` 随后为普通 LRC 生成覆盖整段行时长的伪 `LyricWord`。核心 `NextSongPreviewPolicy.shouldShow()` 读取最后逐字单元结束时间，因此错误的 `196259 ms` 满足“仍在末行/逐字保护区”条件，直接禁止预览。椒盐 12.1.1 原始 DEX 的普通末行默认结束规则是 `lastBegin + 3000 ms`。
+- 已证伪方向：不得继续修改下一首队列 Hook、Provider 优先级或 Central 缓存；这些环节已被 `result=UPDATED` 和变化的下一首 ID 证明正常。不得用强制结尾显示或全局 UI 特判掩盖末行时间错误。
+- 当前未知：修复后的 Provider 在真机播放到普通 LRC 歌曲末尾时，预览是否按椒盐 App 规则出现；含逐字 LRC、末尾不足 3 秒的歌曲是否保持边界正确。
+- 下一个判别性证据：单测验证末行默认只延续 3000ms，并在媒体剩余时间不足 3000ms 时截断到媒体时长；真机播放至预览窗口确认岛上出现下一首信息。
+- 验收条件：普通 LRC 末行不再延长到整曲结束；预览窗口不再被伪逐字时间阻塞；下一首 ID/标题仍正常更新；逐字歌词和翻译拆分不回归。
+
 ## KUWO-WORD-TIMING-001: 将 LRCX 逐字缩放参数误写为全局常量
 
 - 状态：修复中，等待真机验收。
