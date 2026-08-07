@@ -6,24 +6,6 @@
 
 package com.juren233.hle.providers.saltplayer
 
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
-
-internal data class SaltPlayerLyricsHookProfile(
-    val documentClassName: String,
-    val lineClassName: String,
-    val cellClassName: String,
-    val publishMethodName: String,
-    val documentLinesFieldName: String,
-    val lineBeginFieldName: String,
-    val lineEndFieldName: String,
-    val lineCellsFieldName: String,
-    val lineTranslationFieldName: String,
-    val lineMainTextFieldName: String,
-    val cellBeginFieldName: String,
-    val cellEndFieldName: String,
-    val cellTextFieldName: String,
-)
-
 internal data class SaltPlayerQueueHookProfile(
     val stateFlowClassName: String,
     val stateFlowValueGetterName: String,
@@ -57,25 +39,17 @@ internal data class SaltPlayerHookProfile(
     val versionName: String,
     val versionCode: Long,
     val musicControllerClassName: String,
-    val lyrics: SaltPlayerLyricsHookProfile,
     val queue: SaltPlayerQueueHookProfile,
     val song: SaltPlayerSongHookProfile,
-) {
-    val publishLyricsDocument: OfficialProviderMethodTarget
-        get() = OfficialProviderMethodTarget(
-            className = musicControllerClassName,
-            methodName = lyrics.publishMethodName,
-            parameterTypeNames = listOf(lyrics.documentClassName),
-            returnTypeName = "void",
-            isStatic = true,
-        )
-}
+)
 
 /**
- * Exact-version registry for every Salt Player runtime identifier used by the Provider.
+ * Exact-version registry for the optional next-track queue integration.
  *
  * All identifiers below were verified against the original APK DEX on 2026-08-06.
  * They intentionally use raw binary names instead of JADX-generated aliases.
+ * Current-song lyrics do not use this registry: they are read from the local audio
+ * file selected through standard MediaSession metadata and MediaStore.
  */
 internal object SaltPlayerHookProfiles {
     private const val MUSIC_CONTROLLER_CLASS = "com.salt.music.service.MusicController"
@@ -92,27 +66,12 @@ internal object SaltPlayerHookProfiles {
     )
 
     // Original DEX descriptors shared by 12.1.0 (2026070208) and 12.1.1 (2026070502):
-    // MusicController.ޣ(xv0):void, MusicController.ތ:StateFlow<r42>,
+    // MusicController.ތ:StateFlow<r42>,
     // r42(a42, List<o42>, int, List<o42>, int, boolean), o42.ׯ:Object.
     private fun version12_1(versionName: String, versionCode: Long) = SaltPlayerHookProfile(
         versionName = versionName,
         versionCode = versionCode,
         musicControllerClassName = MUSIC_CONTROLLER_CLASS,
-        lyrics = SaltPlayerLyricsHookProfile(
-            documentClassName = "androidx.obf.xv0",
-            lineClassName = "androidx.obf.hw0",
-            cellClassName = "androidx.obf.tv0",
-            publishMethodName = "\u07a3",
-            documentLinesFieldName = "\u0528",
-            lineBeginFieldName = "\u037f",
-            lineEndFieldName = "\u0528",
-            lineCellsFieldName = "\u0529",
-            lineTranslationFieldName = "\u052a",
-            lineMainTextFieldName = "\u052b",
-            cellBeginFieldName = "\u037f",
-            cellEndFieldName = "\u0528",
-            cellTextFieldName = "\u0529",
-        ),
         queue = SaltPlayerQueueHookProfile(
             stateFlowClassName = STATE_FLOW_CLASS,
             stateFlowValueGetterName = "getValue",
@@ -139,27 +98,12 @@ internal object SaltPlayerHookProfiles {
     val V12_1_0 = version12_1("12.1.0", 2_026_070_208L)
 
     // Original DEX descriptors:
-    // MusicController.ޕ(jv0):void, MusicController.އ:StateFlow<h32>,
+    // MusicController.އ:StateFlow<h32>,
     // h32(q22, List<e32>, int, List<e32>, int, boolean), e32.Ԯ:Object.
     val V12_0_0 = SaltPlayerHookProfile(
         versionName = "12.0.0",
         versionCode = 2_026_061_801L,
         musicControllerClassName = MUSIC_CONTROLLER_CLASS,
-        lyrics = SaltPlayerLyricsHookProfile(
-            documentClassName = "androidx.obf.jv0",
-            lineClassName = "androidx.obf.tv0",
-            cellClassName = "androidx.obf.fv0",
-            publishMethodName = "\u0795",
-            documentLinesFieldName = "\u0528",
-            lineBeginFieldName = "\u037f",
-            lineEndFieldName = "\u0528",
-            lineCellsFieldName = "\u0529",
-            lineTranslationFieldName = "\u052a",
-            lineMainTextFieldName = "\u052b",
-            cellBeginFieldName = "\u037f",
-            cellEndFieldName = "\u0528",
-            cellTextFieldName = "\u0529",
-        ),
         queue = SaltPlayerQueueHookProfile(
             stateFlowClassName = STATE_FLOW_CLASS,
             stateFlowValueGetterName = "getValue",
@@ -183,27 +127,12 @@ internal object SaltPlayerHookProfiles {
     )
 
     // Original DEX descriptors:
-    // MusicController.ޔ(cs0):void, MusicController.އ:StateFlow<ez1>,
+    // MusicController.އ:StateFlow<ez1>,
     // ez1(oy1, List<bz1>, int, List<bz1>, int, boolean), bz1.֏:Object.
     val V11_1_0 = SaltPlayerHookProfile(
         versionName = "11.1.0",
         versionCode = 2_026_031_101L,
         musicControllerClassName = MUSIC_CONTROLLER_CLASS,
-        lyrics = SaltPlayerLyricsHookProfile(
-            documentClassName = "androidx.core.cs0",
-            lineClassName = "androidx.core.ks0",
-            cellClassName = "androidx.core.ur0",
-            publishMethodName = "\u0794",
-            documentLinesFieldName = "\u0528",
-            lineBeginFieldName = "\u037f",
-            lineEndFieldName = "\u0528",
-            lineCellsFieldName = "\u0529",
-            lineTranslationFieldName = "\u052a",
-            lineMainTextFieldName = "\u052b",
-            cellBeginFieldName = "\u037f",
-            cellEndFieldName = "\u0528",
-            cellTextFieldName = "\u0529",
-        ),
         queue = SaltPlayerQueueHookProfile(
             stateFlowClassName = STATE_FLOW_CLASS,
             stateFlowValueGetterName = "getValue",

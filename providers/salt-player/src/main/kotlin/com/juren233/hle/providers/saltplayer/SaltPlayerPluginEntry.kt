@@ -17,12 +17,14 @@ import com.juren233.hyperlyricsenhanced.provider.OfficialProviderApplicationCall
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
 import io.github.proify.lyricon.provider.LyriconFactory
 import io.github.proify.lyricon.provider.LyriconProvider
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 object SaltPlayerPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/SaltPlayer"
@@ -49,53 +51,36 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
             )
-            if (profile == null) {
-                Log.w(
-                    TAG,
-                    "椒盐音乐版本未匹配，跳过 Provider: " +
-                        "version=${packageInfo.versionName}(${packageInfo.longVersionCode})",
-                )
-                return@OfficialProviderApplicationCallback
-            }
             if (!initialized.compareAndSet(false, true)) return@OfficialProviderApplicationCallback
 
             runCatching {
-                host.hookAfterMethod(
-                    target = profile.publishLyricsDocument,
-                    callback = OfficialProviderMethodCallback { _, arguments ->
-                        runtime?.onLyricsDocument(arguments.firstOrNull())
-                    },
-                )
+                provider = LyriconFactory.createProvider(
+                    context = application,
+                    providerPackageName = PROVIDER_PACKAGE,
+                    playerPackageName = host.packageName,
+                ).apply {
+                    register()
+                }
+                runtime = provider?.let {
+                    SaltPlayerRuntime(
+                        application = application,
+                        provider = it,
+                        nextTrackProfile = profile,
+                    ).apply { startNextTrackCapture() }
+                }
+            }.onSuccess {
+                val version = "${packageInfo.versionName}(${packageInfo.longVersionCode})"
+                if (profile == null) {
+                    Log.i(TAG, "椒盐音乐 Provider 已注册，本地文件歌词可用；下一首预览暂不支持: version=$version")
+                } else {
+                    Log.i(TAG, "椒盐音乐 Provider 已注册，本地文件歌词与下一首预览可用: version=$version")
+                }
             }.onFailure { error ->
+                provider = null
+                runtime = null
                 initialized.set(false)
-                Log.e(
-                    TAG,
-                    "椒盐音乐完整歌词 Hook 安装失败: " +
-                        "version=${profile.versionName}(${profile.versionCode})",
-                    error,
-                )
-                return@OfficialProviderApplicationCallback
+                Log.e(TAG, "椒盐音乐 Provider 注册失败", error)
             }
-
-            provider = LyriconFactory.createProvider(
-                context = application,
-                providerPackageName = PROVIDER_PACKAGE,
-                playerPackageName = host.packageName,
-            ).apply {
-                register()
-            }
-            runtime = provider?.let {
-                SaltPlayerRuntime(
-                    application = application,
-                    provider = it,
-                    profile = profile,
-                ).apply { startNextTrackCapture() }
-            }
-            Log.i(
-                TAG,
-                "椒盐音乐 Provider 已注册: " +
-                    "version=${profile.versionName}(${profile.versionCode})",
-            )
         })
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
@@ -111,12 +96,19 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
     private class SaltPlayerRuntime(
         private val application: Application,
         private val provider: LyriconProvider,
-        private val profile: SaltPlayerHookProfile,
+        private val nextTrackProfile: SaltPlayerHookProfile?,
     ) {
         private val mainHandler = Handler(Looper.getMainLooper())
+        private val localLyricsResolver = SaltPlayerMediaStoreResolver(application)
+        private val localLyricsExecutor = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "HLE-SaltPlayer-LocalLyrics").apply { isDaemon = true }
+        }
+        private val localLyricsGeneration = AtomicLong(0L)
         private var metadata = SaltPlayerTrackMetadata()
         private var document: SaltPlayerLyricsDocument? = null
         private var lastSong: io.github.proify.lyricon.lyric.model.Song? = null
+        private var lastLocalLyricsRequestKey: String? = null
+        private var pendingLocalLyricsTask: Future<*>? = null
         private var nextTrackResolver: SaltPlayerNextTrackResolver? = null
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
@@ -130,6 +122,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         }
 
         fun startNextTrackCapture() {
+            val profile = nextTrackProfile ?: return
             if (Looper.myLooper() != Looper.getMainLooper()) {
                 Log.e(TAG, "椒盐音乐下一首解析器必须在主线程初始化")
                 return
@@ -151,6 +144,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         fun onMetadata(value: MediaMetadata?) {
             val next = SaltPlayerTrackMetadata(
                 id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+                mediaUri = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_URI),
                 title = value?.getString(MediaMetadata.METADATA_KEY_TITLE),
                 artist = value?.getString(MediaMetadata.METADATA_KEY_ARTIST),
                 album = value?.getString(MediaMetadata.METADATA_KEY_ALBUM),
@@ -159,35 +153,75 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
             if (metadata.identity != null && next.identity != metadata.identity) {
                 document = null
                 lastSong = null
+                lastLocalLyricsRequestKey = null
             }
             metadata = next
             publishCurrent()
+            requestLocalLyrics(next)
             requestNextTrackCapture()
-        }
-
-        @Synchronized
-        fun onLyricsDocument(value: Any?) {
-            val decoded = SaltPlayerLyricsDecoder.decode(value, profile) ?: return
-            document = decoded.takeIf { it.lines.isNotEmpty() }
-            publishCurrent()
         }
 
         @Synchronized
         private fun currentMetadata(): SaltPlayerTrackMetadata = metadata
 
         private fun publishCurrent() {
-            val currentDocument = document
-            val song = if (currentDocument == null) {
-                SaltPlayerLyricsMapper.placeholder(metadata)
-            } else {
-                SaltPlayerLyricsMapper.map(currentDocument, metadata)
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                mainHandler.post(::publishCurrent)
+                return
+            }
+            val song = synchronized(this) {
+                val currentDocument = document
+                val mapped = if (currentDocument == null) {
+                    SaltPlayerLyricsMapper.placeholder(metadata)
+                } else {
+                    SaltPlayerLyricsMapper.map(currentDocument, metadata)
+                }
+                if (mapped == lastSong) return
+                lastSong = mapped
+                mapped
             }
             val hasTranslation = song.lyrics?.any { !it.translation.isNullOrBlank() } == true
             provider.player.setDisplayTranslation(hasTranslation)
             provider.player.setDisplayRoma(false)
-            if (song == lastSong) return
-            lastSong = song
             provider.player.setSong(song)
+        }
+
+        @Synchronized
+        private fun requestLocalLyrics(current: SaltPlayerTrackMetadata) {
+            val requestKey = current.localLyricsRequestKey
+            if (requestKey == null) {
+                localLyricsGeneration.incrementAndGet()
+                pendingLocalLyricsTask?.cancel(true)
+                pendingLocalLyricsTask = null
+                return
+            }
+            if (requestKey == lastLocalLyricsRequestKey) return
+            lastLocalLyricsRequestKey = requestKey
+            val generation = localLyricsGeneration.incrementAndGet()
+            pendingLocalLyricsTask?.cancel(true)
+            pendingLocalLyricsTask = localLyricsExecutor.submit {
+                val result = runCatching { localLyricsResolver.load(current) }
+                    .onFailure { error ->
+                        if (BuildConfig.DEBUG) Log.w(TAG, "椒盐音乐本地文件歌词读取失败", error)
+                    }
+                    .getOrNull()
+                mainHandler.post {
+                    synchronized(this) {
+                        if (localLyricsGeneration.get() != generation) return@post
+                        if (metadata.localLyricsRequestKey != requestKey) return@post
+                        document = result?.document?.takeIf { it.lines.isNotEmpty() }
+                    }
+                    if (BuildConfig.DEBUG) {
+                        Log.i(
+                            TAG,
+                            "椒盐音乐本地文件歌词结果: " +
+                                "source=${result?.source}, uri=${result?.mediaUri}, " +
+                                "lines=${result?.document?.lines?.size ?: 0}",
+                        )
+                    }
+                    publishCurrent()
+                }
+            }
         }
 
         private fun requestNextTrackCapture() {

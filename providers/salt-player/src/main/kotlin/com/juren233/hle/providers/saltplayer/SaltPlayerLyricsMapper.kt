@@ -9,10 +9,10 @@ package com.juren233.hle.providers.saltplayer
 import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 import io.github.proify.lyricon.lyric.model.Song
-import java.lang.reflect.Field
 
 internal data class SaltPlayerTrackMetadata(
     val id: String? = null,
+    val mediaUri: String? = null,
     val title: String? = null,
     val artist: String? = null,
     val album: String? = null,
@@ -24,6 +24,16 @@ internal data class SaltPlayerTrackMetadata(
                 .map { it?.trim().orEmpty() }
                 .takeIf { values -> values.any(String::isNotEmpty) }
                 ?.joinToString("|")
+
+    val localLyricsRequestKey: String?
+        get() = identity?.let {
+            listOf(
+                it,
+                mediaUri.orEmpty(),
+                album.orEmpty(),
+                durationMs.coerceAtLeast(0L).toString(),
+            ).joinToString("|")
+        }
 }
 
 internal data class SaltPlayerLyricsDocument(
@@ -43,71 +53,6 @@ internal data class SaltPlayerLyricsCell(
     val endMs: Long,
     val text: String,
 )
-
-/** Reads only identifiers supplied by an exact original-DEX version profile. */
-internal object SaltPlayerLyricsDecoder {
-    fun decode(document: Any?, profile: SaltPlayerHookProfile): SaltPlayerLyricsDocument? {
-        val lyrics = profile.lyrics
-        if (document?.javaClass?.name != lyrics.documentClassName) return null
-        val rawLines = readField(document, lyrics.documentLinesFieldName)
-            as? Iterable<*> ?: return null
-        return SaltPlayerLyricsDocument(rawLines.mapNotNull { decodeLine(it, lyrics) })
-    }
-
-    private fun decodeLine(
-        value: Any?,
-        profile: SaltPlayerLyricsHookProfile,
-    ): SaltPlayerLyricsLine? {
-        if (value?.javaClass?.name != profile.lineClassName) return null
-        val begin = readLong(value, profile.lineBeginFieldName) ?: return null
-        val rawEnd = readLong(value, profile.lineEndFieldName) ?: return null
-        val end = rawEnd.coerceAtLeast(begin)
-        val mainText = (readField(value, profile.lineMainTextFieldName)
-            as? String)?.trim().orEmpty()
-        if (mainText.isEmpty()) return null
-        val translation = (readField(
-            value,
-            profile.lineTranslationFieldName,
-        ) as? String)?.trim()?.takeIf { it.isNotEmpty() && it != mainText }
-        val cells = (readField(value, profile.lineCellsFieldName)
-            as? Iterable<*>)?.mapNotNull { decodeCell(it, profile) }.orEmpty()
-        return SaltPlayerLyricsLine(
-            beginMs = begin,
-            endMs = end,
-            mainText = mainText,
-            translation = translation,
-            cells = cells,
-        )
-    }
-
-    private fun decodeCell(
-        value: Any?,
-        profile: SaltPlayerLyricsHookProfile,
-    ): SaltPlayerLyricsCell? {
-        if (value?.javaClass?.name != profile.cellClassName) return null
-        val begin = readLong(value, profile.cellBeginFieldName) ?: return null
-        val rawEnd = readLong(value, profile.cellEndFieldName) ?: return null
-        val text = readField(value, profile.cellTextFieldName) as? String
-            ?: return null
-        if (text.isEmpty()) return null
-        return SaltPlayerLyricsCell(
-            beginMs = begin,
-            endMs = rawEnd.coerceAtLeast(begin),
-            text = text,
-        )
-    }
-
-    private fun readLong(instance: Any, name: String): Long? =
-        (readField(instance, name) as? Number)?.toLong()
-
-    private fun readField(instance: Any, name: String): Any? = runCatching {
-        field(instance.javaClass, name).get(instance)
-    }.getOrNull()
-
-    private fun field(type: Class<*>, name: String): Field = type.getDeclaredField(name).apply {
-        isAccessible = true
-    }
-}
 
 internal object SaltPlayerLyricsMapper {
     fun map(
