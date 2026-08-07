@@ -7,6 +7,7 @@
 package com.juren233.hle.providers.saltplayer
 
 import android.app.Application
+import android.os.Looper
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -171,6 +172,9 @@ internal class SaltPlayerNextTrackResolver private constructor(
             application: Application,
             profile: SaltPlayerHookProfile,
         ): SaltPlayerNextTrackResolver {
+            require(Looper.myLooper() == Looper.getMainLooper()) {
+                "Salt Player 下一首解析器必须在主线程创建"
+            }
             val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
             require(
                 SaltPlayerHookProfiles.resolve(
@@ -180,7 +184,10 @@ internal class SaltPlayerNextTrackResolver private constructor(
             ) { "Salt Player Profile 与已安装版本不匹配" }
 
             val loader = application.classLoader
-            val controllerClass = loader.loadClass(profile.musicControllerClassName)
+            val controllerClass = loadInitializedClass(
+                profile.musicControllerClassName,
+                loader,
+            )
             val stateFlowClass = loader.loadClass(profile.queue.stateFlowClassName)
             val queueStateClass = loader.loadClass(profile.queue.stateClassName)
             val queueItemClass = loader.loadClass(profile.queue.itemClassName)
@@ -278,5 +285,10 @@ internal class SaltPlayerNextTrackResolver private constructor(
         private fun Field.accessible(): Field = apply { isAccessible = true }
 
         private fun Method.accessible(): Method = apply { isAccessible = true }
+
+        internal fun loadInitializedClass(
+            className: String,
+            classLoader: ClassLoader,
+        ): Class<*> = Class.forName(className, true, classLoader)
     }
 }

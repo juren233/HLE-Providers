@@ -8,6 +8,8 @@ package com.juren233.hle.providers.saltplayer
 
 import android.app.Application
 import android.media.MediaMetadata
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hle.providers.saltplayer.BuildConfig
@@ -20,9 +22,6 @@ import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCa
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
 import io.github.proify.lyricon.provider.LyriconFactory
 import io.github.proify.lyricon.provider.LyriconProvider
-import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 object SaltPlayerPluginEntry : OfficialProviderPlugin {
@@ -114,18 +113,27 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         private val provider: LyriconProvider,
         private val profile: SaltPlayerHookProfile,
     ) {
-        private val nextTrackScheduler: ScheduledExecutorService =
-            Executors.newSingleThreadScheduledExecutor { task ->
-                Thread(task, "HLE-SaltPlayer-NextTrack").apply { isDaemon = true }
-            }
+        private val mainHandler = Handler(Looper.getMainLooper())
         private var metadata = SaltPlayerTrackMetadata()
         private var document: SaltPlayerLyricsDocument? = null
         private var lastSong: io.github.proify.lyricon.lyric.model.Song? = null
         private var nextTrackResolver: SaltPlayerNextTrackResolver? = null
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
+        private val requestedNextTrackCapture = Runnable(::captureNextTrack)
+        private val periodicNextTrackCapture = object : Runnable {
+            override fun run() {
+                if (nextTrackResolver == null) return
+                captureNextTrack()
+                mainHandler.postDelayed(this, NEXT_TRACK_POLL_INTERVAL_MS)
+            }
+        }
 
         fun startNextTrackCapture() {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                Log.e(TAG, "椒盐音乐下一首解析器必须在主线程初始化")
+                return
+            }
             nextTrackResolver = runCatching {
                 SaltPlayerNextTrackResolver.create(application, profile)
             }.onFailure { error ->
@@ -135,12 +143,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                 Log.w(TAG, "椒盐音乐下一首 Profile 未通过运行时校验")
                 return
             }
-            nextTrackScheduler.scheduleWithFixedDelay(
-                ::captureNextTrack,
-                0L,
-                NEXT_TRACK_POLL_INTERVAL_MS,
-                TimeUnit.MILLISECONDS,
-            )
+            mainHandler.post(periodicNextTrackCapture)
             Log.i(TAG, "椒盐音乐下一首采集已启动")
         }
 
@@ -188,10 +191,16 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         }
 
         private fun requestNextTrackCapture() {
-            if (nextTrackResolver != null) nextTrackScheduler.execute(::captureNextTrack)
+            if (nextTrackResolver == null) return
+            mainHandler.removeCallbacks(requestedNextTrackCapture)
+            mainHandler.post(requestedNextTrackCapture)
         }
 
         private fun captureNextTrack() {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                mainHandler.post(requestedNextTrackCapture)
+                return
+            }
             val resolver = nextTrackResolver ?: return
             val current = currentMetadata()
             runCatching { resolver.resolve(current) }

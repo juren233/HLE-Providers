@@ -8,9 +8,22 @@ package com.juren233.hle.providers.saltplayer
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class SaltPlayerNextTrackResolverTest {
+    @Test
+    fun `initializes the queue owner class on the calling thread`() {
+        InitializationProbeState.initializedThread = null
+
+        SaltPlayerNextTrackResolver.loadInitializedClass(
+            "com.juren233.hle.providers.saltplayer.SaltPlayerNextTrackInitializationProbe",
+            javaClass.classLoader!!,
+        )
+
+        assertSame(Thread.currentThread(), InitializationProbeState.initializedThread)
+    }
+
     @Test
     fun `selects the following item from the normal queue`() {
         val state = queueState(
@@ -110,4 +123,17 @@ class SaltPlayerNextTrackResolverTest {
         album = "Album $id",
         durationMs = 180_000L,
     )
+}
+
+private object InitializationProbeState {
+    @Volatile
+    var initializedThread: Thread? = null
+}
+
+private class SaltPlayerNextTrackInitializationProbe {
+    companion object {
+        init {
+            InitializationProbeState.initializedThread = Thread.currentThread()
+        }
+    }
 }
