@@ -5,7 +5,7 @@
     {"id":"qqmusic","displayName":"QQ音乐","targetPackages":["com.tencent.qqmusic"],"available":true,"versionName":"1.0.2","versionCode":3,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/qqmusic-v1.0.2/qqmusic-1.0.2.hlp","sha256":"39bab8089324e68088ab994c5074c6b84bf92bd33416fcab97a445d64f51d151"},
     {"id":"qqmusic-hd","displayName":"QQ音乐HD","targetPackages":["com.tencent.qqmusicpad"],"available":false},
     {"id":"kugou","displayName":"酷狗音乐","targetPackages":["com.kugou.android","com.kugou.android.lite"],"available":false},
-    {"id":"kuwo","displayName":"酷我音乐","targetPackages":["cn.kuwo.player"],"available":true,"versionName":"1.0.1","versionCode":2,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/kuwo-v1.0.1/kuwo-1.0.1.hlp","sha256":"36e68b7a2651ed469bc60391e3b6e80c36abd24b38f56c0ac1771405faf14f39"},
+    {"id":"kuwo","displayName":"酷我音乐","targetPackages":["cn.kuwo.player"],"available":true,"versionName":"1.0.2","versionCode":3,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/kuwo-v1.0.2/kuwo-1.0.2.hlp","sha256":"59e1a50117c287297603f414a28256541f6f2ce23007c615d41d883f403ad28a"},
     {"id":"spotify","displayName":"Spotify","targetPackages":["com.spotify.music"],"available":false},
     {"id":"lxmusic","displayName":"LX音乐","targetPackages":["cn.toside.music.mobile","com.ikunshare.music.mobile","com.lxnetease.music.mobile"],"available":false},
     {"id":"poweramp","displayName":"Poweramp","targetPackages":["com.maxmpz.audioplayer"],"available":false},
