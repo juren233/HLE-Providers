@@ -11,23 +11,28 @@ import java.util.Locale
 /**
  * Version-independent LRC/Enhanced-LRC parser used by the local-file lyric path.
  *
- * Duplicate timestamps are interpreted the same way local lyric editors commonly
- * encode translations: a word-timed line wins as the main line and the next distinct
- * plain line becomes its translation. Line ends are clamped to the next line so the
- * non-Apple-Music rendering path never reports multiple simultaneously active lines.
+ * Salt Player 12.1.1 splits source text on newlines and U+2009 THIN SPACE. A segment
+ * without a timestamp reuses the preceding timestamp prefix, so the first segment at
+ * a timestamp is the main lyric and later segments become its translation. Line ends
+ * are clamped to the next line so the non-Apple-Music rendering path never reports
+ * multiple simultaneously active lines.
  */
 internal object SaltPlayerLrcParser {
     private val timeTag = Regex("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?]")
+    private val timedLine = Regex(
+        "^((?:\\[\\d{1,3}:\\d{1,2}(?:[.:]\\d{1,3})?])+)(.*)$",
+    )
     private val wordTimeTag = Regex("<(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?>")
     private val metadataTag = Regex("^\\[([A-Za-z][A-Za-z0-9_-]*):(.*)]$")
 
     fun parse(text: String, durationMs: Long = 0L): SaltPlayerLyricsDocument? {
         val normalized = text.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
         var offsetMs = 0L
-        val rawLines = ArrayList<RawLine>()
+        val timedSourceLines = ArrayList<TimedSourceLine>()
+        var inheritedBeginsMs: List<Long>? = null
 
-        normalized.lineSequence().forEach { sourceLine ->
-            val line = sourceLine.trim()
+        normalized.split('\n', SALT_INLINE_TRANSLATION_SEPARATOR).forEach { sourceSegment ->
+            val line = sourceSegment.trim()
             if (line.isEmpty()) return@forEach
 
             metadataTag.matchEntire(line)?.let { tag ->
@@ -37,22 +42,44 @@ internal object SaltPlayerLrcParser {
                 return@forEach
             }
 
-            val timestamps = timeTag.findAll(line).toList()
-            if (timestamps.isEmpty()) return@forEach
-            val contentStart = timestamps.last().range.last + 1
-            val content = line.substring(contentStart).trim()
+            val timedMatch = timedLine.matchEntire(line)
+            val beginsMs: List<Long>
+            val content: String
+            if (timedMatch != null) {
+                val timestampPrefix = timedMatch.groupValues[1]
+                beginsMs = timeTag.findAll(timestampPrefix).map { match ->
+                    parseTime(match.groupValues[1], match.groupValues[2], match.groupValues[3])
+                }.toList()
+                inheritedBeginsMs = beginsMs
+                content = timedMatch.groupValues[2].trim()
+            } else {
+                beginsMs = inheritedBeginsMs ?: return@forEach
+                content = line
+            }
             if (content.isEmpty()) return@forEach
-            val words = parseEnhancedWords(content)
+            timedSourceLines += TimedSourceLine(
+                beginsMs = beginsMs,
+                content = content,
+            )
+        }
+        if (timedSourceLines.isEmpty()) return null
+
+        val rawLines = ArrayList<RawLine>()
+        timedSourceLines.forEach { source ->
+            val words = parseEnhancedWords(source.content)
             val mainText = if (words.isEmpty()) {
-                content
+                source.content
             } else {
                 words.joinToString(separator = "") { it.text }.trim()
             }
             if (mainText.isEmpty()) return@forEach
 
-            timestamps.forEach { match ->
-                val begin = parseTime(match.groupValues[1], match.groupValues[2], match.groupValues[3])
-                rawLines += RawLine(begin, mainText, words)
+            source.beginsMs.forEach { begin ->
+                rawLines += RawLine(
+                    beginMs = begin,
+                    text = mainText,
+                    words = words,
+                )
             }
         }
         if (rawLines.isEmpty()) return null
@@ -93,11 +120,12 @@ internal object SaltPlayerLrcParser {
     }
 
     private fun mergeSameTimestamp(beginMs: Long, candidates: List<RawLine>): MergedLine? {
-        val distinct = candidates.distinctBy { it.text.trim() }
-        val main = distinct.firstOrNull { it.words.isNotEmpty() } ?: distinct.firstOrNull() ?: return null
-        val translation = distinct.firstOrNull {
-            it !== main && it.text.trim() != main.text.trim()
-        }?.text?.trim()?.takeIf(String::isNotEmpty)
+        val main = candidates.firstOrNull() ?: return null
+        val translation = candidates.drop(1)
+            .map { it.text.trim() }
+            .filter(String::isNotEmpty)
+            .joinToString(separator = "\n")
+            .takeIf(String::isNotEmpty)
         return MergedLine(beginMs, main.text.trim(), translation, main.words)
     }
 
@@ -136,6 +164,11 @@ internal object SaltPlayerLrcParser {
         val words: List<RawWord>,
     )
 
+    private data class TimedSourceLine(
+        val beginsMs: List<Long>,
+        val content: String,
+    )
+
     private data class RawWord(
         val beginMs: Long,
         val text: String,
@@ -149,4 +182,5 @@ internal object SaltPlayerLrcParser {
     )
 
     private const val DEFAULT_LAST_LINE_DURATION_MS = 5_000L
+    private const val SALT_INLINE_TRANSLATION_SEPARATOR = '\u2009'
 }

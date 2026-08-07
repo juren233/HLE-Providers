@@ -28,14 +28,25 @@ class SaltPlayerEmbeddedLyricsReaderTest {
     @Test
     fun `reads flac vorbis lyrics comment`() {
         val lyrics = "[00:02.00]FLAC lyric"
-        val vendor = "test".toByteArray()
-        val comment = "LYRICS=$lyrics".toByteArray()
-        val block = littleEndian(vendor.size) + vendor + littleEndian(1) +
-            littleEndian(comment.size) + comment
-        val blockHeader = byteArrayOf(0x84.toByte()) + unsigned24(block.size)
-        val bytes = "fLaC".toByteArray() + blockHeader + block
+        val bytes = flacWithLyrics(lyrics)
 
         assertEquals(lyrics, read(bytes, "sample.flac"))
+    }
+
+    @Test
+    fun `flac salt thin space translations are separated after embedded tag reading`() {
+        val lyrics = """
+            [00:01.00]Hello world 你好世界
+            [00:03.00]Number 33 第三十三号
+            [00:05.00]Good night 晚安
+        """.trimIndent()
+        val decoded = read(flacWithLyrics(lyrics), "sample.flac")!!
+        val document = SaltPlayerLrcParser.parse(decoded)!!
+
+        assertEquals("Hello world", document.lines.first().mainText)
+        assertEquals("你好世界", document.lines.first().translation)
+        assertEquals("Number 33", document.lines[1].mainText)
+        assertEquals("第三十三号", document.lines[1].translation)
     }
 
     @Test
@@ -62,6 +73,15 @@ class SaltPlayerEmbeddedLyricsReaderTest {
         } finally {
             Files.deleteIfExists(path)
         }
+    }
+
+    private fun flacWithLyrics(lyrics: String): ByteArray {
+        val vendor = "test".toByteArray()
+        val comment = "LYRICS=$lyrics".toByteArray()
+        val block = littleEndian(vendor.size) + vendor + littleEndian(1) +
+            littleEndian(comment.size) + comment
+        val blockHeader = byteArrayOf(0x84.toByte()) + unsigned24(block.size)
+        return "fLaC".toByteArray() + blockHeader + block
     }
 
     private fun bigEndian(value: Int): ByteArray = ByteBuffer.allocate(4)
