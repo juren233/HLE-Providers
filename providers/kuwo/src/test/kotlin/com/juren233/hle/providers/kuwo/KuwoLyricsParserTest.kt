@@ -15,8 +15,10 @@ class KuwoLyricsParserTest {
     @Test
     fun `decodes Kuwo LRCX word boundaries and preserves spaces`() {
         val line = KuwoLyricsParser.parse(
-            "[00:20.792]<840,-840>I <1572,108>got <4532,-1388>everything " +
-                "<5552,3512>I <9440,1664>wanted",
+            """
+            [kuwo:026]
+            [00:20.792]<840,-840>I <1572,108>got <4532,-1388>everything <5552,3512>I <9440,1664>wanted
+            """.trimIndent(),
         ).single()
 
         assertEquals("I got everything I wanted", line.text)
@@ -28,6 +30,35 @@ class KuwoLyricsParserTest {
         assertEquals(23_058L, line.words[3].begin)
         assertEquals(23_058L, line.words[2].end)
         assertEquals(25_512L, line.words.last().end)
+    }
+
+    @Test
+    fun `uses the per song Kuwo timing scale from the LRCX header`() {
+        val line = KuwoLyricsParser.parse(
+            """
+            [kuwo:013]
+            [00:03.661]<202,-202>I <408,-4>was <784,32>supposed
+            """.trimIndent(),
+        ).single()
+
+        assertEquals(3_661L, line.words[0].begin)
+        assertEquals(3_863L, line.words[0].end)
+        assertEquals(3_863L, line.words[1].begin)
+        assertEquals(4_069L, line.words[1].end)
+        assertEquals(4_069L, line.words[2].begin)
+        assertEquals(4_445L, line.words[2].end)
+    }
+
+    @Test
+    fun `defaults to the Kuwo one to one timing scale when the header is absent`() {
+        val line = KuwoLyricsParser.parse(
+            "[00:03.661]<202,-202>I <408,-4>was",
+        ).single()
+
+        assertEquals(3_661L, line.words[0].begin)
+        assertEquals(3_863L, line.words[0].end)
+        assertEquals(3_863L, line.words[1].begin)
+        assertEquals(4_069L, line.words[1].end)
     }
 
     @Test

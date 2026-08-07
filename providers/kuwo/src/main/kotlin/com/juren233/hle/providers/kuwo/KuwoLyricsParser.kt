@@ -25,10 +25,14 @@ internal data class KuwoTimelineLine(
 internal object KuwoLyricsParser {
     private val timestamp = Regex("^\\[(\\d{1,3}):([0-5]\\d)(?:[.:]([0-9]{1,3}))?]")
     private val wordMarker = Regex("<(-?\\d+),(-?\\d+)>([^<]*)")
+    private val timingScale = Regex("\\[kuwo:([0-7]+)]", RegexOption.IGNORE_CASE)
 
     fun parse(raw: String?): List<KuwoTimelineLine> {
         if (raw.isNullOrBlank()) return emptyList()
-        val source = raw.lineSequence().mapNotNull(::parseRawLine).toList()
+        val wordTimingScale = parseWordTimingScale(raw)
+        val source = raw.lineSequence()
+            .mapNotNull { parseRawLine(it, wordTimingScale) }
+            .toList()
         if (source.isEmpty()) return emptyList()
 
         val lines = mutableListOf<MutableLine>()
@@ -83,7 +87,7 @@ internal object KuwoLyricsParser {
         }
     }
 
-    private fun parseRawLine(raw: String): RawLine? {
+    private fun parseRawLine(raw: String, timingScale: WordTimingScale): RawLine? {
         val timestampMatch = timestamp.find(raw) ?: return null
         val begin = timestampMatch.toMillis()
         val payload = raw.substring(timestampMatch.range.last + 1)
@@ -101,25 +105,54 @@ internal object KuwoLyricsParser {
         }
 
         val words = markers.mapNotNull { marker ->
-            val encodedEnd = marker.groupValues[1].toLongOrNull() ?: return@mapNotNull null
-            val encodedStartDelta = marker.groupValues[2].toLongOrNull()
+            val first = marker.groupValues[1].toLongOrNull() ?: return@mapNotNull null
+            val second = marker.groupValues[2].toLongOrNull()
                 ?: return@mapNotNull null
             val wordText = marker.groupValues[3]
-            if (wordText.isEmpty() || encodedEnd == 0L && encodedStartDelta == 0L) {
+            if (wordText.isEmpty() || first == 0L && second == 0L) {
                 return@mapNotNull null
             }
-            val encodedStart = runCatching {
-                Math.addExact(encodedEnd, encodedStartDelta)
+            val relativeBegin = runCatching {
+                Math.floorDiv(
+                    Math.addExact(first, second),
+                    timingScale.beginDivisor,
+                )
             }.getOrNull() ?: return@mapNotNull null
-            // Kuwo LRCX stores twice the word end in the first value. The
-            // second value completes a four-times word start. This relation
-            // is verified against the original 12.1.8.2 responses.
-            val wordBegin = begin + Math.floorDiv(encodedStart, 4L)
-            val wordEnd = begin + Math.floorDiv(encodedEnd, 2L)
+            val relativeDuration = runCatching {
+                Math.floorDiv(
+                    Math.subtractExact(first, second),
+                    timingScale.durationDivisor,
+                )
+            }.getOrNull() ?: return@mapNotNull null
+            val wordBegin = runCatching {
+                Math.addExact(begin, relativeBegin)
+            }.getOrNull() ?: return@mapNotNull null
+            val wordEnd = runCatching {
+                Math.addExact(wordBegin, relativeDuration)
+            }.getOrNull() ?: return@mapNotNull null
             if (wordBegin < begin || wordEnd <= wordBegin) return@mapNotNull null
             KuwoTimedWord(wordBegin, wordEnd, wordText)
         }
         return RawLine(begin, text.trim(), words, LineKind.TIMED)
+    }
+
+    private fun parseWordTimingScale(raw: String): WordTimingScale {
+        // Kuwo 12.1.8.2's original DEX parses this tag in radix 8, then uses
+        // the decimal tens and ones as independent begin/duration divisors.
+        val encoded = raw.lineSequence()
+            .map(String::trim)
+            .firstNotNullOfOrNull { line ->
+                timingScale.find(line)?.groupValues?.getOrNull(1)
+            }
+            ?.toIntOrNull(radix = 8)
+            ?: return WordTimingScale.DEFAULT
+        val beginScale = encoded / 10
+        val durationScale = encoded % 10
+        if (beginScale <= 0 || durationScale <= 0) return WordTimingScale.DEFAULT
+        return WordTimingScale(
+            beginDivisor = beginScale * 2L,
+            durationDivisor = durationScale * 2L,
+        )
     }
 
     private fun MatchResult.toMillis(): Long {
@@ -160,6 +193,18 @@ internal object KuwoLyricsParser {
         TIMED,
         AUXILIARY,
         PLAIN,
+    }
+
+    private data class WordTimingScale(
+        val beginDivisor: Long,
+        val durationDivisor: Long,
+    ) {
+        companion object {
+            val DEFAULT = WordTimingScale(
+                beginDivisor = 2L,
+                durationDivisor = 2L,
+            )
+        }
     }
 
     private const val DEFAULT_LINE_DURATION_MS = 5_000L
