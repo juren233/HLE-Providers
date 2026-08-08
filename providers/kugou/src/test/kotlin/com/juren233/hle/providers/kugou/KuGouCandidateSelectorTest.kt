@@ -1,0 +1,70 @@
+/*
+ * Copyright 2026 juren233
+ * Licensed under the Apache License, Version 2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
+ */
+
+package com.juren233.hle.providers.kugou
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+
+class KuGouCandidateSelectorTest {
+    @Test
+    fun `prefers matching title artist and duration`() {
+        val track = KuGouTrackMetadata(null, "晴天", "周杰伦", "叶惠美", 269_000L)
+        val selected = KuGouCandidateSelector.choose(
+            track,
+            listOf(
+                candidate("1", "晴天", "其他歌手", 269_000L),
+                candidate("34988004", "晴天", "周杰伦", 269_000L),
+            ),
+        )
+
+        assertEquals("34988004", selected?.downloadId)
+    }
+
+    @Test
+    fun `rejects exact title from a different artist`() {
+        val track = KuGouTrackMetadata(null, "Without You", "Avicii", null, 181_000L)
+        val selected = KuGouCandidateSelector.choose(
+            track,
+            listOf(candidate("7", "Without You", "Other Artist", 181_000L)),
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun `uses first server candidate when media id is a direct Kugou hash`() {
+        val track = KuGouTrackMetadata(
+            "0123456789abcdef0123456789abcdef",
+            null,
+            null,
+            null,
+            0L,
+        )
+        val selected = KuGouCandidateSelector.choose(
+            track,
+            listOf(candidate("11", null, null, 0L)),
+        )
+
+        assertEquals("11", selected?.downloadId)
+    }
+
+    private fun candidate(
+        id: String,
+        title: String?,
+        artist: String?,
+        durationMs: Long,
+    ) = KuGouSearchCandidate(
+        downloadId = id,
+        accessKey = "access-$id",
+        contentType = 0,
+        title = title,
+        artist = artist,
+        durationMs = durationMs,
+        serverScore = 60,
+    )
+}

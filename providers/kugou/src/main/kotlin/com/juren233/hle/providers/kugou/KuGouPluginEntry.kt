@@ -11,6 +11,7 @@ import android.media.MediaMetadata
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
@@ -19,7 +20,6 @@ import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReferenc
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
@@ -31,9 +31,9 @@ import io.github.proify.lyricon.provider.LyriconProvider
 import java.io.File
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
-import java.security.MessageDigest
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -44,8 +44,6 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     private const val FULL_SUPPORT_PROCESS = "$FULL_PACKAGE.support"
     private const val LITE_SUPPORT_PROCESS = "$LITE_PACKAGE.support"
     private const val PROVIDER_PACKAGE = "com.juren233.hyperlyricsenhanced.provider.kugou"
-    private const val LYRIC_MANAGER_CLASS = "com.kugou.framework.lyric.LyricManager"
-    private const val LYRIC_FEATURE = "file is not krc or lyc or txt file"
     private const val NEXT_TRACK_CAPTURE_INTERVAL_MS = 1_000L
     private const val NEXT_TRACK_HEARTBEAT_MS = 10_000L
 
@@ -85,14 +83,6 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
             val currentRuntime = KuGouRuntime(application, provider).also { runtime = it }
             currentRuntime.start()
-            host.hookAfterDexMethod(
-                application = application,
-                query = queryFor(host.packageName),
-                callback = OfficialProviderMethodCallback { _, arguments ->
-                    val path = arguments.firstOrNull() as? String ?: return@OfficialProviderMethodCallback
-                    currentRuntime.onLyricPath(path)
-                },
-            )
             host.resolveDexMethods(
                 application = application,
                 queries = nextTrackQueriesFor(host.packageName),
@@ -102,7 +92,8 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             )
             Log.i(
                 TAG,
-                "酷狗音乐 Provider 已注册: package=${host.packageName} process=${host.processName}",
+                "酷狗音乐 Provider 已注册: package=${host.packageName} " +
+                    "process=${host.processName} lyricSource=v2-api",
             )
         }
         host.hookMediaSession(
@@ -113,47 +104,6 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 runtime?.onMetadata(metadata)
             },
         )
-    }
-
-    internal fun queryFor(packageName: String): OfficialProviderDexMethodQuery = when (packageName) {
-        FULL_PACKAGE -> OfficialProviderDexMethodQuery(
-            // Original 20.7.5 DEX descriptor:
-            // Lcom/kugou/framework/lyric/LyricManager;->k(Ljava/lang/String;)
-            //     Lcom/kugou/framework/lyric/k;
-            // This is the shared player path. Lyv2/b;->a(String) is only used by
-            // share-video/poster flows and is intentionally not a runtime target.
-            cacheKey = "kugou-full-lyric-manager-v3",
-            preferredTarget = OfficialProviderMethodTarget(
-                className = LYRIC_MANAGER_CLASS,
-                methodName = "l",
-                parameterTypeNames = listOf("java.lang.String", "boolean"),
-                returnTypeName = "com.kugou.framework.lyric.k",
-                isStatic = false,
-            ),
-            requiredStrings = listOf(
-                "filePath: ",
-                "lyric path is empty",
-                ".krc",
-                ".lrc",
-                ".txt",
-            ),
-            parameterTypeNames = listOf("java.lang.String", "boolean"),
-            isStatic = false,
-        )
-        LITE_PACKAGE -> OfficialProviderDexMethodQuery(
-            cacheKey = "kugou-lite-lyric-manager-v2",
-            preferredTarget = OfficialProviderMethodTarget(
-                className = LYRIC_MANAGER_CLASS,
-                methodName = "k",
-                parameterTypeNames = listOf("java.lang.String", "boolean"),
-                returnTypeName = "com.kugou.framework.lyric.m",
-                isStatic = false,
-            ),
-            requiredStrings = listOf("filePath: ", "lyric path is empty", LYRIC_FEATURE),
-            parameterTypeNames = listOf("java.lang.String", "boolean"),
-            isStatic = false,
-        )
-        else -> error("Unsupported KuGou package: $packageName")
     }
 
     internal fun nextTrackQueriesFor(packageName: String): List<OfficialProviderDexMethodQuery> {
@@ -205,6 +155,18 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
         private val generation = AtomicLong(0L)
         private val cacheDir = File(application.filesDir, "hle-provider/kugou")
+        private val clientMid = KuGouApiProtocol.clientMid(
+            buildString {
+                append(application.packageName)
+                append('\u0000')
+                append(
+                    Settings.Secure.getString(
+                        application.contentResolver,
+                        Settings.Secure.ANDROID_ID,
+                    ).orEmpty(),
+                )
+            },
+        )
         private val mainHandler = Handler(Looper.getMainLooper())
         private val periodicNextTrackCapture = object : Runnable {
             override fun run() {
@@ -214,13 +176,15 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
 
         @Volatile
-        private var track = Track()
+        private var track = KuGouTrackMetadata(null, null, null, null, 0L)
 
         @Volatile
         private var lastSong: Song? = null
 
         @Volatile
         private var nextTrackResolver: KuGouNextTrackResolver? = null
+
+        private var pendingLyricsTask: Future<*>? = null
 
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
@@ -231,18 +195,95 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
 
         fun onMetadata(value: MediaMetadata?) {
-            val next = Track(
-                id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+            val next = KuGouTrackMetadata(
+                mediaId = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
                 title = value?.getString(MediaMetadata.METADATA_KEY_TITLE),
                 artist = value?.getString(MediaMetadata.METADATA_KEY_ARTIST),
                 album = value?.getString(MediaMetadata.METADATA_KEY_ALBUM),
                 durationMs = value?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
             )
-            if (next.identity == track.identity) return
+            if (next == track) return
             track = next
-            generation.incrementAndGet()
+            val requestGeneration = generation.incrementAndGet()
+            pendingLyricsTask?.cancel(true)
+            pendingLyricsTask = null
             publish(placeholder(next))
+            if (next.isSearchable) {
+                pendingLyricsTask = executor.submit {
+                    loadLyrics(requestGeneration, next)
+                }
+            }
             mainHandler.post(::captureNextTrack)
+        }
+
+        private fun loadLyrics(
+            requestGeneration: Long,
+            requestTrack: KuGouTrackMetadata,
+        ) {
+            val candidate = runCatching { KuGouApiClient.search(requestTrack, clientMid) }
+                .onFailure { error ->
+                    if (!Thread.currentThread().isInterrupted) {
+                        Log.w(
+                            TAG,
+                            "酷狗歌词搜索失败: title=${requestTrack.title}",
+                            error,
+                        )
+                    }
+                }
+                .getOrNull()
+            if (candidate == null) {
+                if (!Thread.currentThread().isInterrupted) {
+                    Log.w(
+                        TAG,
+                        "酷狗歌词未匹配: title=${requestTrack.title}, " +
+                            "artist=${requestTrack.artist}",
+                    )
+                }
+                return
+            }
+            if (!isCurrent(requestGeneration, requestTrack)) return
+
+            loadCached(candidate.downloadId)?.let { cached ->
+                val parsed = decodeLyrics(cached, requestTrack.durationMs)
+                if (parsed.isNotEmpty()) {
+                    if (!isCurrent(requestGeneration, requestTrack)) return
+                    publish(toSong(requestTrack, parsed))
+                    if (BuildConfig.DEBUG) {
+                        Log.i(
+                            TAG,
+                            "酷狗歌词已从缓存发布: id=${candidate.downloadId}, " +
+                                "lines=${parsed.size}",
+                        )
+                    }
+                    return
+                }
+            }
+
+            val raw = runCatching { KuGouApiClient.download(candidate, clientMid) }
+                .onFailure { error ->
+                    if (!Thread.currentThread().isInterrupted) {
+                        Log.w(TAG, "酷狗歌词下载失败: id=${candidate.downloadId}", error)
+                    }
+                }
+                .getOrNull() ?: return
+            if (!isCurrent(requestGeneration, requestTrack)) return
+
+            val parsed = decodeLyrics(raw, requestTrack.durationMs)
+            if (parsed.isEmpty()) {
+                Log.w(TAG, "酷狗歌词无可解析时间轴: id=${candidate.downloadId}")
+                return
+            }
+            writeCache(candidate.downloadId, raw)
+            if (!isCurrent(requestGeneration, requestTrack)) return
+            publish(toSong(requestTrack, parsed))
+            if (BuildConfig.DEBUG) {
+                val wordCount = parsed.sumOf { it.words.size }
+                Log.i(
+                    TAG,
+                    "酷狗 v2 歌词已发布: id=${candidate.downloadId}, " +
+                        "contentType=${candidate.contentType}, lines=${parsed.size}, words=$wordCount",
+                )
+            }
         }
 
         fun installNextTrackResolver(targets: List<OfficialProviderMethodTarget>) {
@@ -295,36 +336,20 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             }
         }
 
-        fun onLyricPath(path: String) {
-            val requestGeneration = generation.get()
-            val requestTrack = track
-            executor.execute {
-                val parsed = runCatching { parseFile(File(path)) }
-                    .onFailure { error -> Log.w(TAG, "酷狗歌词文件解析失败: path=$path", error) }
-                    .getOrNull()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: return@execute
-                if (requestGeneration != generation.get() || requestTrack.identity != track.identity) {
-                    return@execute
-                }
-                publish(toSong(requestTrack, parsed))
-            }
-        }
-
         private fun publish(song: Song) {
             if (lastSong == song) return
             lastSong = song
             provider.player.setSong(song)
         }
 
-        private fun placeholder(track: Track): Song = Song().apply {
+        private fun placeholder(track: KuGouTrackMetadata): Song = Song().apply {
             id = track.identity
             name = track.title
             artist = track.artist
             duration = track.durationMs
         }
 
-        private fun toSong(track: Track, lines: List<ParsedLine>): Song = Song().apply {
+        private fun toSong(track: KuGouTrackMetadata, lines: List<ParsedLine>): Song = Song().apply {
             id = track.identity
             name = track.title
             artist = track.artist
@@ -340,27 +365,52 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             }
         }
 
-        private fun parseFile(file: File): List<ParsedLine> {
-            if (!file.isFile) return emptyList()
-            return when (file.extension.lowercase()) {
-                "krc" -> KrcLyricsParser.parse(
-                    KrcDecryptor.decrypt(file.readBytes()) ?: return emptyList(),
-                )
-                "lrc", "txt" -> LrcLyricsParser.parse(file.readText(), track.durationMs)
-                else -> emptyList()
+        private fun decodeLyrics(raw: ByteArray, durationMs: Long): List<ParsedLine> {
+            val text = if (raw.hasKrcHeader()) {
+                KrcDecryptor.decrypt(raw) ?: return emptyList()
+            } else {
+                raw.toString(Charsets.UTF_8).removePrefix("\uFEFF")
             }
+            return KrcLyricsParser.parse(text).takeIf(List<ParsedLine>::isNotEmpty)
+                ?: LrcLyricsParser.parse(text, durationMs)
         }
-    }
 
-    private data class Track(
-        val id: String? = null,
-        val title: String? = null,
-        val artist: String? = null,
-        val album: String? = null,
-        val durationMs: Long = 0L,
-    ) {
-        val identity: String
-            get() = id?.takeIf(String::isNotBlank) ?: stableIdentity(title, artist, durationMs)
+        private fun isCurrent(
+            requestGeneration: Long,
+            requestTrack: KuGouTrackMetadata,
+        ): Boolean = !Thread.currentThread().isInterrupted &&
+            requestGeneration == generation.get() &&
+            requestTrack.identity == track.identity
+
+        private fun loadCached(downloadId: String): ByteArray? {
+            val file = cacheFile(downloadId)
+            if (!file.isFile) return null
+            return runCatching { file.readBytes() }
+                .onFailure { error ->
+                    if (BuildConfig.DEBUG) {
+                        Log.w(TAG, "酷狗歌词缓存读取失败: id=$downloadId", error)
+                    }
+                }
+                .getOrNull()
+        }
+
+        private fun writeCache(downloadId: String, raw: ByteArray) {
+            runCatching { cacheFile(downloadId).writeBytes(raw) }
+                .onFailure { error ->
+                    if (BuildConfig.DEBUG) {
+                        Log.w(TAG, "酷狗歌词缓存写入失败: id=$downloadId", error)
+                    }
+                }
+        }
+
+        private fun cacheFile(downloadId: String): File =
+            File(cacheDir, "${sha256Hex(downloadId)}.lyrics")
+
+        private fun ByteArray.hasKrcHeader(): Boolean = size >= 4 &&
+            this[0] == 'k'.code.toByte() &&
+            this[1] == 'r'.code.toByte() &&
+            this[2] == 'c'.code.toByte() &&
+            this[3] == '1'.code.toByte()
     }
 
     private data class NextTrack(
@@ -527,10 +577,4 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
     }
 
-    private fun stableIdentity(title: String?, artist: String?, durationMs: Long): String {
-        val raw = "${title.orEmpty()}\u0000${artist.orEmpty()}\u0000$durationMs"
-        return MessageDigest.getInstance("SHA-256")
-            .digest(raw.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-    }
 }
