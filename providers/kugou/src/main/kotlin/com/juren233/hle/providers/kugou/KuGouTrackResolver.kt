@@ -47,6 +47,13 @@ internal data class KuGouTrackMetadata(
     }
 }
 
+internal object KuGouTrackUpdatePolicy {
+    fun shouldReloadLyrics(
+        previous: KuGouTrackMetadata,
+        next: KuGouTrackMetadata,
+    ): Boolean = previous.identity != next.identity
+}
+
 internal data class KuGouSearchCandidate(
     val downloadId: String,
     val accessKey: String,

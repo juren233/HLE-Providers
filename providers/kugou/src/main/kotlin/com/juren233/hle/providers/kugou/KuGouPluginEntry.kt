@@ -202,8 +202,20 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 album = value?.getString(MediaMetadata.METADATA_KEY_ALBUM),
                 durationMs = value?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
             )
-            if (next == track) return
+            val previous = track
+            if (next == previous) return
             track = next
+            if (!KuGouTrackUpdatePolicy.shouldReloadLyrics(previous, next)) {
+                if (BuildConfig.DEBUG) {
+                    Log.i(
+                        TAG,
+                        "酷狗同曲元数据已更新，保留现有歌词: id=${next.identity}, " +
+                            "album=${next.album}",
+                    )
+                }
+                mainHandler.post(::captureNextTrack)
+                return
+            }
             val requestGeneration = generation.incrementAndGet()
             pendingLyricsTask?.cancel(true)
             pendingLyricsTask = null
@@ -249,10 +261,11 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                     if (!isCurrent(requestGeneration, requestTrack)) return
                     publish(toSong(requestTrack, parsed))
                     if (BuildConfig.DEBUG) {
+                        val translationCount = parsed.count { !it.translation.isNullOrBlank() }
                         Log.i(
                             TAG,
                             "酷狗歌词已从缓存发布: id=${candidate.downloadId}, " +
-                                "lines=${parsed.size}",
+                                "lines=${parsed.size}, translations=$translationCount",
                         )
                     }
                     return
@@ -278,10 +291,12 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             publish(toSong(requestTrack, parsed))
             if (BuildConfig.DEBUG) {
                 val wordCount = parsed.sumOf { it.words.size }
+                val translationCount = parsed.count { !it.translation.isNullOrBlank() }
                 Log.i(
                     TAG,
                     "酷狗 v2 歌词已发布: id=${candidate.downloadId}, " +
-                        "contentType=${candidate.contentType}, lines=${parsed.size}, words=$wordCount",
+                        "contentType=${candidate.contentType}, lines=${parsed.size}, " +
+                        "words=$wordCount, translations=$translationCount",
                 )
             }
         }
@@ -360,6 +375,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                     end = line.end
                     duration = line.end - line.begin
                     text = line.text
+                    translation = line.translation
                     words = line.words.takeIf(List<LyricWord>::isNotEmpty)
                 }
             }
@@ -371,8 +387,16 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             } else {
                 raw.toString(Charsets.UTF_8).removePrefix("\uFEFF")
             }
-            return KrcLyricsParser.parse(text).takeIf(List<ParsedLine>::isNotEmpty)
+            val lines = KrcLyricsParser.parse(text).takeIf(List<ParsedLine>::isNotEmpty)
                 ?: LrcLyricsParser.parse(text, durationMs)
+            val translations = KuGouLanguageParser.translations(text, lines.size)
+            return if (translations == null) {
+                lines
+            } else {
+                lines.mapIndexed { index, line ->
+                    line.copy(translation = translations[index])
+                }
+            }
         }
 
         private fun isCurrent(
@@ -494,6 +518,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         val end: Long,
         val text: String,
         val words: List<LyricWord> = emptyList(),
+        val translation: String? = null,
     )
 
     private object KrcDecryptor {

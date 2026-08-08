@@ -8,9 +8,27 @@ package com.juren233.hle.providers.kugou
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class KuGouCandidateSelectorTest {
+    @Test
+    fun `does not reload lyrics when only album metadata is completed`() {
+        val previous = KuGouTrackMetadata("MUSIC_123", "至少还有你", "林忆莲", null, 274_000L)
+        val next = previous.copy(album = "林忆莲's")
+
+        assertFalse(KuGouTrackUpdatePolicy.shouldReloadLyrics(previous, next))
+    }
+
+    @Test
+    fun `reloads lyrics when track identity changes`() {
+        val previous = KuGouTrackMetadata("MUSIC_123", "至少还有你", "林忆莲", null, 274_000L)
+        val next = KuGouTrackMetadata("MUSIC_456", "我知道", "BY2", "Twins", 250_000L)
+
+        assertTrue(KuGouTrackUpdatePolicy.shouldReloadLyrics(previous, next))
+    }
+
     @Test
     fun `prefers matching title artist and duration`() {
         val track = KuGouTrackMetadata(null, "晴天", "周杰伦", "叶惠美", 269_000L)
