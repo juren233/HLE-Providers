@@ -10,12 +10,14 @@ on:
         options:
           - netease
           - qqmusic
+          - kugou
           - kuwo
           - salt-player
   push:
     tags:
       - "netease-v*"
       - "qqmusic-v*"
+      - "kugou-v*"
       - "kuwo-v*"
       - "salt-player-v*"
 
@@ -43,6 +45,7 @@ jobs:
           case "$provider" in
             netease) display_name="网易云音乐" ;;
             qqmusic) display_name="QQ音乐" ;;
+            kugou) display_name="酷狗音乐" ;;
             kuwo) display_name="酷我音乐" ;;
             salt-player) display_name="椒盐音乐" ;;
             *) echo "Unsupported provider tag: $GITHUB_REF_NAME" >&2; exit 1 ;;
@@ -123,6 +126,7 @@ jobs:
           canonical_display_names = {
               "qqmusic": "QQ音乐",
               "qqmusic-hd": "QQ音乐HD",
+              "kugou": "酷狗音乐",
               "lxmusic": "LX音乐",
               "salt-player": "椒盐音乐",
           }

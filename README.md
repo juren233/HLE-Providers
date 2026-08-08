@@ -9,7 +9,7 @@ HyperLyrics Enhanced 的官方 Lyricon Provider Pack 仓库。
 - Pack 只允许包含 `manifest.json`、`classes.dex` 和 `signature.ed25519`。
 - HyperLyrics Enhanced 内置签名公钥与目标包名允许列表。
 - 禁止原生库和插件二次下载代码。
-- Pack API v2 不暴露 libxposed 类型；Pack 只通过稳定的宿主回调声明行为。对于音乐软件内部入口，Pack 必须提供从原始 DEX 验证的完整方法描述符，由主 APK 静态宿主解析并执行 `module.hook()`，因此兼容启用 `PROP_RT_API_PROTECTION` 的 libxposed 运行时。
+- Pack API v2 不暴露 libxposed 类型；Pack 只通过稳定的宿主回调声明行为。对于音乐软件内部入口，Pack 可以提供从原始 DEX 验证的完整方法描述符，也可以提交 DexKit 查询条件。DexKit、缓存和 `module.hook()` 都由主 APK 静态宿主执行：先尝试按目标包/进程/版本缓存的精确描述符，只有缓存 Hook 失败时才重新查询；新描述符只有在 Hook 安装成功后才写入缓存。Pack 仍然不能携带 `libdexkit.so` 或其他原生库。
 - 私钥由CI 通过 `HLE_PROVIDER_SIGNING_KEY_PEM` Secret 注入。
 
 ## 本地构建
