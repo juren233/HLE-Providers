@@ -8,6 +8,8 @@ package com.juren233.hle.providers.kuwo
 
 import android.app.Application
 import android.os.Looper
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -81,7 +83,62 @@ internal class KuwoNextTrackResolver private constructor(
     }
 
     companion object {
-        fun create(application: Application): KuwoNextTrackResolver? {
+        fun queries(application: Application): List<OfficialProviderDexMethodQuery>? {
+            val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
+            val profile = KuwoHookProfiles.resolve(
+                packageInfo.versionName.orEmpty(),
+                packageInfo.longVersionCode,
+            ) ?: KuwoHookProfiles.V12_1_8_2
+            fun target(methodName: String, returnTypeName: String, isStatic: Boolean = false) =
+                OfficialProviderMethodTarget(
+                    className = profile.playback.managerClassName,
+                    methodName = methodName,
+                    returnTypeName = returnTypeName,
+                    isStatic = isStatic,
+                )
+            val prefix = profile.playback.managerClassName.substringBeforeLast('.') + "."
+            return listOf(
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "kuwo-player-singleton-v1",
+                    preferredTarget = target(
+                        profile.playback.singletonMethodName,
+                        profile.playback.managerClassName,
+                        isStatic = true,
+                    ),
+                    declaringClassNamePrefix = prefix,
+                    parameterTypeNames = emptyList(),
+                    returnTypeMatchesDeclaringClass = true,
+                    isStatic = true,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "kuwo-current-music-v1",
+                    preferredTarget = target(
+                        profile.playback.currentMusicMethodName,
+                        profile.playback.musicClassName,
+                    ),
+                    declaringClassNamePrefix = prefix,
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = profile.playback.musicClassName,
+                    isStatic = false,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "kuwo-next-content-v1",
+                    preferredTarget = target(
+                        profile.playback.nextContentMethodName,
+                        profile.playback.contentClassName,
+                    ),
+                    declaringClassNamePrefix = prefix,
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = profile.playback.contentClassName,
+                    isStatic = false,
+                ),
+            )
+        }
+
+        fun create(
+            application: Application,
+            targets: List<OfficialProviderMethodTarget>,
+        ): KuwoNextTrackResolver {
             require(Looper.myLooper() == Looper.getMainLooper()) {
                 "酷我下一首解析器必须在主线程创建"
             }
@@ -89,20 +146,16 @@ internal class KuwoNextTrackResolver private constructor(
             val profile = KuwoHookProfiles.resolve(
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
-            ) ?: return null
+            ) ?: KuwoHookProfiles.V12_1_8_2
+            require(targets.size == 3) { "酷我下一首目标数量错误" }
             val loader = application.classLoader
-            val managerClass = loader.loadClass(profile.playback.managerClassName)
             val contentClass = loader.loadClass(profile.playback.contentClassName)
             val musicClass = loader.loadClass(profile.playback.musicClassName)
-            val singletonMethod = managerClass
-                .getDeclaredMethod(profile.playback.singletonMethodName)
-                .accessible()
-            val currentMusicMethod = managerClass
-                .getDeclaredMethod(profile.playback.currentMusicMethodName)
-                .accessible()
-            val nextContentMethod = managerClass
-                .getDeclaredMethod(profile.playback.nextContentMethodName)
-                .accessible()
+            val methods = targets.map { it.toMethod(loader) }
+            val singletonMethod = methods[0]
+            val currentMusicMethod = methods[1]
+            val nextContentMethod = methods[2]
+            val managerClass = singletonMethod.returnType
 
             require(Modifier.isStatic(singletonMethod.modifiers))
             require(singletonMethod.returnType == managerClass)
@@ -139,5 +192,18 @@ internal class KuwoNextTrackResolver private constructor(
         private fun Field.accessible(): Field = apply { isAccessible = true }
 
         private fun Method.accessible(): Method = apply { isAccessible = true }
+
+        private fun OfficialProviderMethodTarget.toMethod(loader: ClassLoader): Method {
+            val clazz = loader.loadClass(className)
+            val parameters = parameterTypeNames.map { name ->
+                when (name) {
+                    "boolean" -> Boolean::class.javaPrimitiveType!!
+                    "int" -> Int::class.javaPrimitiveType!!
+                    "long" -> Long::class.javaPrimitiveType!!
+                    else -> loader.loadClass(name)
+                }
+            }.toTypedArray()
+            return clazz.getDeclaredMethod(methodName, *parameters).accessible()
+        }
     }
 }

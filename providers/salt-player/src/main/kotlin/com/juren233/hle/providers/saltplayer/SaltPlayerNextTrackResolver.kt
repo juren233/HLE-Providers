@@ -8,6 +8,8 @@ package com.juren233.hle.providers.saltplayer
 
 import android.app.Application
 import android.os.Looper
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -168,20 +170,45 @@ internal class SaltPlayerNextTrackResolver private constructor(
     }
 
     companion object {
+        fun queries(profile: SaltPlayerHookProfile): List<OfficialProviderDexMethodQuery> {
+            fun getter(key: String, methodName: String, returnTypeName: String) =
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "salt-player-song-$key-v1",
+                    preferredTarget = OfficialProviderMethodTarget(
+                        className = profile.song.className,
+                        methodName = methodName,
+                        returnTypeName = returnTypeName,
+                        isStatic = false,
+                    ),
+                    declaringClassName = profile.song.className,
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = returnTypeName,
+                    isStatic = false,
+                )
+            return listOf(
+                getter("id", profile.song.idGetterName, "java.lang.String"),
+                getter("title", profile.song.titleGetterName, "java.lang.String"),
+                getter("artist", profile.song.artistGetterName, "java.lang.String"),
+                getter("album", profile.song.albumGetterName, "java.lang.String"),
+                getter("duration", profile.song.durationGetterName, "long"),
+            )
+        }
+
         fun create(
             application: Application,
             profile: SaltPlayerHookProfile,
+            songTargets: List<OfficialProviderMethodTarget>,
         ): SaltPlayerNextTrackResolver {
             require(Looper.myLooper() == Looper.getMainLooper()) {
                 "Salt Player 下一首解析器必须在主线程创建"
             }
             val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
-            require(
-                SaltPlayerHookProfiles.resolve(
-                    packageInfo.versionName.orEmpty(),
-                    packageInfo.longVersionCode,
-                ) == profile,
-            ) { "Salt Player Profile 与已安装版本不匹配" }
+            val selectedProfile = SaltPlayerHookProfiles.resolve(
+                packageInfo.versionName.orEmpty(),
+                packageInfo.longVersionCode,
+            ) ?: SaltPlayerHookProfiles.compatibilityProfile
+            require(selectedProfile == profile) { "Salt Player Profile 选择不一致" }
+            require(songTargets.size == 5) { "Salt Player Song 目标数量错误" }
 
             val loader = application.classLoader
             val controllerClass = loadInitializedClass(
@@ -247,13 +274,12 @@ internal class SaltPlayerNextTrackResolver private constructor(
                 .accessible()
             require(itemDataField.type == Any::class.java)
 
-            val songIdMethod = songClass.getDeclaredMethod(profile.song.idGetterName).accessible()
-            val songTitleMethod = songClass.getDeclaredMethod(profile.song.titleGetterName).accessible()
-            val songArtistMethod = songClass.getDeclaredMethod(profile.song.artistGetterName).accessible()
-            val songAlbumMethod = songClass.getDeclaredMethod(profile.song.albumGetterName).accessible()
-            val songDurationMethod = songClass
-                .getDeclaredMethod(profile.song.durationGetterName)
-                .accessible()
+            val songMethods = songTargets.map { it.toMethod(loader) }
+            val songIdMethod = songMethods[0]
+            val songTitleMethod = songMethods[1]
+            val songArtistMethod = songMethods[2]
+            val songAlbumMethod = songMethods[3]
+            val songDurationMethod = songMethods[4]
             require(songIdMethod.returnType == String::class.java)
             require(songTitleMethod.returnType == String::class.java)
             require(songArtistMethod.returnType == String::class.java)
@@ -285,6 +311,19 @@ internal class SaltPlayerNextTrackResolver private constructor(
         private fun Field.accessible(): Field = apply { isAccessible = true }
 
         private fun Method.accessible(): Method = apply { isAccessible = true }
+
+        private fun OfficialProviderMethodTarget.toMethod(loader: ClassLoader): Method {
+            val clazz = loader.loadClass(className)
+            val parameters = parameterTypeNames.map { name ->
+                when (name) {
+                    "boolean" -> Boolean::class.javaPrimitiveType!!
+                    "int" -> Int::class.javaPrimitiveType!!
+                    "long" -> Long::class.javaPrimitiveType!!
+                    else -> loader.loadClass(name)
+                }
+            }.toTypedArray()
+            return clazz.getDeclaredMethod(methodName, *parameters).accessible()
+        }
 
         internal fun loadInitializedClass(
             className: String,

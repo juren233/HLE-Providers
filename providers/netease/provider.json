@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "pluginApiVersion": 2,
+  "pluginApiVersion": 3,
   "pluginId": "netease",
   "displayName": "网易云音乐",
-  "versionName": "1.0.2",
-  "versionCode": 3,
-  "minCoreVersionCode": 140015,
+  "versionName": "1.0.3",
+  "versionCode": 4,
+  "minCoreVersionCode": 140035,
   "entryClass": "com.juren233.hle.providers.netease.NeteasePluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.netease",
   "targetPackages": [

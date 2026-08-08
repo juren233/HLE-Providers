@@ -14,10 +14,13 @@ import android.app.Application
 import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.PlaybackState
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hle.providers.qqmusic.BuildConfig
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
@@ -66,7 +69,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             }
             if (!installed.compareAndSet(false, true)) return@hookApplication
             if (processName == host.packageName) {
-                QQNextTrackRuntime(application, host.packageName).start()
+                QQNextTrackRuntime(application, host.packageName, host).start()
             } else {
                 QQRuntime(application, host.packageName).start()
             }
@@ -171,24 +174,39 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
     private class QQNextTrackRuntime(
         private val application: Application,
         private val playerPackage: String,
+        private val host: OfficialProviderHost,
     ) {
         private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { task ->
             Thread(task, "HLE-QQMusic-NextTrack").apply { isDaemon = true }
         }
         private var lastFrame: String? = null
         private var lastFrameSentAtMs = 0L
+        private val mainHandler = Handler(Looper.getMainLooper())
 
         @Volatile
         private var provider: LyriconProvider? = null
 
         fun start() {
-            val resolver = runCatching { QQMusicNextTrackResolver.create(application) }
-                .onFailure { error -> Log.w(TAG, "QQ 音乐下一首解析器校验失败", error) }
-                .getOrNull()
-            if (resolver == null) {
+            val queries = QQMusicNextTrackResolver.queries(application)
+            if (queries == null) {
                 Log.w(TAG, "QQ 音乐版本未匹配，跳过下一首适配")
                 return
             }
+            host.resolveDexMethods(
+                application = application,
+                queries = queries,
+                callback = OfficialProviderDexMethodsCallback { targets ->
+                    mainHandler.post { startResolved(targets) }
+                },
+            )
+        }
+
+        private fun startResolved(
+            targets: List<com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget>,
+        ) {
+            val resolver = runCatching { QQMusicNextTrackResolver.create(application, targets) }
+                .onFailure { error -> Log.w(TAG, "QQ 音乐下一首解析器校验失败", error) }
+                .getOrNull() ?: return
             provider = LyriconFactory.createProvider(
                 context = application,
                 providerPackageName = PROVIDER_PACKAGE,

@@ -8,11 +8,17 @@ package com.juren233.hle.providers.kugou
 
 import android.app.Application
 import android.media.MediaMetadata
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
 import io.github.proify.lyricon.lyric.model.LyricWord
@@ -21,6 +27,8 @@ import io.github.proify.lyricon.lyric.model.Song
 import io.github.proify.lyricon.provider.LyriconFactory
 import io.github.proify.lyricon.provider.LyriconProvider
 import java.io.File
+import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.security.MessageDigest
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -36,6 +44,8 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     private const val PROVIDER_PACKAGE = "com.juren233.hyperlyricsenhanced.provider.kugou"
     private const val LYRIC_MANAGER_CLASS = "com.kugou.framework.lyric.LyricManager"
     private const val LYRIC_FEATURE = "file is not krc or lyc or txt file"
+    private const val NEXT_TRACK_CAPTURE_INTERVAL_MS = 1_000L
+    private const val NEXT_TRACK_HEARTBEAT_MS = 10_000L
 
     private val installed = AtomicBoolean(false)
 
@@ -81,6 +91,13 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                     currentRuntime.onLyricPath(path)
                 },
             )
+            host.resolveDexMethods(
+                application = application,
+                queries = nextTrackQueriesFor(host.packageName),
+                callback = OfficialProviderDexMethodsCallback { targets ->
+                    currentRuntime.installNextTrackResolver(targets)
+                },
+            )
             Log.i(
                 TAG,
                 "酷狗音乐 Provider 已注册: package=${host.packageName} process=${host.processName}",
@@ -103,20 +120,74 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             //     Lcom/kugou/framework/lyric/k;
             // This is the shared player path. Lyv2/b;->a(String) is only used by
             // share-video/poster flows and is intentionally not a runtime target.
-            cacheKey = "kugou-full-lyric-manager-v2",
-            declaringClassName = LYRIC_MANAGER_CLASS,
-            requiredStrings = emptyList(),
-            parameterTypeNames = listOf("java.lang.String"),
+            cacheKey = "kugou-full-lyric-manager-v3",
+            preferredTarget = OfficialProviderMethodTarget(
+                className = LYRIC_MANAGER_CLASS,
+                methodName = "l",
+                parameterTypeNames = listOf("java.lang.String", "boolean"),
+                returnTypeName = "com.kugou.framework.lyric.k",
+                isStatic = false,
+            ),
+            requiredStrings = listOf(
+                "filePath: ",
+                "lyric path is empty",
+                ".krc",
+                ".lrc",
+                ".txt",
+            ),
+            parameterTypeNames = listOf("java.lang.String", "boolean"),
             isStatic = false,
         )
         LITE_PACKAGE -> OfficialProviderDexMethodQuery(
-            cacheKey = "kugou-lite-lyric-manager-v1",
-            declaringClassName = LYRIC_MANAGER_CLASS,
-            requiredStrings = listOf(LYRIC_FEATURE),
+            cacheKey = "kugou-lite-lyric-manager-v2",
+            preferredTarget = OfficialProviderMethodTarget(
+                className = LYRIC_MANAGER_CLASS,
+                methodName = "k",
+                parameterTypeNames = listOf("java.lang.String", "boolean"),
+                returnTypeName = "com.kugou.framework.lyric.m",
+                isStatic = false,
+            ),
+            requiredStrings = listOf("filePath: ", "lyric path is empty", LYRIC_FEATURE),
             parameterTypeNames = listOf("java.lang.String", "boolean"),
             isStatic = false,
         )
         else -> error("Unsupported KuGou package: $packageName")
+    }
+
+    internal fun nextTrackQueriesFor(packageName: String): List<OfficialProviderDexMethodQuery> {
+        val full = packageName == FULL_PACKAGE
+        require(full || packageName == LITE_PACKAGE) { "Unsupported KuGou package: $packageName" }
+        val managerClass = "com.kugou.framework.service.KGPlayerManager"
+        return listOf(
+            OfficialProviderDexMethodQuery(
+                cacheKey = if (full) "kugou-full-player-singleton-v1" else
+                    "kugou-lite-player-singleton-v1",
+                preferredTarget = OfficialProviderMethodTarget(
+                    className = managerClass,
+                    methodName = if (full) "K4" else "c4",
+                    returnTypeName = managerClass,
+                    isStatic = true,
+                ),
+                declaringClassName = managerClass,
+                parameterTypeNames = emptyList(),
+                returnTypeName = managerClass,
+                isStatic = true,
+            ),
+            OfficialProviderDexMethodQuery(
+                cacheKey = if (full) "kugou-full-next-media-v1" else
+                    "kugou-lite-next-media-v1",
+                preferredTarget = OfficialProviderMethodTarget(
+                    className = "com.kugou.common.player.manager.QueuePlayerManager",
+                    methodName = "k",
+                    returnTypeName = "com.kugou.common.player.manager.IMedia",
+                    isStatic = false,
+                ),
+                declaringClassName = "com.kugou.common.player.manager.QueuePlayerManager",
+                parameterTypeNames = emptyList(),
+                returnTypeName = "com.kugou.common.player.manager.IMedia",
+                isStatic = false,
+            ),
+        )
     }
 
     private class KuGouRuntime(
@@ -128,12 +199,25 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
         private val generation = AtomicLong(0L)
         private val cacheDir = File(application.filesDir, "hle-provider/kugou")
+        private val mainHandler = Handler(Looper.getMainLooper())
+        private val periodicNextTrackCapture = object : Runnable {
+            override fun run() {
+                captureNextTrack()
+                mainHandler.postDelayed(this, NEXT_TRACK_CAPTURE_INTERVAL_MS)
+            }
+        }
 
         @Volatile
         private var track = Track()
 
         @Volatile
         private var lastSong: Song? = null
+
+        @Volatile
+        private var nextTrackResolver: KuGouNextTrackResolver? = null
+
+        private var lastNextTrackFrame: String? = null
+        private var lastNextTrackFrameSentAtMs = 0L
 
         fun start() {
             cacheDir.mkdirs()
@@ -152,6 +236,57 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             track = next
             generation.incrementAndGet()
             publish(placeholder(next))
+            mainHandler.post(::captureNextTrack)
+        }
+
+        fun installNextTrackResolver(targets: List<OfficialProviderMethodTarget>) {
+            mainHandler.post {
+                nextTrackResolver = runCatching {
+                    KuGouNextTrackResolver.create(application, targets)
+                }.onFailure { error ->
+                    Log.w(TAG, "酷狗下一首解析器校验失败", error)
+                }.getOrNull()
+                if (nextTrackResolver == null) return@post
+                mainHandler.removeCallbacks(periodicNextTrackCapture)
+                mainHandler.post(periodicNextTrackCapture)
+                Log.i(TAG, "酷狗下一首解析器已启用")
+            }
+        }
+
+        private fun captureNextTrack() {
+            val current = track
+            val next = runCatching { nextTrackResolver?.resolve() }
+                .onFailure { error -> Log.w(TAG, "酷狗下一首读取失败", error) }
+                .getOrNull()
+            val frame = if (next == null || next.title.isBlank()) {
+                OfficialProviderControlProtocol.encodeNextTrackClear(
+                    currentId = current.identity,
+                    currentTitle = current.title.orEmpty(),
+                    currentArtist = current.artist.orEmpty(),
+                )
+            } else {
+                OfficialProviderControlProtocol.encodeNextTrack(
+                    currentId = current.identity,
+                    currentTitle = current.title.orEmpty(),
+                    currentArtist = current.artist.orEmpty(),
+                    nextId = next.id,
+                    nextTitle = next.title,
+                    nextArtist = next.artist,
+                )
+            }
+            val now = SystemClock.elapsedRealtime()
+            if (frame == lastNextTrackFrame &&
+                now - lastNextTrackFrameSentAtMs < NEXT_TRACK_HEARTBEAT_MS
+            ) {
+                return
+            }
+            if (provider.player.sendText(frame)) {
+                lastNextTrackFrame = frame
+                lastNextTrackFrameSentAtMs = now
+                if (BuildConfig.DEBUG) {
+                    Log.i(TAG, "酷狗下一首控制帧已发送: next=${next?.id}")
+                }
+            }
         }
 
         fun onLyricPath(path: String) {
@@ -220,6 +355,69 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     ) {
         val identity: String
             get() = id?.takeIf(String::isNotBlank) ?: stableIdentity(title, artist, durationMs)
+    }
+
+    private data class NextTrack(
+        val id: String,
+        val title: String,
+        val artist: String,
+    )
+
+    private class KuGouNextTrackResolver private constructor(
+        private val singletonMethod: Method,
+        private val nextMediaMethod: Method,
+        private val hashMethod: Method,
+        private val titleMethod: Method,
+        private val artistMethod: Method,
+    ) {
+        fun resolve(): NextTrack? {
+            val manager = singletonMethod.invoke(null) ?: return null
+            val media = nextMediaMethod.invoke(manager) ?: return null
+            return NextTrack(
+                id = hashMethod.invoke(media) as? String ?: "",
+                title = titleMethod.invoke(media) as? String ?: "",
+                artist = artistMethod.invoke(media) as? String ?: "",
+            )
+        }
+
+        companion object {
+            fun create(
+                application: Application,
+                targets: List<OfficialProviderMethodTarget>,
+            ): KuGouNextTrackResolver {
+                require(targets.size == 2) { "酷狗下一首目标数量错误" }
+                val loader = application.classLoader
+                val singletonMethod = targets[0].toMethod(loader)
+                val nextMediaMethod = targets[1].toMethod(loader)
+                require(Modifier.isStatic(singletonMethod.modifiers))
+                require(!Modifier.isStatic(nextMediaMethod.modifiers))
+                val wrapperClass = loader.loadClass(
+                    "com.kugou.framework.service.entity.KGMusicWrapper",
+                )
+                return KuGouNextTrackResolver(
+                    singletonMethod = singletonMethod,
+                    nextMediaMethod = nextMediaMethod,
+                    hashMethod = wrapperClass.getMethod("getHashValue"),
+                    titleMethod = wrapperClass.getMethod("getTrackName"),
+                    artistMethod = wrapperClass.getMethod("getArtistName"),
+                )
+            }
+
+            private fun OfficialProviderMethodTarget.toMethod(loader: ClassLoader): Method {
+                val clazz = loader.loadClass(className)
+                val parameters = parameterTypeNames.map { name ->
+                    when (name) {
+                        "boolean" -> Boolean::class.javaPrimitiveType!!
+                        "int" -> Int::class.javaPrimitiveType!!
+                        "long" -> Long::class.javaPrimitiveType!!
+                        else -> loader.loadClass(name)
+                    }
+                }.toTypedArray()
+                return clazz.getDeclaredMethod(methodName, *parameters).apply {
+                    isAccessible = true
+                }
+            }
+        }
     }
 
     private data class ParsedLine(

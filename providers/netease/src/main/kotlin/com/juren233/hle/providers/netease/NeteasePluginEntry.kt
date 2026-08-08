@@ -14,10 +14,14 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.media.MediaMetadata
 import android.media.session.PlaybackState
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hle.providers.netease.BuildConfig
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 import io.github.proify.lyricon.lyric.model.Song
@@ -61,6 +65,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 application = application,
                 playerPackage = host.packageName,
                 enableNextTrack = process == host.packageName,
+                host = host,
             ).start()
         }
 
@@ -82,6 +87,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         private val application: Application,
         private val playerPackage: String,
         private val enableNextTrack: Boolean,
+        private val host: OfficialProviderHost,
     ) {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
             Thread(task, "HLE-Netease-Lyrics").apply { isDaemon = true }
@@ -96,6 +102,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         private var lastSong: Song? = null
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
+        private val mainHandler = Handler(Looper.getMainLooper())
 
         @Volatile
         private var currentTrack: TrackMetadata? = null
@@ -182,13 +189,26 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         }
 
         private fun startNextTrackCapture() {
-            nextTrackResolver = runCatching { NeteaseNextTrackResolver.create(application) }
-                .onFailure { error -> Log.w(TAG, "网易云下一首解析器校验失败", error) }
-                .getOrNull()
-            if (nextTrackResolver == null) {
+            val queries = NeteaseNextTrackResolver.queries(application)
+            if (queries == null) {
                 Log.w(TAG, "网易云版本未匹配，跳过下一首适配")
                 return
             }
+            host.resolveDexMethods(
+                application = application,
+                queries = queries,
+                callback = OfficialProviderDexMethodsCallback { targets ->
+                    mainHandler.post { finishNextTrackSetup(targets) }
+                },
+            )
+        }
+
+        private fun finishNextTrackSetup(targets: List<OfficialProviderMethodTarget>) {
+            nextTrackResolver = runCatching {
+                NeteaseNextTrackResolver.create(application, targets)
+            }.onFailure { error ->
+                Log.w(TAG, "网易云下一首解析器校验失败", error)
+            }.getOrNull() ?: return
             nextTrackScheduler.scheduleWithFixedDelay(
                 ::captureNextTrack,
                 0L,

@@ -7,6 +7,8 @@
 package com.juren233.hle.providers.netease
 
 import android.app.Application
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 
@@ -85,31 +87,126 @@ internal class NeteaseNextTrackResolver private constructor(
     }
 
     companion object {
-        fun create(application: Application): NeteaseNextTrackResolver? {
+        fun queries(application: Application): List<OfficialProviderDexMethodQuery>? {
             val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
             val profile = NeteaseNextTrackProfiles.resolve(
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
-            ) ?: return null
+            ) ?: NeteaseNextTrackProfiles.V9_5_61
+            fun target(
+                className: String,
+                methodName: String,
+                returnTypeName: String,
+                isStatic: Boolean = false,
+            ) = OfficialProviderMethodTarget(
+                className = className,
+                methodName = methodName,
+                returnTypeName = returnTypeName,
+                isStatic = isStatic,
+            )
+            return listOf(
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "netease-player-manager-accessor-v1",
+                    preferredTarget = target(
+                        profile.serviceClassName,
+                        profile.playerManagerAccessorName,
+                        profile.playerManagerClassName,
+                        isStatic = true,
+                    ),
+                    declaringClassName = profile.serviceClassName,
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = profile.playerManagerClassName,
+                    isStatic = true,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "netease-next-music-v1",
+                    preferredTarget = target(
+                        profile.playerManagerClassName,
+                        profile.nextMusicMethodName,
+                        profile.musicInfoClassName,
+                    ),
+                    declaringClassNamePrefix = profile.playerManagerClassName.substringBeforeLast('.') + ".",
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = profile.musicInfoClassName,
+                    isStatic = false,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "netease-simple-music-v1",
+                    preferredTarget = target(
+                        profile.musicInfoClassName,
+                        profile.toSimpleMusicInfoMethodName,
+                        profile.simpleMusicInfoClassName,
+                    ),
+                    declaringClassName = profile.musicInfoClassName,
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = profile.simpleMusicInfoClassName,
+                    isStatic = false,
+                ),
+                queryGetter("id", profile.simpleMusicInfoClassName, profile.idMethodName, "long"),
+                queryGetter(
+                    "title",
+                    profile.simpleMusicInfoClassName,
+                    profile.titleMethodName,
+                    "java.lang.String",
+                ),
+                queryGetter(
+                    "artist",
+                    profile.simpleMusicInfoClassName,
+                    profile.artistMethodName,
+                    "java.lang.String",
+                ),
+                queryGetter(
+                    "album",
+                    profile.simpleMusicInfoClassName,
+                    profile.albumMethodName,
+                    "java.lang.String",
+                ),
+                queryGetter(
+                    "duration",
+                    profile.simpleMusicInfoClassName,
+                    profile.durationMethodName,
+                    "long",
+                ),
+            )
+        }
+
+        private fun queryGetter(
+            key: String,
+            className: String,
+            methodName: String,
+            returnTypeName: String,
+        ) = OfficialProviderDexMethodQuery(
+            cacheKey = "netease-simple-$key-v1",
+            preferredTarget = OfficialProviderMethodTarget(
+                className = className,
+                methodName = methodName,
+                returnTypeName = returnTypeName,
+                isStatic = false,
+            ),
+            declaringClassName = className,
+            parameterTypeNames = emptyList(),
+            returnTypeName = returnTypeName,
+            isStatic = false,
+        )
+
+        fun create(
+            application: Application,
+            targets: List<OfficialProviderMethodTarget>,
+        ): NeteaseNextTrackResolver {
+            require(targets.size == 8) { "网易云下一首目标数量错误" }
             val loader = application.classLoader
-            val serviceClass = loader.loadClass(profile.serviceClassName)
-            val playerManagerClass = loader.loadClass(profile.playerManagerClassName)
-            val musicInfoClass = loader.loadClass(profile.musicInfoClassName)
-            val simpleMusicInfoClass = loader.loadClass(profile.simpleMusicInfoClassName)
-            val playerManagerAccessor = serviceClass
-                .getDeclaredMethod(profile.playerManagerAccessorName)
-                .accessible()
-            val nextMusicMethod = playerManagerClass
-                .getDeclaredMethod(profile.nextMusicMethodName)
-                .accessible()
-            val toSimpleMusicInfoMethod = musicInfoClass
-                .getDeclaredMethod(profile.toSimpleMusicInfoMethodName)
-                .accessible()
-            val idMethod = simpleMusicInfoClass.getDeclaredMethod(profile.idMethodName).accessible()
-            val titleMethod = simpleMusicInfoClass.getDeclaredMethod(profile.titleMethodName).accessible()
-            val artistMethod = simpleMusicInfoClass.getDeclaredMethod(profile.artistMethodName).accessible()
-            val albumMethod = simpleMusicInfoClass.getDeclaredMethod(profile.albumMethodName).accessible()
-            val durationMethod = simpleMusicInfoClass.getDeclaredMethod(profile.durationMethodName).accessible()
+            val methods = targets.map { it.toMethod(loader) }
+            val playerManagerAccessor = methods[0]
+            val nextMusicMethod = methods[1]
+            val toSimpleMusicInfoMethod = methods[2]
+            val idMethod = methods[3]
+            val titleMethod = methods[4]
+            val artistMethod = methods[5]
+            val albumMethod = methods[6]
+            val durationMethod = methods[7]
+            val playerManagerClass = playerManagerAccessor.returnType
+            val musicInfoClass = nextMusicMethod.returnType
+            val simpleMusicInfoClass = toSimpleMusicInfoMethod.returnType
 
             require(Modifier.isStatic(playerManagerAccessor.modifiers))
             require(playerManagerAccessor.returnType == playerManagerClass)
@@ -132,6 +229,17 @@ internal class NeteaseNextTrackResolver private constructor(
             )
         }
 
-        private fun Method.accessible(): Method = apply { isAccessible = true }
+        private fun OfficialProviderMethodTarget.toMethod(loader: ClassLoader): Method {
+            val clazz = loader.loadClass(className)
+            val parameters = parameterTypeNames.map { name ->
+                when (name) {
+                    "boolean" -> Boolean::class.javaPrimitiveType!!
+                    "int" -> Int::class.javaPrimitiveType!!
+                    "long" -> Long::class.javaPrimitiveType!!
+                    else -> loader.loadClass(name)
+                }
+            }.toTypedArray()
+            return clazz.getDeclaredMethod(methodName, *parameters).apply { isAccessible = true }
+        }
     }
 }

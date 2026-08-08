@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "pluginApiVersion": 2,
+  "pluginApiVersion": 3,
   "pluginId": "qqmusic",
   "displayName": "QQ 音乐",
-  "versionName": "1.0.2",
-  "versionCode": 3,
-  "minCoreVersionCode": 140015,
+  "versionName": "1.0.3",
+  "versionCode": 4,
+  "minCoreVersionCode": 140035,
   "entryClass": "com.juren233.hle.providers.qqmusic.QQMusicPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.qqmusic",
   "targetPackages": [

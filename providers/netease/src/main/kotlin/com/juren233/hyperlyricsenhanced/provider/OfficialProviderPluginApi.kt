@@ -18,12 +18,19 @@ interface OfficialProviderPlugin {
 
 interface OfficialProviderHost {
     val packageName: String
+    val processName: String
 
     fun hookApplication(callback: OfficialProviderApplicationCallback)
 
     fun hookMediaSession(
         playbackStateCallback: OfficialProviderPlaybackStateCallback,
         metadataCallback: OfficialProviderMetadataCallback,
+    )
+
+    fun resolveDexMethods(
+        application: Application,
+        queries: List<OfficialProviderDexMethodQuery>,
+        callback: OfficialProviderDexMethodsCallback,
     )
 }
 
@@ -37,6 +44,31 @@ fun interface OfficialProviderPlaybackStateCallback {
 
 fun interface OfficialProviderMetadataCallback {
     fun onMetadataChanged(metadata: MediaMetadata?)
+}
+
+data class OfficialProviderMethodTarget(
+    val className: String,
+    val methodName: String,
+    val parameterTypeNames: List<String> = emptyList(),
+    val returnTypeName: String,
+    val isStatic: Boolean,
+)
+
+data class OfficialProviderDexMethodQuery(
+    val cacheKey: String,
+    val preferredTarget: OfficialProviderMethodTarget? = null,
+    val declaringClassName: String? = null,
+    val declaringClassNamePrefix: String? = null,
+    val requiredStrings: List<String> = emptyList(),
+    val requiredInvokedMethodDescriptors: List<String> = emptyList(),
+    val parameterTypeNames: List<String>? = null,
+    val returnTypeName: String? = null,
+    val returnTypeMatchesDeclaringClass: Boolean = false,
+    val isStatic: Boolean? = null,
+)
+
+fun interface OfficialProviderDexMethodsCallback {
+    fun onMethodsResolved(targets: List<OfficialProviderMethodTarget>)
 }
 
 data class OfficialProviderNextTrackFrame(

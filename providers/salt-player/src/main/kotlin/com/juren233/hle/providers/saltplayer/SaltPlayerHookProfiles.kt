@@ -157,6 +157,8 @@ internal object SaltPlayerHookProfiles {
 
     private val exactProfiles = listOf(V12_1_1, V12_1_0, V12_0_0, V11_1_0)
 
+    val compatibilityProfile: SaltPlayerHookProfile = V12_1_1
+
     fun resolve(versionName: String, versionCode: Long): SaltPlayerHookProfile? =
         exactProfiles.firstOrNull {
             it.versionName == versionName && it.versionCode == versionCode

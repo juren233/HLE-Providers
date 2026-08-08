@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "pluginApiVersion": 2,
+  "pluginApiVersion": 3,
   "pluginId": "salt-player",
   "displayName": "椒盐音乐",
-  "versionName": "1.0.5",
-  "versionCode": 7,
-  "minCoreVersionCode": 140018,
+  "versionName": "1.0.6",
+  "versionCode": 8,
+  "minCoreVersionCode": 140035,
   "entryClass": "com.juren233.hle.providers.saltplayer.SaltPlayerPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.salt-player",
   "targetPackages": [

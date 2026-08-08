@@ -37,6 +37,12 @@ interface OfficialProviderHost {
         query: OfficialProviderDexMethodQuery,
         callback: OfficialProviderMethodCallback,
     )
+
+    fun resolveDexMethods(
+        application: Application,
+        queries: List<OfficialProviderDexMethodQuery>,
+        callback: OfficialProviderDexMethodsCallback,
+    )
 }
 
 fun interface OfficialProviderApplicationCallback {
@@ -61,15 +67,23 @@ data class OfficialProviderMethodTarget(
 
 data class OfficialProviderDexMethodQuery(
     val cacheKey: String,
+    val preferredTarget: OfficialProviderMethodTarget? = null,
     val declaringClassName: String? = null,
-    val requiredStrings: List<String>,
+    val declaringClassNamePrefix: String? = null,
+    val requiredStrings: List<String> = emptyList(),
+    val requiredInvokedMethodDescriptors: List<String> = emptyList(),
     val parameterTypeNames: List<String>? = null,
     val returnTypeName: String? = null,
+    val returnTypeMatchesDeclaringClass: Boolean = false,
     val isStatic: Boolean? = null,
 )
 
 fun interface OfficialProviderMethodCallback {
     fun onMethodCalled(receiver: Any?, arguments: Array<Any?>)
+}
+
+fun interface OfficialProviderDexMethodsCallback {
+    fun onMethodsResolved(targets: List<OfficialProviderMethodTarget>)
 }
 
 data class OfficialProviderNextTrackFrame(

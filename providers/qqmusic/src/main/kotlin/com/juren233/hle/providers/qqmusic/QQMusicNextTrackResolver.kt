@@ -7,6 +7,8 @@
 package com.juren233.hle.providers.qqmusic
 
 import android.app.Application
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 
@@ -80,21 +82,113 @@ internal class QQMusicNextTrackResolver private constructor(
     }
 
     companion object {
-        fun create(application: Application): QQMusicNextTrackResolver? {
+        fun queries(application: Application): List<OfficialProviderDexMethodQuery>? {
             val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
             val profile = QQMusicNextTrackProfiles.resolve(
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
-            ) ?: return null
+            ) ?: QQMusicNextTrackProfiles.V20_6_5_8
+            fun target(
+                className: String,
+                methodName: String,
+                returnTypeName: String,
+                isStatic: Boolean = false,
+            ) = OfficialProviderMethodTarget(
+                className = className,
+                methodName = methodName,
+                returnTypeName = returnTypeName,
+                isStatic = isStatic,
+            )
+            val songInfo = profile.songInfoClassName
+            return listOf(
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "qqmusic-player-singleton-v1",
+                    preferredTarget = target(
+                        profile.managerClassName,
+                        profile.singletonMethodName,
+                        profile.managerClassName,
+                        isStatic = true,
+                    ),
+                    declaringClassNamePrefix = "com.tencent.qqmusic.common.player.",
+                    requiredStrings = listOf("MusicPlayerHelper CAN'T use in Play Process"),
+                    parameterTypeNames = emptyList(),
+                    returnTypeMatchesDeclaringClass = true,
+                    isStatic = true,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "qqmusic-current-song-v1",
+                    preferredTarget = target(
+                        profile.managerClassName,
+                        profile.currentSongMethodName,
+                        songInfo,
+                    ),
+                    declaringClassNamePrefix = "com.tencent.qqmusic.common.player.",
+                    requiredInvokedMethodDescriptors = listOf(
+                        "Lcom/tencent/qqmusic/common/ipc/IPlayProcessMethods;->getPlaySong()" +
+                            "Lcom/tencent/qqmusicplayerprocess/songinfo/SongInfo;",
+                    ),
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = songInfo,
+                    isStatic = false,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "qqmusic-next-song-v1",
+                    preferredTarget = target(
+                        profile.managerClassName,
+                        profile.nextSongMethodName,
+                        songInfo,
+                    ),
+                    declaringClassNamePrefix = "com.tencent.qqmusic.common.player.",
+                    requiredInvokedMethodDescriptors = listOf(
+                        "Lcom/tencent/qqmusic/common/ipc/IPlayProcessMethods;->getNextSong()" +
+                            "Lcom/tencent/qqmusicplayerprocess/songinfo/SongInfo;",
+                    ),
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = songInfo,
+                    isStatic = false,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "qqmusic-song-id-v1",
+                    preferredTarget = target(songInfo, profile.songIdMethodName, "long"),
+                    declaringClassName = songInfo,
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = "long",
+                    isStatic = false,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "qqmusic-song-title-v1",
+                    preferredTarget = target(songInfo, profile.songTitleMethodName, "java.lang.String"),
+                    declaringClassName = songInfo,
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = "java.lang.String",
+                    isStatic = false,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "qqmusic-song-artist-v1",
+                    preferredTarget = target(songInfo, profile.songArtistMethodName, "java.lang.String"),
+                    declaringClassName = songInfo,
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = "java.lang.String",
+                    isStatic = false,
+                ),
+            )
+        }
+
+        fun create(
+            application: Application,
+            targets: List<OfficialProviderMethodTarget>,
+        ): QQMusicNextTrackResolver {
+            require(targets.size == 6) { "QQ 音乐下一首目标数量错误" }
             val loader = application.classLoader
-            val managerClass = loader.loadClass(profile.managerClassName)
-            val songInfoClass = loader.loadClass(profile.songInfoClassName)
-            val singletonMethod = managerClass.getDeclaredMethod(profile.singletonMethodName).accessible()
-            val currentSongMethod = managerClass.getDeclaredMethod(profile.currentSongMethodName).accessible()
-            val nextSongMethod = managerClass.getDeclaredMethod(profile.nextSongMethodName).accessible()
-            val songIdMethod = songInfoClass.getDeclaredMethod(profile.songIdMethodName).accessible()
-            val songTitleMethod = songInfoClass.getDeclaredMethod(profile.songTitleMethodName).accessible()
-            val songArtistMethod = songInfoClass.getDeclaredMethod(profile.songArtistMethodName).accessible()
+            val methods = targets.map { it.toMethod(loader) }
+            val singletonMethod = methods[0]
+            val currentSongMethod = methods[1]
+            val nextSongMethod = methods[2]
+            val songIdMethod = methods[3]
+            val songTitleMethod = methods[4]
+            val songArtistMethod = methods[5]
+            val managerClass = singletonMethod.returnType
+            val songInfoClass = currentSongMethod.returnType
 
             require(Modifier.isStatic(singletonMethod.modifiers) && singletonMethod.returnType == managerClass)
             require(currentSongMethod.returnType == songInfoClass)
@@ -112,6 +206,17 @@ internal class QQMusicNextTrackResolver private constructor(
             )
         }
 
-        private fun Method.accessible(): Method = apply { isAccessible = true }
+        private fun OfficialProviderMethodTarget.toMethod(loader: ClassLoader): Method {
+            val clazz = loader.loadClass(className)
+            val parameters = parameterTypeNames.map { name ->
+                when (name) {
+                    "boolean" -> Boolean::class.javaPrimitiveType!!
+                    "int" -> Int::class.javaPrimitiveType!!
+                    "long" -> Long::class.javaPrimitiveType!!
+                    else -> loader.loadClass(name)
+                }
+            }.toTypedArray()
+            return clazz.getDeclaredMethod(methodName, *parameters).apply { isAccessible = true }
+        }
     }
 }

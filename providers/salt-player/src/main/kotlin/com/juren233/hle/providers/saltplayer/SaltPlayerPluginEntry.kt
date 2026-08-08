@@ -15,10 +15,12 @@ import android.util.Log
 import com.juren233.hle.providers.saltplayer.BuildConfig
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderApplicationCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import io.github.proify.lyricon.provider.LyriconFactory
 import io.github.proify.lyricon.provider.LyriconProvider
 import java.util.concurrent.Executors
@@ -50,7 +52,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
             val profile = SaltPlayerHookProfiles.resolve(
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
-            )
+            ) ?: SaltPlayerHookProfiles.compatibilityProfile
             if (!initialized.compareAndSet(false, true)) return@OfficialProviderApplicationCallback
 
             runCatching {
@@ -66,15 +68,12 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                         application = application,
                         provider = it,
                         nextTrackProfile = profile,
+                        host = host,
                     ).apply { startNextTrackCapture() }
                 }
             }.onSuccess {
                 val version = "${packageInfo.versionName}(${packageInfo.longVersionCode})"
-                if (profile == null) {
-                    Log.i(TAG, "椒盐音乐 Provider 已注册，本地文件歌词可用；下一首预览暂不支持: version=$version")
-                } else {
-                    Log.i(TAG, "椒盐音乐 Provider 已注册，本地文件歌词与下一首预览可用: version=$version")
-                }
+                Log.i(TAG, "椒盐音乐 Provider 已注册，本地文件歌词与下一首预览可用: version=$version")
             }.onFailure { error ->
                 provider = null
                 runtime = null
@@ -97,6 +96,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         private val application: Application,
         private val provider: LyriconProvider,
         private val nextTrackProfile: SaltPlayerHookProfile?,
+        private val host: OfficialProviderHost,
     ) {
         private val mainHandler = Handler(Looper.getMainLooper())
         private val localLyricsResolver = SaltPlayerMediaStoreResolver(application)
@@ -127,12 +127,24 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                 Log.e(TAG, "椒盐音乐下一首解析器必须在主线程初始化")
                 return
             }
+            host.resolveDexMethods(
+                application = application,
+                queries = SaltPlayerNextTrackResolver.queries(profile),
+                callback = OfficialProviderDexMethodsCallback { targets ->
+                    mainHandler.post { finishNextTrackSetup(profile, targets) }
+                },
+            )
+        }
+
+        private fun finishNextTrackSetup(
+            profile: SaltPlayerHookProfile,
+            targets: List<OfficialProviderMethodTarget>,
+        ) {
             nextTrackResolver = runCatching {
-                SaltPlayerNextTrackResolver.create(application, profile)
+                SaltPlayerNextTrackResolver.create(application, profile, targets)
             }.onFailure { error ->
                 Log.w(TAG, "椒盐音乐下一首解析器校验失败", error)
-            }.getOrNull()
-            if (nextTrackResolver == null) {
+            }.getOrNull() ?: run {
                 Log.w(TAG, "椒盐音乐下一首 Profile 未通过运行时校验")
                 return
             }

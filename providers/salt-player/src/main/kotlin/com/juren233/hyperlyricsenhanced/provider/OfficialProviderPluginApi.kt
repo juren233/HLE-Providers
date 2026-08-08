@@ -24,6 +24,7 @@ interface OfficialProviderPlugin {
 
 interface OfficialProviderHost {
     val packageName: String
+    val processName: String
 
     fun hookApplication(callback: OfficialProviderApplicationCallback)
 
@@ -42,6 +43,12 @@ interface OfficialProviderHost {
     fun hookAfterMethod(
         target: OfficialProviderMethodTarget,
         callback: OfficialProviderMethodCallback,
+    )
+
+    fun resolveDexMethods(
+        application: Application,
+        queries: List<OfficialProviderDexMethodQuery>,
+        callback: OfficialProviderDexMethodsCallback,
     )
 }
 
@@ -65,8 +72,25 @@ data class OfficialProviderMethodTarget(
     val isStatic: Boolean,
 )
 
+data class OfficialProviderDexMethodQuery(
+    val cacheKey: String,
+    val preferredTarget: OfficialProviderMethodTarget? = null,
+    val declaringClassName: String? = null,
+    val declaringClassNamePrefix: String? = null,
+    val requiredStrings: List<String> = emptyList(),
+    val requiredInvokedMethodDescriptors: List<String> = emptyList(),
+    val parameterTypeNames: List<String>? = null,
+    val returnTypeName: String? = null,
+    val returnTypeMatchesDeclaringClass: Boolean = false,
+    val isStatic: Boolean? = null,
+)
+
 fun interface OfficialProviderMethodCallback {
     fun onMethodCalled(receiver: Any?, arguments: Array<Any?>)
+}
+
+fun interface OfficialProviderDexMethodsCallback {
+    fun onMethodsResolved(targets: List<OfficialProviderMethodTarget>)
 }
 
 data class OfficialProviderNextTrackFrame(
