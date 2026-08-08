@@ -3,9 +3,9 @@
   "pluginApiVersion": 3,
   "pluginId": "kugou",
   "displayName": "酷狗音乐",
-  "versionName": "1.0.2",
-  "versionCode": 3,
-  "minCoreVersionCode": 140035,
+  "versionName": "1.0.3",
+  "versionCode": 4,
+  "minCoreVersionCode": 140037,
   "entryClass": "com.juren233.hle.providers.kugou.KuGouPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.kugou",
   "targetPackages": [

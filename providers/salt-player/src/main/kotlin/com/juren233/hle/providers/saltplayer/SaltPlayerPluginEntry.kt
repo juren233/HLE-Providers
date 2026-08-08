@@ -15,12 +15,10 @@ import android.util.Log
 import com.juren233.hle.providers.saltplayer.BuildConfig
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderApplicationCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import io.github.proify.lyricon.provider.LyriconFactory
 import io.github.proify.lyricon.provider.LyriconProvider
 import java.util.concurrent.Executors
@@ -68,7 +66,6 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                         application = application,
                         provider = it,
                         nextTrackProfile = profile,
-                        host = host,
                     ).apply { startNextTrackCapture() }
                 }
             }.onSuccess {
@@ -96,7 +93,6 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         private val application: Application,
         private val provider: LyriconProvider,
         private val nextTrackProfile: SaltPlayerHookProfile?,
-        private val host: OfficialProviderHost,
     ) {
         private val mainHandler = Handler(Looper.getMainLooper())
         private val localLyricsResolver = SaltPlayerMediaStoreResolver(application)
@@ -127,21 +123,12 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                 Log.e(TAG, "椒盐音乐下一首解析器必须在主线程初始化")
                 return
             }
-            host.resolveDexMethods(
-                application = application,
-                queries = SaltPlayerNextTrackResolver.queries(profile),
-                callback = OfficialProviderDexMethodsCallback { targets ->
-                    mainHandler.post { finishNextTrackSetup(profile, targets) }
-                },
-            )
+            finishNextTrackSetup(profile)
         }
 
-        private fun finishNextTrackSetup(
-            profile: SaltPlayerHookProfile,
-            targets: List<OfficialProviderMethodTarget>,
-        ) {
+        private fun finishNextTrackSetup(profile: SaltPlayerHookProfile) {
             nextTrackResolver = runCatching {
-                SaltPlayerNextTrackResolver.create(application, profile, targets)
+                SaltPlayerNextTrackResolver.create(application, profile)
             }.onFailure { error ->
                 Log.w(TAG, "椒盐音乐下一首解析器校验失败", error)
             }.getOrNull() ?: run {

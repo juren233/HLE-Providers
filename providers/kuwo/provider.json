@@ -3,9 +3,9 @@
   "pluginApiVersion": 3,
   "pluginId": "kuwo",
   "displayName": "酷我音乐",
-  "versionName": "1.0.3",
-  "versionCode": 4,
-  "minCoreVersionCode": 140035,
+  "versionName": "1.0.4",
+  "versionCode": 5,
+  "minCoreVersionCode": 140037,
   "entryClass": "com.juren233.hle.providers.kuwo.KuwoPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.kuwo",
   "targetPackages": [

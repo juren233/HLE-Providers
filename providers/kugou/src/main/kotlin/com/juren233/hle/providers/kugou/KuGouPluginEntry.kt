@@ -15,6 +15,8 @@ import android.util.Log
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReference
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
@@ -158,19 +160,23 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         val full = packageName == FULL_PACKAGE
         require(full || packageName == LITE_PACKAGE) { "Unsupported KuGou package: $packageName" }
         val managerClass = "com.kugou.framework.service.KGPlayerManager"
+        val managerType = OfficialProviderDexTypeReference(
+            queryCacheKey = if (full) "kugou-full-player-singleton-v2" else
+                "kugou-lite-player-singleton-v2",
+            source = OfficialProviderDexTypeSource.RETURN_TYPE,
+        )
         return listOf(
             OfficialProviderDexMethodQuery(
-                cacheKey = if (full) "kugou-full-player-singleton-v1" else
-                    "kugou-lite-player-singleton-v1",
+                cacheKey = managerType.queryCacheKey,
                 preferredTarget = OfficialProviderMethodTarget(
                     className = managerClass,
                     methodName = if (full) "K4" else "c4",
                     returnTypeName = managerClass,
                     isStatic = true,
                 ),
-                declaringClassName = managerClass,
+                declaringClassNamePrefix = "com.kugou.framework.service.",
                 parameterTypeNames = emptyList(),
-                returnTypeName = managerClass,
+                returnTypeMatchesDeclaringClass = true,
                 isStatic = true,
             ),
             OfficialProviderDexMethodQuery(
@@ -366,18 +372,37 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     private class KuGouNextTrackResolver private constructor(
         private val singletonMethod: Method,
         private val nextMediaMethod: Method,
-        private val hashMethod: Method,
-        private val titleMethod: Method,
-        private val artistMethod: Method,
     ) {
+        @Volatile
+        private var mediaAccessors: MediaAccessors? = null
+
         fun resolve(): NextTrack? {
             val manager = singletonMethod.invoke(null) ?: return null
             val media = nextMediaMethod.invoke(manager) ?: return null
+            val accessors = mediaAccessors
+                ?.takeIf { it.ownerClass.isInstance(media) }
+                ?: MediaAccessors.create(media.javaClass).also { mediaAccessors = it }
             return NextTrack(
-                id = hashMethod.invoke(media) as? String ?: "",
-                title = titleMethod.invoke(media) as? String ?: "",
-                artist = artistMethod.invoke(media) as? String ?: "",
+                id = accessors.hashMethod.invoke(media) as? String ?: "",
+                title = accessors.titleMethod.invoke(media) as? String ?: "",
+                artist = accessors.artistMethod.invoke(media) as? String ?: "",
             )
+        }
+
+        private data class MediaAccessors(
+            val ownerClass: Class<*>,
+            val hashMethod: Method,
+            val titleMethod: Method,
+            val artistMethod: Method,
+        ) {
+            companion object {
+                fun create(ownerClass: Class<*>): MediaAccessors = MediaAccessors(
+                    ownerClass = ownerClass,
+                    hashMethod = ownerClass.getMethod("getHashValue").apply { isAccessible = true },
+                    titleMethod = ownerClass.getMethod("getTrackName").apply { isAccessible = true },
+                    artistMethod = ownerClass.getMethod("getArtistName").apply { isAccessible = true },
+                )
+            }
         }
 
         companion object {
@@ -391,15 +416,9 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 val nextMediaMethod = targets[1].toMethod(loader)
                 require(Modifier.isStatic(singletonMethod.modifiers))
                 require(!Modifier.isStatic(nextMediaMethod.modifiers))
-                val wrapperClass = loader.loadClass(
-                    "com.kugou.framework.service.entity.KGMusicWrapper",
-                )
                 return KuGouNextTrackResolver(
                     singletonMethod = singletonMethod,
                     nextMediaMethod = nextMediaMethod,
-                    hashMethod = wrapperClass.getMethod("getHashValue"),
-                    titleMethod = wrapperClass.getMethod("getTrackName"),
-                    artistMethod = wrapperClass.getMethod("getArtistName"),
                 )
             }
 

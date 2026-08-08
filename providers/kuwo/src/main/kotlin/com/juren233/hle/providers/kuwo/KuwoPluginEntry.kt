@@ -219,7 +219,7 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                 publishNextTrack(metadata, null)
                 return
             }
-            runCatching { resolver.resolve() }
+            runCatching { resolver.resolve(metadata) }
                 .onSuccess { rawSnapshot ->
                     val snapshot = KuwoNextTrackBinding.align(metadata, rawSnapshot)
                     if (

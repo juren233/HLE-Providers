@@ -8,6 +8,8 @@ package com.juren233.hle.providers.netease
 
 import android.app.Application
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReference
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -104,9 +106,21 @@ internal class NeteaseNextTrackResolver private constructor(
                 returnTypeName = returnTypeName,
                 isStatic = isStatic,
             )
+            val managerType = OfficialProviderDexTypeReference(
+                queryCacheKey = "netease-player-manager-accessor-v2",
+                source = OfficialProviderDexTypeSource.RETURN_TYPE,
+            )
+            val musicInfoType = OfficialProviderDexTypeReference(
+                queryCacheKey = "netease-next-music-v2",
+                source = OfficialProviderDexTypeSource.RETURN_TYPE,
+            )
+            val simpleMusicInfoType = OfficialProviderDexTypeReference(
+                queryCacheKey = "netease-simple-music-v2",
+                source = OfficialProviderDexTypeSource.RETURN_TYPE,
+            )
             return listOf(
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "netease-player-manager-accessor-v1",
+                    cacheKey = managerType.queryCacheKey,
                     preferredTarget = target(
                         profile.serviceClassName,
                         profile.playerManagerAccessorName,
@@ -115,57 +129,66 @@ internal class NeteaseNextTrackResolver private constructor(
                     ),
                     declaringClassName = profile.serviceClassName,
                     parameterTypeNames = emptyList(),
-                    returnTypeName = profile.playerManagerClassName,
                     isStatic = true,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "netease-next-music-v1",
+                    cacheKey = musicInfoType.queryCacheKey,
                     preferredTarget = target(
                         profile.playerManagerClassName,
                         profile.nextMusicMethodName,
                         profile.musicInfoClassName,
                     ),
-                    declaringClassNamePrefix = profile.playerManagerClassName.substringBeforeLast('.') + ".",
+                    declaringClassReference = managerType,
                     parameterTypeNames = emptyList(),
                     returnTypeName = profile.musicInfoClassName,
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "netease-simple-music-v1",
+                    cacheKey = simpleMusicInfoType.queryCacheKey,
                     preferredTarget = target(
                         profile.musicInfoClassName,
                         profile.toSimpleMusicInfoMethodName,
                         profile.simpleMusicInfoClassName,
                     ),
-                    declaringClassName = profile.musicInfoClassName,
+                    declaringClassReference = musicInfoType,
                     parameterTypeNames = emptyList(),
                     returnTypeName = profile.simpleMusicInfoClassName,
                     isStatic = false,
                 ),
-                queryGetter("id", profile.simpleMusicInfoClassName, profile.idMethodName, "long"),
+                queryGetter(
+                    "id",
+                    profile.simpleMusicInfoClassName,
+                    profile.idMethodName,
+                    "long",
+                    simpleMusicInfoType,
+                ),
                 queryGetter(
                     "title",
                     profile.simpleMusicInfoClassName,
                     profile.titleMethodName,
                     "java.lang.String",
+                    simpleMusicInfoType,
                 ),
                 queryGetter(
                     "artist",
                     profile.simpleMusicInfoClassName,
                     profile.artistMethodName,
                     "java.lang.String",
+                    simpleMusicInfoType,
                 ),
                 queryGetter(
                     "album",
                     profile.simpleMusicInfoClassName,
                     profile.albumMethodName,
                     "java.lang.String",
+                    simpleMusicInfoType,
                 ),
                 queryGetter(
                     "duration",
                     profile.simpleMusicInfoClassName,
                     profile.durationMethodName,
                     "long",
+                    simpleMusicInfoType,
                 ),
             )
         }
@@ -175,15 +198,16 @@ internal class NeteaseNextTrackResolver private constructor(
             className: String,
             methodName: String,
             returnTypeName: String,
+            declaringClassReference: OfficialProviderDexTypeReference,
         ) = OfficialProviderDexMethodQuery(
-            cacheKey = "netease-simple-$key-v1",
+            cacheKey = "netease-simple-$key-v2",
             preferredTarget = OfficialProviderMethodTarget(
                 className = className,
                 methodName = methodName,
                 returnTypeName = returnTypeName,
                 isStatic = false,
             ),
-            declaringClassName = className,
+            declaringClassReference = declaringClassReference,
             parameterTypeNames = emptyList(),
             returnTypeName = returnTypeName,
             isStatic = false,

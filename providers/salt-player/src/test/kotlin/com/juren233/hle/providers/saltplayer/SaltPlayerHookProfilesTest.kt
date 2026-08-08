@@ -34,52 +34,26 @@ class SaltPlayerHookProfilesTest {
     }
 
     @Test
-    fun `records 12 point 1 next track queue identifiers`() {
+    fun `keeps only stable queue contracts`() {
         val profile = SaltPlayerHookProfiles.V12_1_1
 
         assertEquals("com.salt.music.service.MusicController", profile.musicControllerClassName)
-        assertEquals(0x078C, profile.queue.stateFlowFieldName.single().code)
-        assertEquals("androidx.obf.r42", profile.queue.stateClassName)
-        assertEquals("androidx.obf.o42", profile.queue.itemClassName)
-        assertEquals("androidx.obf.a42", profile.queue.modeClassName)
-        assertEquals("\u05ef", profile.queue.itemDataFieldName)
-    }
-
-    @Test
-    fun `records independently verified 12 point 0 identifiers`() {
-        val profile = SaltPlayerHookProfiles.V12_0_0
-
-        assertEquals("\u0787", profile.queue.stateFlowFieldName)
-        assertEquals("androidx.obf.h32", profile.queue.stateClassName)
-        assertEquals("androidx.obf.e32", profile.queue.itemClassName)
-        assertEquals("androidx.obf.q22", profile.queue.modeClassName)
-        assertEquals("\u052e", profile.queue.itemDataFieldName)
-    }
-
-    @Test
-    fun `records independently verified 11 point 1 identifiers`() {
-        val profile = SaltPlayerHookProfiles.V11_1_0
-
-        assertEquals("\u0787", profile.queue.stateFlowFieldName)
-        assertEquals("androidx.core.ez1", profile.queue.stateClassName)
-        assertEquals("androidx.core.bz1", profile.queue.itemClassName)
-        assertEquals("androidx.core.oy1", profile.queue.modeClassName)
-        assertEquals("\u058f", profile.queue.itemDataFieldName)
-    }
-
-    @Test
-    fun `keeps shared queue contract sourced from original dex`() {
+        assertEquals("kotlinx.coroutines.flow.StateFlow", profile.stateFlowClassName)
         listOf(
             SaltPlayerHookProfiles.V12_1_1,
             SaltPlayerHookProfiles.V12_1_0,
             SaltPlayerHookProfiles.V12_0_0,
             SaltPlayerHookProfiles.V11_1_0,
         ).forEach { profile ->
-            assertEquals("getValue", profile.queue.stateFlowValueGetterName)
             assertEquals("Circle", profile.queue.circleModeName)
             assertEquals("CircleEnd", profile.queue.circleEndModeName)
             assertEquals("RepeatOne", profile.queue.repeatOneModeName)
             assertEquals("Random", profile.queue.randomModeName)
+            assertEquals("getId", profile.song.idGetterName)
+            assertEquals("getTitle", profile.song.titleGetterName)
+            assertEquals("getArtist", profile.song.artistGetterName)
+            assertEquals("getAlbum", profile.song.albumGetterName)
+            assertEquals("getDuration", profile.song.durationGetterName)
         }
     }
 }

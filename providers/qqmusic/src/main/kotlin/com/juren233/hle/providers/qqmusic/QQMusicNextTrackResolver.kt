@@ -8,6 +8,8 @@ package com.juren233.hle.providers.qqmusic
 
 import android.app.Application
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReference
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -99,10 +101,18 @@ internal class QQMusicNextTrackResolver private constructor(
                 returnTypeName = returnTypeName,
                 isStatic = isStatic,
             )
+            val managerType = OfficialProviderDexTypeReference(
+                queryCacheKey = "qqmusic-player-singleton-v2",
+                source = OfficialProviderDexTypeSource.RETURN_TYPE,
+            )
+            val songInfoType = OfficialProviderDexTypeReference(
+                queryCacheKey = "qqmusic-current-song-v2",
+                source = OfficialProviderDexTypeSource.RETURN_TYPE,
+            )
             val songInfo = profile.songInfoClassName
             return listOf(
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-player-singleton-v1",
+                    cacheKey = managerType.queryCacheKey,
                     preferredTarget = target(
                         profile.managerClassName,
                         profile.singletonMethodName,
@@ -116,57 +126,50 @@ internal class QQMusicNextTrackResolver private constructor(
                     isStatic = true,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-current-song-v1",
+                    cacheKey = songInfoType.queryCacheKey,
                     preferredTarget = target(
                         profile.managerClassName,
                         profile.currentSongMethodName,
                         songInfo,
                     ),
-                    declaringClassNamePrefix = "com.tencent.qqmusic.common.player.",
-                    requiredInvokedMethodDescriptors = listOf(
-                        "Lcom/tencent/qqmusic/common/ipc/IPlayProcessMethods;->getPlaySong()" +
-                            "Lcom/tencent/qqmusicplayerprocess/songinfo/SongInfo;",
-                    ),
+                    declaringClassReference = managerType,
+                    requiredInvokedMethodNames = listOf("getPlaySong"),
                     parameterTypeNames = emptyList(),
-                    returnTypeName = songInfo,
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-next-song-v1",
+                    cacheKey = "qqmusic-next-song-v2",
                     preferredTarget = target(
                         profile.managerClassName,
                         profile.nextSongMethodName,
                         songInfo,
                     ),
-                    declaringClassNamePrefix = "com.tencent.qqmusic.common.player.",
-                    requiredInvokedMethodDescriptors = listOf(
-                        "Lcom/tencent/qqmusic/common/ipc/IPlayProcessMethods;->getNextSong()" +
-                            "Lcom/tencent/qqmusicplayerprocess/songinfo/SongInfo;",
-                    ),
+                    declaringClassReference = managerType,
+                    requiredInvokedMethodNames = listOf("getNextSong"),
                     parameterTypeNames = emptyList(),
-                    returnTypeName = songInfo,
+                    returnTypeReference = songInfoType,
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-song-id-v1",
+                    cacheKey = "qqmusic-song-id-v2",
                     preferredTarget = target(songInfo, profile.songIdMethodName, "long"),
-                    declaringClassName = songInfo,
+                    declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
                     returnTypeName = "long",
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-song-title-v1",
+                    cacheKey = "qqmusic-song-title-v2",
                     preferredTarget = target(songInfo, profile.songTitleMethodName, "java.lang.String"),
-                    declaringClassName = songInfo,
+                    declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
                     returnTypeName = "java.lang.String",
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-song-artist-v1",
+                    cacheKey = "qqmusic-song-artist-v2",
                     preferredTarget = target(songInfo, profile.songArtistMethodName, "java.lang.String"),
-                    declaringClassName = songInfo,
+                    declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
                     returnTypeName = "java.lang.String",
                     isStatic = false,

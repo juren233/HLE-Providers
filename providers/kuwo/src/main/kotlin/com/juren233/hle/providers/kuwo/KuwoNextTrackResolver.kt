@@ -9,6 +9,8 @@ package com.juren233.hle.providers.kuwo
 import android.app.Application
 import android.os.Looper
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReference
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import java.lang.reflect.Field
 import java.lang.reflect.Method
@@ -52,34 +54,116 @@ internal class KuwoNextTrackResolver private constructor(
     private val singletonMethod: Method,
     private val currentMusicMethod: Method,
     private val nextContentMethod: Method,
-    private val musicClass: Class<*>,
-    private val ridField: Field,
-    private val titleField: Field,
-    private val artistField: Field,
-    private val albumField: Field,
-    private val durationSecondsField: Field,
+    private val preferredFields: KuwoMusicHookProfile,
 ) {
-    fun resolve(): KuwoQueueSnapshot? {
+    @Volatile
+    private var fieldAccessors: MusicFieldAccessors? = null
+
+    fun resolve(metadata: KuwoTrackMetadata): KuwoQueueSnapshot? {
         require(Looper.myLooper() == Looper.getMainLooper()) {
             "酷我下一首解析必须在主线程执行"
         }
         val manager = singletonMethod.invoke(null) ?: return null
         val currentValue = currentMusicMethod.invoke(manager) ?: return null
-        val current = decodeMusic(currentValue) ?: return null
-        val next = nextContentMethod.invoke(manager)?.let(::decodeMusic)
+        val accessors = fieldAccessors
+            ?.takeIf { it.ownerClass.isInstance(currentValue) }
+            ?: MusicFieldAccessors.resolve(
+                currentValue = currentValue,
+                metadata = metadata,
+                preferred = preferredFields,
+            ).also { fieldAccessors = it }
+        val current = decodeMusic(currentValue, accessors) ?: return null
+        val next = nextContentMethod.invoke(manager)?.let { value ->
+            decodeMusic(value, accessors)
+        }
         return KuwoQueueSnapshot(current = current, next = next)
     }
 
-    private fun decodeMusic(value: Any): KuwoTrackSnapshot? {
-        if (!musicClass.isInstance(value)) return null
-        val durationSeconds = (durationSecondsField.get(value) as Number).toLong()
+    private fun decodeMusic(
+        value: Any,
+        accessors: MusicFieldAccessors,
+    ): KuwoTrackSnapshot? {
+        if (!accessors.ownerClass.isInstance(value)) return null
+        val durationSeconds = (accessors.durationSecondsField.get(value) as Number).toLong()
         return KuwoTrackSnapshot(
-            id = (ridField.get(value) as Number).toLong().takeIf { it > 0L }?.toString().orEmpty(),
-            title = titleField.get(value) as? String ?: "",
-            artist = artistField.get(value) as? String ?: "",
-            album = albumField.get(value) as? String ?: "",
+            id = (accessors.ridField.get(value) as Number).toLong()
+                .takeIf { it > 0L }?.toString().orEmpty(),
+            title = accessors.titleField.get(value) as? String ?: "",
+            artist = accessors.artistField.get(value) as? String ?: "",
+            album = accessors.albumField?.get(value) as? String ?: "",
             durationMs = durationSeconds.takeIf { it > 0L }?.times(1_000L) ?: -1L,
         )
+    }
+
+    private data class MusicFieldAccessors(
+        val ownerClass: Class<*>,
+        val ridField: Field,
+        val titleField: Field,
+        val artistField: Field,
+        val albumField: Field?,
+        val durationSecondsField: Field,
+    ) {
+        companion object {
+            fun resolve(
+                currentValue: Any,
+                metadata: KuwoTrackMetadata,
+                preferred: KuwoMusicHookProfile,
+            ): MusicFieldAccessors {
+                val ownerClass = currentValue.javaClass
+                val fields = generateSequence(ownerClass) { it.superclass }
+                    .flatMap { it.declaredFields.asSequence() }
+                    .filterNot { Modifier.isStatic(it.modifiers) }
+                    .onEach { it.isAccessible = true }
+                    .toList()
+                val directRid = KuwoTrackIdResolver.directRid(metadata.mediaId)
+                val rid = fields.resolveField(preferred.ridFieldName) { field ->
+                    directRid != null &&
+                        (field.get(currentValue) as? Number)?.toLong() == directRid
+                }
+                val title = fields.resolveField(preferred.titleFieldName) { field ->
+                    sameText(field.get(currentValue), metadata.title)
+                }
+                val artist = fields.resolveField(preferred.artistFieldName) { field ->
+                    sameText(field.get(currentValue), metadata.artist)
+                }
+                val album = fields.resolveOptionalField(preferred.albumFieldName) { field ->
+                    sameText(field.get(currentValue), metadata.album)
+                }
+                val duration = fields.resolveField(preferred.durationSecondsFieldName) { field ->
+                    val value = (field.get(currentValue) as? Number)?.toLong() ?: return@resolveField false
+                    val expectedMs = metadata.durationMs.takeIf { it > 0L } ?: return@resolveField false
+                    kotlin.math.abs(value * 1_000L - expectedMs) <= 2_000L
+                }
+                require(rid.type == Long::class.javaPrimitiveType)
+                require(title.type == String::class.java)
+                require(artist.type == String::class.java)
+                require(album == null || album.type == String::class.java)
+                require(duration.type == Int::class.javaPrimitiveType)
+                return MusicFieldAccessors(ownerClass, rid, title, artist, album, duration)
+            }
+
+            private fun List<Field>.resolveField(
+                preferredName: String,
+                matches: (Field) -> Boolean,
+            ): Field = resolveOptionalField(preferredName, matches)
+                ?: error("酷我 Music 字段语义解析失败: preferred=$preferredName")
+
+            private fun List<Field>.resolveOptionalField(
+                preferredName: String,
+                matches: (Field) -> Boolean,
+            ): Field? {
+                firstOrNull { it.name == preferredName && runCatching { matches(it) }.getOrDefault(false) }
+                    ?.let { return it }
+                return filter { field -> runCatching { matches(field) }.getOrDefault(false) }
+                    .singleOrNull()
+            }
+
+            private fun sameText(value: Any?, expected: String?): Boolean {
+                val normalizedExpected = KuwoTrackIdResolver.normalize(expected)
+                return normalizedExpected.isNotEmpty() &&
+                    KuwoTrackIdResolver.normalize(value as? String) == normalizedExpected
+            }
+        }
     }
 
     companion object {
@@ -96,38 +180,42 @@ internal class KuwoNextTrackResolver private constructor(
                     returnTypeName = returnTypeName,
                     isStatic = isStatic,
                 )
-            val prefix = profile.playback.managerClassName.substringBeforeLast('.') + "."
+            val managerType = OfficialProviderDexTypeReference(
+                queryCacheKey = "kuwo-player-singleton-v2",
+                source = OfficialProviderDexTypeSource.RETURN_TYPE,
+            )
             return listOf(
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "kuwo-player-singleton-v1",
+                    cacheKey = managerType.queryCacheKey,
                     preferredTarget = target(
                         profile.playback.singletonMethodName,
                         profile.playback.managerClassName,
                         isStatic = true,
                     ),
-                    declaringClassNamePrefix = prefix,
+                    declaringClassNamePrefix =
+                        profile.playback.managerClassName.substringBeforeLast('.') + ".",
                     parameterTypeNames = emptyList(),
                     returnTypeMatchesDeclaringClass = true,
                     isStatic = true,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "kuwo-current-music-v1",
+                    cacheKey = "kuwo-current-music-v2",
                     preferredTarget = target(
                         profile.playback.currentMusicMethodName,
                         profile.playback.musicClassName,
                     ),
-                    declaringClassNamePrefix = prefix,
+                    declaringClassReference = managerType,
                     parameterTypeNames = emptyList(),
-                    returnTypeName = profile.playback.musicClassName,
+                    returnTypeNamePrefix = "cn.kuwo.base.bean.",
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "kuwo-next-content-v1",
+                    cacheKey = "kuwo-next-content-v2",
                     preferredTarget = target(
                         profile.playback.nextContentMethodName,
                         profile.playback.contentClassName,
                     ),
-                    declaringClassNamePrefix = prefix,
+                    declaringClassReference = managerType,
                     parameterTypeNames = emptyList(),
                     returnTypeName = profile.playback.contentClassName,
                     isStatic = false,
@@ -150,7 +238,6 @@ internal class KuwoNextTrackResolver private constructor(
             require(targets.size == 3) { "酷我下一首目标数量错误" }
             val loader = application.classLoader
             val contentClass = loader.loadClass(profile.playback.contentClassName)
-            val musicClass = loader.loadClass(profile.playback.musicClassName)
             val methods = targets.map { it.toMethod(loader) }
             val singletonMethod = methods[0]
             val currentMusicMethod = methods[1]
@@ -159,33 +246,14 @@ internal class KuwoNextTrackResolver private constructor(
 
             require(Modifier.isStatic(singletonMethod.modifiers))
             require(singletonMethod.returnType == managerClass)
-            require(currentMusicMethod.returnType == musicClass)
+            require(contentClass.isAssignableFrom(currentMusicMethod.returnType))
             require(nextContentMethod.returnType == contentClass)
-            require(contentClass.isAssignableFrom(musicClass))
-
-            val ridField = musicClass.getDeclaredField(profile.music.ridFieldName).accessible()
-            val titleField = musicClass.getDeclaredField(profile.music.titleFieldName).accessible()
-            val artistField = musicClass.getDeclaredField(profile.music.artistFieldName).accessible()
-            val albumField = musicClass.getDeclaredField(profile.music.albumFieldName).accessible()
-            val durationSecondsField = musicClass
-                .getDeclaredField(profile.music.durationSecondsFieldName)
-                .accessible()
-            require(ridField.type == Long::class.javaPrimitiveType)
-            require(titleField.type == String::class.java)
-            require(artistField.type == String::class.java)
-            require(albumField.type == String::class.java)
-            require(durationSecondsField.type == Int::class.javaPrimitiveType)
 
             return KuwoNextTrackResolver(
                 singletonMethod = singletonMethod,
                 currentMusicMethod = currentMusicMethod,
                 nextContentMethod = nextContentMethod,
-                musicClass = musicClass,
-                ridField = ridField,
-                titleField = titleField,
-                artistField = artistField,
-                albumField = albumField,
-                durationSecondsField = durationSecondsField,
+                preferredFields = profile.music,
             )
         }
 

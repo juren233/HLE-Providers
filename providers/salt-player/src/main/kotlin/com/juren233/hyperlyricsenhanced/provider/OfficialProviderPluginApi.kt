@@ -72,18 +72,54 @@ data class OfficialProviderMethodTarget(
     val isStatic: Boolean,
 )
 
+enum class OfficialProviderDexTypeSource {
+    DECLARING_CLASS,
+    RETURN_TYPE,
+    PARAMETER_TYPE,
+}
+
+data class OfficialProviderDexTypeReference(
+    val queryCacheKey: String,
+    val source: OfficialProviderDexTypeSource,
+    val parameterIndex: Int = -1,
+)
+
 data class OfficialProviderDexMethodQuery(
     val cacheKey: String,
     val preferredTarget: OfficialProviderMethodTarget? = null,
     val declaringClassName: String? = null,
     val declaringClassNamePrefix: String? = null,
+    val declaringClassReference: OfficialProviderDexTypeReference? = null,
     val requiredStrings: List<String> = emptyList(),
     val requiredInvokedMethodDescriptors: List<String> = emptyList(),
+    val requiredInvokedMethodNames: List<String> = emptyList(),
     val parameterTypeNames: List<String>? = null,
+    val parameterTypeReferences: Map<Int, OfficialProviderDexTypeReference> = emptyMap(),
     val returnTypeName: String? = null,
+    val returnTypeNamePrefix: String? = null,
+    val returnTypeReference: OfficialProviderDexTypeReference? = null,
     val returnTypeMatchesDeclaringClass: Boolean = false,
     val isStatic: Boolean? = null,
-)
+) {
+    @Suppress("unused")
+    @Deprecated("Binary compatibility for Provider Packs", level = DeprecationLevel.HIDDEN)
+    constructor(
+        cacheKey: String,
+        preferredTarget: OfficialProviderMethodTarget? = null,
+        declaringClassName: String? = null,
+        declaringClassNamePrefix: String? = null,
+        requiredStrings: List<String> = emptyList(),
+        requiredInvokedMethodDescriptors: List<String> = emptyList(),
+        parameterTypeNames: List<String>? = null,
+        returnTypeName: String? = null,
+        returnTypeMatchesDeclaringClass: Boolean = false,
+        isStatic: Boolean? = null,
+    ) : this(
+        cacheKey, preferredTarget, declaringClassName, declaringClassNamePrefix, null,
+        requiredStrings, requiredInvokedMethodDescriptors, emptyList(), parameterTypeNames,
+        emptyMap(), returnTypeName, null, null, returnTypeMatchesDeclaringClass, isStatic,
+    )
+}
 
 fun interface OfficialProviderMethodCallback {
     fun onMethodCalled(receiver: Any?, arguments: Array<Any?>)
