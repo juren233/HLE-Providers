@@ -34,6 +34,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     private const val FULL_SUPPORT_PROCESS = "$FULL_PACKAGE.support"
     private const val LITE_SUPPORT_PROCESS = "$LITE_PACKAGE.support"
     private const val PROVIDER_PACKAGE = "com.juren233.hyperlyricsenhanced.provider.kugou"
+    private const val LYRIC_MANAGER_CLASS = "com.kugou.framework.lyric.LyricManager"
     private const val LYRIC_FEATURE = "file is not krc or lyc or txt file"
 
     private val installed = AtomicBoolean(false)
@@ -97,14 +98,20 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
     internal fun queryFor(packageName: String): OfficialProviderDexMethodQuery = when (packageName) {
         FULL_PACKAGE -> OfficialProviderDexMethodQuery(
-            cacheKey = "kugou-full-lyric-loader-v1",
-            requiredStrings = listOf(LYRIC_FEATURE),
+            // Original 20.7.5 DEX descriptor:
+            // Lcom/kugou/framework/lyric/LyricManager;->k(Ljava/lang/String;)
+            //     Lcom/kugou/framework/lyric/k;
+            // This is the shared player path. Lyv2/b;->a(String) is only used by
+            // share-video/poster flows and is intentionally not a runtime target.
+            cacheKey = "kugou-full-lyric-manager-v2",
+            declaringClassName = LYRIC_MANAGER_CLASS,
+            requiredStrings = emptyList(),
             parameterTypeNames = listOf("java.lang.String"),
-            isStatic = true,
+            isStatic = false,
         )
         LITE_PACKAGE -> OfficialProviderDexMethodQuery(
             cacheKey = "kugou-lite-lyric-manager-v1",
-            declaringClassName = "com.kugou.framework.lyric.LyricManager",
+            declaringClassName = LYRIC_MANAGER_CLASS,
             requiredStrings = listOf(LYRIC_FEATURE),
             parameterTypeNames = listOf("java.lang.String", "boolean"),
             isStatic = false,

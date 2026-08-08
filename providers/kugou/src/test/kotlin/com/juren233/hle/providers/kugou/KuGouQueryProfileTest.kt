@@ -13,20 +13,24 @@ import org.junit.Test
 
 class KuGouQueryProfileTest {
     // Verified with build-tools/37.0.0/dexdump against the original APK DEX:
-    // full 20.7.5 -> Lyv2/b;->a(Ljava/lang/String;)Lcom/kugou/framework/lyric/k;
+    // full 20.7.5 -> Lcom/kugou/framework/lyric/LyricManager;->k(Ljava/lang/String;)Lcom/kugou/framework/lyric/k;
     // lite 5.2.4 -> Lcom/kugou/framework/lyric/LyricManager;->k(Ljava/lang/String;Z)Lcom/kugou/framework/lyric/m;
     private val verifiedCurrentDescriptors = listOf(
-        "Lyv2/b;->a(Ljava/lang/String;)Lcom/kugou/framework/lyric/k;",
+        "Lcom/kugou/framework/lyric/LyricManager;->k(Ljava/lang/String;)Lcom/kugou/framework/lyric/k;",
         "Lcom/kugou/framework/lyric/LyricManager;->k(Ljava/lang/String;Z)Lcom/kugou/framework/lyric/m;",
     )
 
+    private val rejectedFullOnlyShareDescriptor =
+        "Lyv2/b;->a(Ljava/lang/String;)Lcom/kugou/framework/lyric/k;"
+
     @Test
-    fun `full profile uses the verified static string path loader shape`() {
+    fun `full profile uses the verified LyricManager player path shape`() {
         val query = KuGouPluginEntry.queryFor("com.kugou.android")
-        assertEquals("kugou-full-lyric-loader-v1", query.cacheKey)
+        assertEquals("kugou-full-lyric-manager-v2", query.cacheKey)
+        assertEquals("com.kugou.framework.lyric.LyricManager", query.declaringClassName)
+        assertTrue(query.requiredStrings.isEmpty())
         assertEquals(listOf("java.lang.String"), query.parameterTypeNames)
-        assertTrue(query.isStatic == true)
-        assertFalse(query.declaringClassName != null)
+        assertTrue(query.isStatic == false)
     }
 
     @Test
@@ -40,7 +44,8 @@ class KuGouQueryProfileTest {
     @Test
     fun `keeps the original DEX evidence next to the resilient queries`() {
         assertEquals(2, verifiedCurrentDescriptors.size)
-        assertTrue(verifiedCurrentDescriptors[0].startsWith("Lyv2/b;->a("))
+        assertTrue(verifiedCurrentDescriptors[0].contains("LyricManager;->k("))
         assertTrue(verifiedCurrentDescriptors[1].contains("LyricManager;->k("))
+        assertFalse(verifiedCurrentDescriptors.contains(rejectedFullOnlyShareDescriptor))
     }
 }
