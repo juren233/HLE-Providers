@@ -5,7 +5,7 @@
     {"id":"qqmusic","displayName":"QQ音乐","targetPackages":["com.tencent.qqmusic"],"available":true,"versionName":"1.0.3","versionCode":4,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/qqmusic-v1.0.3/qqmusic-1.0.3.hlp","sha256":"a752bcaedf4800bc00ea181d5c3d39cfaaf01c1ab92733f6e35421f1160d1e5c"},
     {"id":"qqmusic-hd","displayName":"QQ音乐HD","targetPackages":["com.tencent.qqmusicpad"],"available":false},
     {"id":"kugou","displayName":"酷狗音乐","targetPackages":["com.kugou.android","com.kugou.android.lite"],"available":true,"versionName":"1.0.2","versionCode":3,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/kugou-v1.0.2/kugou-1.0.2.hlp","sha256":"612840e538c00725924277a9bcc4fec4fa61aeae39a1589d5371af7515b2a8f2"},
-    {"id":"kuwo","displayName":"酷我音乐","targetPackages":["cn.kuwo.player"],"available":true,"versionName":"1.0.2","versionCode":3,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/kuwo-v1.0.2/kuwo-1.0.2.hlp","sha256":"59e1a50117c287297603f414a28256541f6f2ce23007c615d41d883f403ad28a"},
+    {"id":"kuwo","displayName":"酷我音乐","targetPackages":["cn.kuwo.player"],"available":true,"versionName":"1.0.3","versionCode":4,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/kuwo-v1.0.3/kuwo-1.0.3.hlp","sha256":"2a2ecaca1b92429671e904cf3d5707b1d2d69d3c8fbd4bac99f3aae8a486ca60"},
     {"id":"spotify","displayName":"Spotify","targetPackages":["com.spotify.music"],"available":false},
     {"id":"lxmusic","displayName":"LX音乐","targetPackages":["cn.toside.music.mobile","com.ikunshare.music.mobile","com.lxnetease.music.mobile"],"available":false},
     {"id":"poweramp","displayName":"Poweramp","targetPackages":["com.maxmpz.audioplayer"],"available":false},
