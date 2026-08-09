@@ -31,6 +31,7 @@ import io.github.proify.lyricon.provider.LyriconProvider
 import java.io.File
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -110,11 +111,44 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         val full = packageName == FULL_PACKAGE
         require(full || packageName == LITE_PACKAGE) { "Unsupported KuGou package: $packageName" }
         val managerClass = "com.kugou.framework.service.KGPlayerManager"
+        val queueManagerClass = "com.kugou.common.player.manager.QueuePlayerManager"
+        val mediaInterface = "com.kugou.common.player.manager.IMedia"
         val managerType = OfficialProviderDexTypeReference(
             queryCacheKey = if (full) "kugou-full-player-singleton-v2" else
                 "kugou-lite-player-singleton-v2",
             source = OfficialProviderDexTypeSource.RETURN_TYPE,
         )
+        val nextMediaQuery = if (full) {
+            // Original KuGou 20.7.5 DEX:
+            // Lcom/kugou/common/player/manager/QueuePlayerManager;->k()L.../IMedia;
+            // calls PlayQueue.w(): int followed by PlayQueue.v(int): Object.
+            OfficialProviderDexMethodQuery(
+                cacheKey = "kugou-full-next-media-v1",
+                preferredTarget = OfficialProviderMethodTarget(
+                    className = queueManagerClass,
+                    methodName = "k",
+                    returnTypeName = mediaInterface,
+                    isStatic = false,
+                ),
+                declaringClassName = queueManagerClass,
+                parameterTypeNames = emptyList(),
+                returnTypeName = mediaInterface,
+                isStatic = false,
+            )
+        } else {
+            // Original KuGou Lite 5.2.4 DEX proves k() reads the current item through
+            // PlayQueue.n(). The real next implementation is currently P0(), but its
+            // stable bridge getNextMedia() calls it. Resolve by that caller relationship
+            // so a future obfuscation rename cannot silently turn the current item into next.
+            OfficialProviderDexMethodQuery(
+                cacheKey = "kugou-lite-next-media-v2",
+                declaringClassName = queueManagerClass,
+                requiredCallerMethodNames = listOf("getNextMedia"),
+                parameterTypeNames = emptyList(),
+                returnTypeName = mediaInterface,
+                isStatic = false,
+            )
+        }
         return listOf(
             OfficialProviderDexMethodQuery(
                 cacheKey = managerType.queryCacheKey,
@@ -129,20 +163,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 returnTypeMatchesDeclaringClass = true,
                 isStatic = true,
             ),
-            OfficialProviderDexMethodQuery(
-                cacheKey = if (full) "kugou-full-next-media-v1" else
-                    "kugou-lite-next-media-v1",
-                preferredTarget = OfficialProviderMethodTarget(
-                    className = "com.kugou.common.player.manager.QueuePlayerManager",
-                    methodName = "k",
-                    returnTypeName = "com.kugou.common.player.manager.IMedia",
-                    isStatic = false,
-                ),
-                declaringClassName = "com.kugou.common.player.manager.QueuePlayerManager",
-                parameterTypeNames = emptyList(),
-                returnTypeName = "com.kugou.common.player.manager.IMedia",
-                isStatic = false,
-            ),
+            nextMediaQuery,
         )
     }
 
@@ -317,9 +338,25 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
         private fun captureNextTrack() {
             val current = track
-            val next = runCatching { nextTrackResolver?.resolve() }
+            val resolvedNext = runCatching { nextTrackResolver?.resolve() }
                 .onFailure { error -> Log.w(TAG, "酷狗下一首读取失败", error) }
                 .getOrNull()
+            val next = resolvedNext?.takeUnless { candidate ->
+                KuGouNextTrackCandidatePolicy.isCurrent(
+                    currentTitle = current.title,
+                    currentArtist = current.artist,
+                    candidateTitle = candidate.title,
+                    candidateArtist = candidate.artist,
+                )
+            }
+            if (resolvedNext != null && next == null && BuildConfig.DEBUG) {
+                Log.w(
+                    TAG,
+                    "酷狗下一首候选与当前曲一致，已清空: " +
+                        "current=${current.title}/${current.artist}, " +
+                        "candidate=${resolvedNext.title}/${resolvedNext.artist}",
+                )
+            }
             val frame = if (next == null || next.title.isBlank()) {
                 OfficialProviderControlProtocol.encodeNextTrackClear(
                     currentId = current.identity,
@@ -346,7 +383,12 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 lastNextTrackFrame = frame
                 lastNextTrackFrameSentAtMs = now
                 if (BuildConfig.DEBUG) {
-                    Log.i(TAG, "酷狗下一首控制帧已发送: next=${next?.id}")
+                    Log.i(
+                        TAG,
+                        "酷狗下一首控制帧已发送: " +
+                            "current=${current.title}/${current.artist}, " +
+                            "next=${next?.title}/${next?.artist}, id=${next?.id}",
+                    )
                 }
             }
         }
@@ -602,4 +644,26 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
     }
 
+}
+
+internal object KuGouNextTrackCandidatePolicy {
+    private val whitespace = Regex("\\s+")
+
+    fun isCurrent(
+        currentTitle: String?,
+        currentArtist: String?,
+        candidateTitle: String,
+        candidateArtist: String,
+    ): Boolean {
+        val normalizedCurrentTitle = normalize(currentTitle)
+        if (normalizedCurrentTitle.isEmpty()) return false
+        return normalizedCurrentTitle == normalize(candidateTitle) &&
+            normalize(currentArtist) == normalize(candidateArtist)
+    }
+
+    private fun normalize(value: String?): String = value
+        .orEmpty()
+        .trim()
+        .replace(whitespace, " ")
+        .lowercase(Locale.ROOT)
 }
