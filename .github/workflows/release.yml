@@ -12,14 +12,18 @@ on:
           - qqmusic
           - kugou
           - kuwo
+          - qishui
           - salt-player
+          - spotify
   push:
     tags:
       - "netease-v*"
       - "qqmusic-v*"
       - "kugou-v*"
       - "kuwo-v*"
+      - "qishui-v*"
       - "salt-player-v*"
+      - "spotify-v*"
 
 permissions:
   contents: write
@@ -47,7 +51,9 @@ jobs:
             qqmusic) display_name="QQ音乐" ;;
             kugou) display_name="酷狗音乐" ;;
             kuwo) display_name="酷我音乐" ;;
+            qishui) display_name="汽水音乐" ;;
             salt-player) display_name="椒盐音乐" ;;
+            spotify) display_name="Spotify" ;;
             *) echo "Unsupported provider tag: $GITHUB_REF_NAME" >&2; exit 1 ;;
           esac
           echo "id=$provider" >> "$GITHUB_OUTPUT"
@@ -128,7 +134,9 @@ jobs:
               "qqmusic-hd": "QQ音乐HD",
               "kugou": "酷狗音乐",
               "lxmusic": "LX音乐",
+              "qishui": "汽水音乐",
               "salt-player": "椒盐音乐",
+              "spotify": "Spotify",
           }
           for item in catalog["providers"]:
               if item["id"] in canonical_display_names:

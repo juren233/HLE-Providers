@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "pluginApiVersion": 3,
+  "pluginId": "spotify",
+  "displayName": "Spotify",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "minCoreVersionCode": 140051,
+  "entryClass": "com.juren233.hle.providers.spotify.SpotifyPluginEntry",
+  "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.spotify",
+  "targetPackages": [
+    "com.spotify.music"
+  ],
+  "classesSha256": ""
+}
