@@ -10,8 +10,8 @@ android {
         applicationId = "com.juren233.hle.providers.pack.qishui"
         minSdk = 33
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
     }
 
     buildTypes {
@@ -34,6 +34,7 @@ dependencies {
     compileOnly("io.github.proify.lyricon:provider:0.1.70")
     compileOnly("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20180813")
     testImplementation("io.github.proify.lyricon:provider:0.1.70")
     testImplementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
 }

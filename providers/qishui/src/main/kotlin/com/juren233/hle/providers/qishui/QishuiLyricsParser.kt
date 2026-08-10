@@ -10,7 +10,13 @@ internal data class QishuiLyricPayload(
     val trackId: String,
     val type: String,
     val content: String,
-    val translations: List<String>,
+    val translations: List<QishuiTranslationPayload>,
+)
+
+internal data class QishuiTranslationPayload(
+    val language: String,
+    val type: String,
+    val content: String,
 )
 
 internal data class QishuiTimelineWord(
@@ -45,15 +51,24 @@ internal object QishuiLyricsParser {
 
         val translations = payload.translations
             .asSequence()
-            .flatMap { content ->
-                val lrc = parseLrc(content)
-                (if (lrc.isNotEmpty()) lrc else parseKrc(content)).asSequence()
+            .mapIndexedNotNull { index, candidate ->
+                val parsed = when (candidate.type.uppercase()) {
+                    "KRC" -> parseKrc(candidate.content)
+                    "TEXT" -> parseText(candidate.content)
+                    else -> parseLrc(candidate.content)
+                }.filter { it.text.isNotBlank() }
+                parsed.takeIf(List<QishuiTimelineLine>::isNotEmpty)
+                    ?.let { TranslationCandidate(candidate, index, it) }
             }
-            .filter { it.text.isNotBlank() }
-            .toList()
+            .sortedWith(
+                compareBy<TranslationCandidate> { languagePriority(it.payload.language) }
+                    .thenBy { it.payload.language.lowercase() }
+                    .thenBy { it.index },
+            )
+            .firstOrNull()
 
         val aligned = primary.map { line ->
-            val translation = translations
+            val translation = translations?.lines.orEmpty()
                 .asSequence()
                 .map { candidate -> candidate to kotlin.math.abs(candidate.begin - line.begin) }
                 .filter { (_, distance) -> distance <= TRANSLATION_TOLERANCE_MS }
@@ -64,6 +79,23 @@ internal object QishuiLyricsParser {
             line.copy(translation = translation)
         }
         return completeEnds(aligned, durationMs)
+    }
+
+    private data class TranslationCandidate(
+        val payload: QishuiTranslationPayload,
+        val index: Int,
+        val lines: List<QishuiTimelineLine>,
+    )
+
+    private fun languagePriority(language: String): Int {
+        val normalized = language.trim().lowercase().replace('_', '-')
+        return when {
+            normalized == "cn" || normalized.startsWith("zh") -> 0
+            normalized.startsWith("en") -> 1
+            normalized.startsWith("ja") -> 2
+            normalized.startsWith("ko") -> 3
+            else -> 10
+        }
     }
 
     private fun parseKrc(content: String): List<QishuiTimelineLine> = content.lineSequence()

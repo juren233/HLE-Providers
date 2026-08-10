@@ -41,10 +41,14 @@ class QishuiLyricsParserTest {
                     [2200,1300]<0,700,0>second
                 """.trimIndent(),
                 translations = listOf(
-                    """
-                    [00:01.00]第一句
-                    [00:02.20]第二句
-                    """.trimIndent(),
+                    QishuiTranslationPayload(
+                        language = "ZH-HANS-CN",
+                        type = "lrc",
+                        content = """
+                            [00:01.00]第一句
+                            [00:02.20]第二句
+                        """.trimIndent(),
+                    ),
                 ),
             ),
         )
@@ -68,5 +72,30 @@ class QishuiLyricsParserTest {
         assertEquals(3_500L, lines[0].end)
         assertEquals(9_000L, lines[1].end)
         assertNull(lines[0].translation)
+    }
+
+    @Test
+    fun `selects one deterministic translation language instead of mixing streams`() {
+        val lines = QishuiLyricsParser.parse(
+            QishuiLyricPayload(
+                trackId = "123456",
+                type = "lrc",
+                content = "[00:01.00]first\n[00:02.00]second",
+                translations = listOf(
+                    QishuiTranslationPayload(
+                        language = "en-US",
+                        type = "lrc",
+                        content = "[00:01.00]English one\n[00:02.00]English two",
+                    ),
+                    QishuiTranslationPayload(
+                        language = "ZH-HANS-CN",
+                        type = "lrc",
+                        content = "[00:01.00]中文一\n[00:02.00]中文二",
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("中文一", "中文二"), lines.map { it.translation })
     }
 }
