@@ -32,6 +32,17 @@ interface OfficialProviderHost {
         queries: List<OfficialProviderDexMethodQuery>,
         callback: OfficialProviderDexMethodsCallback,
     )
+
+    fun reportDexMethodValidation(
+        cacheKey: String,
+        valid: Boolean,
+        detail: String? = null,
+    ) = Unit
+
+    fun reportDiagnostic(
+        tag: String,
+        message: String,
+    ) = Unit
 }
 
 fun interface OfficialProviderApplicationCallback {

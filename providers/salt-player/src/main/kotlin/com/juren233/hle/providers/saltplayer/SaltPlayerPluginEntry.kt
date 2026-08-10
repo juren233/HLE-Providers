@@ -15,6 +15,7 @@ import android.util.Log
 import com.juren233.hle.providers.saltplayer.BuildConfig
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderApplicationCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
@@ -66,6 +67,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                         application = application,
                         provider = it,
                         nextTrackProfile = profile,
+                        host = host,
                     ).apply { startNextTrackCapture() }
                 }
             }.onSuccess {
@@ -93,6 +95,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         private val application: Application,
         private val provider: LyriconProvider,
         private val nextTrackProfile: SaltPlayerHookProfile?,
+        private val host: OfficialProviderHost,
     ) {
         private val mainHandler = Handler(Looper.getMainLooper())
         private val localLyricsResolver = SaltPlayerMediaStoreResolver(application)
@@ -106,6 +109,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         private var lastLocalLyricsRequestKey: String? = null
         private var pendingLocalLyricsTask: Future<*>? = null
         private var nextTrackResolver: SaltPlayerNextTrackResolver? = null
+        private var nextTrackValidationCacheKey: String? = null
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
         private val requestedNextTrackCapture = Runnable(::captureNextTrack)
@@ -123,20 +127,64 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                 Log.e(TAG, "椒盐音乐下一首解析器必须在主线程初始化")
                 return
             }
-            finishNextTrackSetup(profile)
+            if (finishNextTrackSetup(profile, profile.musicControllerClassName, null)) return
+
+            val query = SaltPlayerNextTrackResolver.controllerFallbackQuery(profile)
+            Log.w(TAG, "椒盐音乐固定控制器解析失效，进入 DexKit 类定位兜底")
+            host.resolveDexMethods(
+                application = application,
+                queries = listOf(query),
+                callback = OfficialProviderDexMethodsCallback { targets ->
+                    val target = targets.singleOrNull()
+                    mainHandler.post {
+                        if (target == null) {
+                            if (BuildConfig.DEBUG) {
+                                host.reportDexMethodValidation(
+                                    query.cacheKey,
+                                    valid = false,
+                                    detail = "resolved_targets=${targets.size}",
+                                )
+                            }
+                            Log.w(TAG, "椒盐音乐 DexKit 控制器目标数量错误: ${targets.size}")
+                            return@post
+                        }
+                        finishNextTrackSetup(profile, target.className, query.cacheKey)
+                    }
+                },
+            )
         }
 
-        private fun finishNextTrackSetup(profile: SaltPlayerHookProfile) {
-            nextTrackResolver = runCatching {
-                SaltPlayerNextTrackResolver.create(application, profile)
+        private fun finishNextTrackSetup(
+            profile: SaltPlayerHookProfile,
+            controllerClassName: String,
+            validationCacheKey: String?,
+        ): Boolean {
+            val resolver = runCatching {
+                SaltPlayerNextTrackResolver.create(
+                    application = application,
+                    profile = profile,
+                    controllerClassName = controllerClassName,
+                )
             }.onFailure { error ->
-                Log.w(TAG, "椒盐音乐下一首解析器校验失败", error)
-            }.getOrNull() ?: run {
-                Log.w(TAG, "椒盐音乐下一首 Profile 未通过运行时校验")
-                return
-            }
+                if (BuildConfig.DEBUG && validationCacheKey != null) {
+                    host.reportDexMethodValidation(
+                        validationCacheKey,
+                        valid = false,
+                        detail = "setup_${error::class.java.simpleName}: ${error.message}",
+                    )
+                }
+                Log.w(TAG, "椒盐音乐下一首解析器校验失败: class=$controllerClassName", error)
+            }.getOrNull() ?: return false
+            nextTrackResolver = resolver
+            nextTrackValidationCacheKey = validationCacheKey
+            mainHandler.removeCallbacks(periodicNextTrackCapture)
             mainHandler.post(periodicNextTrackCapture)
-            Log.i(TAG, "椒盐音乐下一首采集已启动")
+            Log.i(
+                TAG,
+                "椒盐音乐下一首采集已启动: class=$controllerClassName, " +
+                    "source=${if (validationCacheKey == null) "profile" else "dexkit"}",
+            )
+            return true
         }
 
         @Synchronized
@@ -236,11 +284,32 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
             }
             val resolver = nextTrackResolver ?: return
             val current = currentMetadata()
-            runCatching { resolver.resolve(current) }
-                .onSuccess { next -> publishNextTrack(current, next) }
-                .onFailure { error ->
-                    if (BuildConfig.DEBUG) Log.w(TAG, "椒盐音乐下一首采集失败", error)
+            runCatching {
+                if (BuildConfig.DEBUG && nextTrackValidationCacheKey != null) {
+                    resolver.resolveWithValidation(current).also { result ->
+                        reportNextTrackValidation(result.queueDecoded, result.detail)
+                    }.nextTrack
+                } else {
+                    resolver.resolve(current)
                 }
+            }.onSuccess { next ->
+                publishNextTrack(current, next)
+            }.onFailure { error ->
+                if (BuildConfig.DEBUG) {
+                    reportNextTrackValidation(
+                        valid = false,
+                        detail = "${error::class.java.simpleName}: ${error.message}",
+                    )
+                    Log.w(TAG, "椒盐音乐下一首采集失败", error)
+                }
+            }
+        }
+
+        private fun reportNextTrackValidation(valid: Boolean, detail: String) {
+            if (!BuildConfig.DEBUG) return
+            nextTrackValidationCacheKey?.let { cacheKey ->
+                host.reportDexMethodValidation(cacheKey, valid, detail)
+            }
         }
 
         private fun publishNextTrack(

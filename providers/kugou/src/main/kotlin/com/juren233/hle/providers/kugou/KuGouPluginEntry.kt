@@ -82,7 +82,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 Log.e(TAG, "酷狗音乐 Provider 注册失败", error)
             }.getOrNull() ?: return@hookApplication
 
-            val currentRuntime = KuGouRuntime(application, provider).also { runtime = it }
+            val currentRuntime = KuGouRuntime(application, provider, host).also { runtime = it }
             currentRuntime.start()
             host.resolveDexMethods(
                 application = application,
@@ -170,6 +170,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     private class KuGouRuntime(
         private val application: Application,
         val provider: LyriconProvider,
+        private val host: OfficialProviderHost,
     ) {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
             Thread(task, "HLE-KuGou-Lyrics").apply { isDaemon = true }
@@ -204,6 +205,9 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
         @Volatile
         private var nextTrackResolver: KuGouNextTrackResolver? = null
+
+        @Volatile
+        private var nextTrackValidationKeys: List<String> = emptyList()
 
         private var pendingLyricsTask: Future<*>? = null
 
@@ -324,6 +328,8 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
         fun installNextTrackResolver(targets: List<OfficialProviderMethodTarget>) {
             mainHandler.post {
+                nextTrackValidationKeys = nextTrackQueriesFor(host.packageName)
+                    .map { it.cacheKey }
                 nextTrackResolver = runCatching {
                     KuGouNextTrackResolver.create(application, targets)
                 }.onFailure { error ->
@@ -339,7 +345,19 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         private fun captureNextTrack() {
             val current = track
             val resolvedNext = runCatching { nextTrackResolver?.resolve() }
-                .onFailure { error -> Log.w(TAG, "酷狗下一首读取失败", error) }
+                .onSuccess { next ->
+                    reportNextTrackValidation(
+                        valid = true,
+                        detail = "next=${next?.id ?: "none"}",
+                    )
+                }
+                .onFailure { error ->
+                    Log.w(TAG, "酷狗下一首读取失败", error)
+                    reportNextTrackValidation(
+                        valid = false,
+                        detail = "${error::class.java.simpleName}: ${error.message}",
+                    )
+                }
                 .getOrNull()
             val next = resolvedNext?.takeUnless { candidate ->
                 KuGouNextTrackCandidatePolicy.isCurrent(
@@ -390,6 +408,13 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                             "next=${next?.title}/${next?.artist}, id=${next?.id}",
                     )
                 }
+            }
+        }
+
+        private fun reportNextTrackValidation(valid: Boolean, detail: String) {
+            if (!BuildConfig.DEBUG) return
+            nextTrackValidationKeys.forEach { key ->
+                host.reportDexMethodValidation(key, valid, detail)
             }
         }
 

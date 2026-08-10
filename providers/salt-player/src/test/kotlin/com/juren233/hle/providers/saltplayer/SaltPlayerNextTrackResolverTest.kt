@@ -13,6 +13,25 @@ import org.junit.Test
 
 class SaltPlayerNextTrackResolverTest {
     @Test
+    fun `uses a stable method shape to recover the controller class`() {
+        val query = SaltPlayerNextTrackResolver.controllerFallbackQuery(
+            SaltPlayerHookProfiles.V12_1_1,
+        )
+
+        assertEquals(
+            SaltPlayerNextTrackResolver.CONTROLLER_FALLBACK_CACHE_KEY,
+            query.cacheKey,
+        )
+        assertEquals("com.salt.music.service.", query.declaringClassNamePrefix)
+        assertEquals(
+            listOf("com.salt.music.data.entry.Song", "long", "long", "java.lang.Long"),
+            query.parameterTypeNames,
+        )
+        assertEquals("void", query.returnTypeName)
+        assertEquals(true, query.isStatic)
+    }
+
+    @Test
     fun `initializes the queue owner class on the calling thread`() {
         InitializationProbeState.initializedThread = null
 

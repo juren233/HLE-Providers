@@ -184,6 +184,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private val mainHandler = Handler(Looper.getMainLooper())
 
         @Volatile
+        private var nextTrackValidationKeys: List<String> = emptyList()
+
+        @Volatile
         private var provider: LyriconProvider? = null
 
         fun start() {
@@ -192,6 +195,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 Log.w(TAG, "QQ 音乐版本未匹配，跳过下一首适配")
                 return
             }
+            nextTrackValidationKeys = queries.map { it.cacheKey }
             host.resolveDexMethods(
                 application = application,
                 queries = queries,
@@ -224,10 +228,27 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
         private fun capture(resolver: QQMusicNextTrackResolver) {
             runCatching { resolver.resolve() }
-                .onSuccess { snapshot -> publish(snapshot) }
+                .onSuccess { snapshot ->
+                    reportNextTrackValidation(
+                        valid = true,
+                        detail = "next=${snapshot?.next?.id ?: "none"}",
+                    )
+                    publish(snapshot)
+                }
                 .onFailure { error ->
+                    reportNextTrackValidation(
+                        valid = false,
+                        detail = "${error::class.java.simpleName}: ${error.message}",
+                    )
                     if (BuildConfig.DEBUG) Log.w(TAG, "QQ 音乐下一首采集失败", error)
                 }
+        }
+
+        private fun reportNextTrackValidation(valid: Boolean, detail: String) {
+            if (!BuildConfig.DEBUG) return
+            nextTrackValidationKeys.forEach { key ->
+                host.reportDexMethodValidation(key, valid, detail)
+            }
         }
 
         private fun publish(snapshot: QQMusicQueueSnapshot?) {

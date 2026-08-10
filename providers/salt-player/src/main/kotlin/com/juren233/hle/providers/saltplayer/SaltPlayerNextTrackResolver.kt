@@ -8,6 +8,7 @@ package com.juren233.hle.providers.saltplayer
 
 import android.app.Application
 import android.os.Looper
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -28,6 +29,12 @@ internal data class SaltPlayerQueueStateSnapshot(
     val randomQueue: List<SaltPlayerTrackSnapshot>,
     val randomIndex: Int,
     val readyToSave: Boolean,
+)
+
+internal data class SaltPlayerNextTrackResolution(
+    val queueDecoded: Boolean,
+    val nextTrack: SaltPlayerTrackSnapshot?,
+    val detail: String,
 )
 
 internal enum class SaltPlayerPlaybackMode {
@@ -95,9 +102,39 @@ internal class SaltPlayerNextTrackResolver private constructor(
     private val itemAccessors = ConcurrentHashMap<Class<*>, ItemAccessors>()
 
     fun resolve(current: SaltPlayerTrackMetadata): SaltPlayerTrackSnapshot? {
-        require(Looper.myLooper() == Looper.getMainLooper()) {
-            "Salt Player 下一首解析必须在主线程执行"
-        }
+        requireMainThread()
+        val snapshot = resolveQueueSnapshot(current) ?: return null
+        return SaltPlayerNextTrackSelector.select(
+            state = snapshot,
+            currentId = current.id,
+            currentFallback = current.toSnapshot(),
+        )
+    }
+
+    fun resolveWithValidation(current: SaltPlayerTrackMetadata): SaltPlayerNextTrackResolution {
+        requireMainThread()
+        val snapshot = resolveQueueSnapshot(current)
+            ?: return SaltPlayerNextTrackResolution(
+                queueDecoded = false,
+                nextTrack = null,
+                detail = "queue_state_unavailable_or_invalid",
+            )
+        val next = SaltPlayerNextTrackSelector.select(
+            state = snapshot,
+            currentId = current.id,
+            currentFallback = current.toSnapshot(),
+        )
+        return SaltPlayerNextTrackResolution(
+            queueDecoded = true,
+            nextTrack = next,
+            detail = "mode=${snapshot.mode}, normal=${snapshot.normalQueue.size}, " +
+                "random=${snapshot.randomQueue.size}, next=${next?.id}",
+        )
+    }
+
+    private fun resolveQueueSnapshot(
+        current: SaltPlayerTrackMetadata,
+    ): SaltPlayerQueueStateSnapshot? {
         val state = stateFlowFields.asSequence()
             .mapNotNull { field ->
                 val flow = runCatching { field.get(null) }.getOrNull() ?: return@mapNotNull null
@@ -106,17 +143,18 @@ internal class SaltPlayerNextTrackResolver private constructor(
             .firstOrNull { value -> StateAccessors.supports(value.javaClass) }
             ?: return null
         val accessors = stateAccessors.computeIfAbsent(state.javaClass, StateAccessors::create)
-        val snapshot = accessors.decode(
+        return accessors.decode(
             state = state,
             current = current,
             profile = profile,
             itemAccessors = itemAccessors,
-        ) ?: return null
-        return SaltPlayerNextTrackSelector.select(
-            state = snapshot,
-            currentId = current.id,
-            currentFallback = current.toSnapshot(),
         )
+    }
+
+    private fun requireMainThread() {
+        require(Looper.myLooper() == Looper.getMainLooper()) {
+            "Salt Player 下一首解析必须在主线程执行"
+        }
     }
 
     private data class StateAccessors(
@@ -282,15 +320,40 @@ internal class SaltPlayerNextTrackResolver private constructor(
     }
 
     companion object {
+        const val CONTROLLER_FALLBACK_CACHE_KEY = "salt-player-music-controller-v1"
+
+        /**
+         * Original Salt Player 12.1.1 DEX contains exactly one matching method:
+         * MusicController.<obfuscated>(Song, long, long, Long): void.
+         * The method is used only to recover its declaring class; queue fields are
+         * still selected and validated from the live StateFlow object structure.
+         */
+        fun controllerFallbackQuery(
+            profile: SaltPlayerHookProfile,
+        ): OfficialProviderDexMethodQuery = OfficialProviderDexMethodQuery(
+            cacheKey = CONTROLLER_FALLBACK_CACHE_KEY,
+            declaringClassNamePrefix =
+                profile.musicControllerClassName.substringBeforeLast('.') + ".",
+            parameterTypeNames = listOf(
+                profile.song.className,
+                "long",
+                "long",
+                "java.lang.Long",
+            ),
+            returnTypeName = "void",
+            isStatic = true,
+        )
+
         fun create(
             application: Application,
             profile: SaltPlayerHookProfile,
+            controllerClassName: String = profile.musicControllerClassName,
         ): SaltPlayerNextTrackResolver {
             require(Looper.myLooper() == Looper.getMainLooper()) {
                 "Salt Player 下一首解析器必须在主线程创建"
             }
             val loader = application.classLoader
-            val controllerClass = loadInitializedClass(profile.musicControllerClassName, loader)
+            val controllerClass = loadInitializedClass(controllerClassName, loader)
             val stateFlowClass = loader.loadClass(profile.stateFlowClassName)
             val stateFlowFields = controllerClass.declaredFields
                 .filter { field ->

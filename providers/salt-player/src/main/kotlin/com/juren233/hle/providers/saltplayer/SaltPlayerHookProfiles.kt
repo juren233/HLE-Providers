@@ -14,6 +14,7 @@ internal data class SaltPlayerQueueHookProfile(
 )
 
 internal data class SaltPlayerSongHookProfile(
+    val className: String,
     val idGetterName: String,
     val titleGetterName: String,
     val artistGetterName: String,
@@ -40,6 +41,7 @@ internal data class SaltPlayerHookProfile(
 internal object SaltPlayerHookProfiles {
     private const val MUSIC_CONTROLLER_CLASS = "com.salt.music.service.MusicController"
     private const val STATE_FLOW_CLASS = "kotlinx.coroutines.flow.StateFlow"
+    private const val SONG_CLASS = "com.salt.music.data.entry.Song"
 
     private val QUEUE = SaltPlayerQueueHookProfile(
         circleModeName = "Circle",
@@ -49,6 +51,7 @@ internal object SaltPlayerHookProfiles {
     )
 
     private val SONG = SaltPlayerSongHookProfile(
+        className = SONG_CLASS,
         idGetterName = "getId",
         titleGetterName = "getTitle",
         artistGetterName = "getArtist",

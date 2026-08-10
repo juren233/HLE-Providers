@@ -83,6 +83,9 @@ object KuwoPluginEntry : OfficialProviderPlugin {
         private var nextTrackResolver: KuwoNextTrackResolver? = null
 
         @Volatile
+        private var nextTrackValidationKeys: List<String> = emptyList()
+
+        @Volatile
         private var currentTrack: KuwoTrackMetadata? = null
 
         private val requestedNextTrackCapture = Runnable(::captureNextTrack)
@@ -185,6 +188,7 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                 Log.w(TAG, "酷我版本未匹配，跳过下一首适配")
                 return
             }
+            nextTrackValidationKeys = queries.map { it.cacheKey }
             host.resolveDexMethods(
                 application = application,
                 queries = queries,
@@ -221,6 +225,10 @@ object KuwoPluginEntry : OfficialProviderPlugin {
             }
             runCatching { resolver.resolve(metadata) }
                 .onSuccess { rawSnapshot ->
+                    reportNextTrackValidation(
+                        valid = true,
+                        detail = "next=${rawSnapshot?.next?.id ?: "none"}",
+                    )
                     val snapshot = KuwoNextTrackBinding.align(metadata, rawSnapshot)
                     if (
                         BuildConfig.DEBUG &&
@@ -236,8 +244,19 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                     publishNextTrack(metadata, snapshot)
                 }
                 .onFailure { error ->
+                    reportNextTrackValidation(
+                        valid = false,
+                        detail = "${error::class.java.simpleName}: ${error.message}",
+                    )
                     if (BuildConfig.DEBUG) Log.w(TAG, "酷我下一首采集失败", error)
                 }
+        }
+
+        private fun reportNextTrackValidation(valid: Boolean, detail: String) {
+            if (!BuildConfig.DEBUG) return
+            nextTrackValidationKeys.forEach { key ->
+                host.reportDexMethodValidation(key, valid, detail)
+            }
         }
 
         private fun publishNextTrack(

@@ -121,7 +121,26 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                     val payload = SpotifyLyricsPayloadExtractor.extract(
                         trackKey = arguments.getOrNull(0),
                         result = arguments.getOrNull(1),
-                    ) ?: return@OfficialProviderMethodCallback
+                    )
+                    if (payload == null) {
+                        if (BuildConfig.DEBUG) {
+                            host.reportDexMethodValidation(
+                                cacheKey = SpotifyHookProfiles.lyricsFallbackQuery.cacheKey,
+                                valid = false,
+                                detail = "payload=null",
+                            )
+                        }
+                        return@OfficialProviderMethodCallback
+                    }
+                    val valid = payload.lines.isNotEmpty()
+                    if (BuildConfig.DEBUG) {
+                        host.reportDexMethodValidation(
+                            cacheKey = SpotifyHookProfiles.lyricsFallbackQuery.cacheKey,
+                            valid = valid,
+                            detail = "track=${payload.trackUri}, lines=${payload.lines.size}, " +
+                                "translations=${payload.translations.size}",
+                        )
+                    }
                     if (BuildConfig.DEBUG && firstLyricsHit.compareAndSet(false, true)) {
                         Log.i(
                             TAG,
@@ -154,7 +173,25 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                     SpotifyQueueExtractor.extract(arguments.getOrNull(0) ?: receiver)
                 } finally {
                     queueExtractionInProgress.remove()
-                } ?: return@OfficialProviderMethodCallback
+                }
+                if (snapshot == null) {
+                    if (BuildConfig.DEBUG) {
+                        host.reportDexMethodValidation(
+                            cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
+                            valid = false,
+                            detail = "snapshot=null",
+                        )
+                    }
+                    return@OfficialProviderMethodCallback
+                }
+                val valid = snapshot.current.id.isNotBlank() && snapshot.current.title.isNotBlank()
+                if (BuildConfig.DEBUG) {
+                    host.reportDexMethodValidation(
+                        cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
+                        valid = valid,
+                        detail = "current=${snapshot.current.id}, next=${snapshot.next?.id}",
+                    )
+                }
                 if (BuildConfig.DEBUG && firstQueueHit.compareAndSet(false, true)) {
                     Log.i(
                         TAG,

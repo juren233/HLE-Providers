@@ -39,6 +39,7 @@ class SaltPlayerHookProfilesTest {
 
         assertEquals("com.salt.music.service.MusicController", profile.musicControllerClassName)
         assertEquals("kotlinx.coroutines.flow.StateFlow", profile.stateFlowClassName)
+        assertEquals("com.salt.music.data.entry.Song", profile.song.className)
         listOf(
             SaltPlayerHookProfiles.V12_1_1,
             SaltPlayerHookProfiles.V12_1_0,
