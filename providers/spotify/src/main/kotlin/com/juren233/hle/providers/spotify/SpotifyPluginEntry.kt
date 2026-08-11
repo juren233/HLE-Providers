@@ -64,6 +64,8 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private val mainHandler = Handler(Looper.getMainLooper())
         private val firstLyricsHit = AtomicBoolean(false)
         private val firstQueueHit = AtomicBoolean(false)
+        private val lyricsValidation = SpotifyHookValidationTracker()
+        private val queueValidation = SpotifyHookValidationTracker()
         private val queueExtractionInProgress = ThreadLocal<Boolean>()
         private val lyricsCache = object : LinkedHashMap<String, SpotifyLyricsPayload>(32, 0.75f, true) {
             override fun removeEldestEntry(
@@ -123,24 +125,22 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                         result = arguments.getOrNull(1),
                     )
                     if (payload == null) {
-                        if (BuildConfig.DEBUG) {
-                            host.reportDexMethodValidation(
-                                cacheKey = SpotifyHookProfiles.lyricsFallbackQuery.cacheKey,
-                                valid = false,
-                                detail = "payload=null",
-                            )
-                        }
+                        reportHookValidation(
+                            cacheKey = SpotifyHookProfiles.lyricsQuery.cacheKey,
+                            tracker = lyricsValidation,
+                            valid = false,
+                            detail = "payload=null",
+                        )
                         return@OfficialProviderMethodCallback
                     }
                     val valid = payload.lines.isNotEmpty()
-                    if (BuildConfig.DEBUG) {
-                        host.reportDexMethodValidation(
-                            cacheKey = SpotifyHookProfiles.lyricsFallbackQuery.cacheKey,
-                            valid = valid,
-                            detail = "track=${payload.trackUri}, lines=${payload.lines.size}, " +
-                                "translations=${payload.translations.size}",
-                        )
-                    }
+                    reportHookValidation(
+                        cacheKey = SpotifyHookProfiles.lyricsQuery.cacheKey,
+                        tracker = lyricsValidation,
+                        valid = valid,
+                        detail = "track=${payload.trackUri}, lines=${payload.lines.size}, " +
+                            "translations=${payload.translations.size}",
+                    )
                     if (BuildConfig.DEBUG && firstLyricsHit.compareAndSet(false, true)) {
                         Log.i(
                             TAG,
@@ -151,18 +151,11 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                     }
                     mainHandler.post { onLyricsPayload(payload) }
                 }
-            runCatching {
-                host.hookAfterMethod(SpotifyHookProfiles.lyricsExactTarget, callback)
-            }.onSuccess {
-                Log.i(TAG, "Spotify color-lyrics 缓存写入 Hook 已按精确描述符安装")
-            }.onFailure { error ->
-                Log.w(TAG, "Spotify color-lyrics 精确 Hook 失效，进入 DexKit", error)
-                host.hookAfterDexMethod(
-                    application = application,
-                    query = SpotifyHookProfiles.lyricsFallbackQuery,
-                    callback = callback,
-                )
-            }
+            host.hookAfterDexMethod(
+                application = application,
+                query = SpotifyHookProfiles.lyricsQuery,
+                callback = callback,
+            )
         }
 
         private fun installQueueHook() {
@@ -175,23 +168,21 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                     queueExtractionInProgress.remove()
                 }
                 if (snapshot == null) {
-                    if (BuildConfig.DEBUG) {
-                        host.reportDexMethodValidation(
-                            cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
-                            valid = false,
-                            detail = "snapshot=null",
-                        )
-                    }
+                    reportHookValidation(
+                        cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
+                        tracker = queueValidation,
+                        valid = false,
+                        detail = "snapshot=null",
+                    )
                     return@OfficialProviderMethodCallback
                 }
                 val valid = snapshot.current.id.isNotBlank() && snapshot.current.title.isNotBlank()
-                if (BuildConfig.DEBUG) {
-                    host.reportDexMethodValidation(
-                        cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
-                        valid = valid,
-                        detail = "current=${snapshot.current.id}, next=${snapshot.next?.id}",
-                    )
-                }
+                reportHookValidation(
+                    cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
+                    tracker = queueValidation,
+                    valid = valid,
+                    detail = "current=${snapshot.current.id}, next=${snapshot.next?.id}",
+                )
                 if (BuildConfig.DEBUG && firstQueueHit.compareAndSet(false, true)) {
                     Log.i(
                         TAG,
@@ -206,12 +197,19 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 query = SpotifyHookProfiles.queueStateQuery,
                 callback = callback,
             )
-            runCatching {
-                host.hookAfterMethod(SpotifyHookProfiles.nextTracksAccessorTarget, callback)
-            }.onFailure { error ->
-                Log.w(TAG, "Spotify nextTracks 精确辅助 Hook 安装失败，保留 DexKit 主路径", error)
+            Log.i(TAG, "Spotify nextTracks DexKit Hook 安装流程已启动")
+        }
+
+        private fun reportHookValidation(
+            cacheKey: String,
+            tracker: SpotifyHookValidationTracker,
+            valid: Boolean,
+            detail: String,
+        ) {
+            val reportInvalid = tracker.record(valid)
+            if ((valid && BuildConfig.DEBUG) || reportInvalid) {
+                host.reportDexMethodValidation(cacheKey, valid, detail)
             }
-            Log.i(TAG, "Spotify nextTracks 主 Hook 与精确辅助 Hook 安装流程已启动")
         }
 
         private fun onMetadata(value: MediaMetadata?) {
@@ -364,6 +362,28 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 lastNextTrackFrame = frame
                 lastNextTrackFrameSentAtMs = now
             }
+        }
+    }
+
+    internal class SpotifyHookValidationTracker(
+        private val invalidThreshold: Int = 3,
+    ) {
+        private var consecutiveInvalid = 0
+
+        init {
+            require(invalidThreshold > 0)
+        }
+
+        @Synchronized
+        fun record(valid: Boolean): Boolean {
+            if (valid) {
+                consecutiveInvalid = 0
+                return false
+            }
+            consecutiveInvalid += 1
+            if (consecutiveInvalid < invalidThreshold) return false
+            consecutiveInvalid = 0
+            return true
         }
     }
 

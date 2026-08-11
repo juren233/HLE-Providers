@@ -89,7 +89,35 @@ data class OfficialProviderDexMethodQuery(
     val returnTypeMatchesDeclaringClass: Boolean = false,
     val isStatic: Boolean? = null,
     val requiredCallerMethodNames: List<String> = emptyList(),
+    val forbiddenInvokedMethodDescriptors: List<String> = emptyList(),
 ) {
+    @Suppress("unused")
+    @Deprecated("Binary compatibility for Provider Packs", level = DeprecationLevel.HIDDEN)
+    constructor(
+        cacheKey: String,
+        preferredTarget: OfficialProviderMethodTarget? = null,
+        declaringClassName: String? = null,
+        declaringClassNamePrefix: String? = null,
+        declaringClassReference: OfficialProviderDexTypeReference? = null,
+        requiredStrings: List<String> = emptyList(),
+        requiredInvokedMethodDescriptors: List<String> = emptyList(),
+        requiredInvokedMethodNames: List<String> = emptyList(),
+        parameterTypeNames: List<String>? = null,
+        parameterTypeReferences: Map<Int, OfficialProviderDexTypeReference> = emptyMap(),
+        returnTypeName: String? = null,
+        returnTypeNamePrefix: String? = null,
+        returnTypeReference: OfficialProviderDexTypeReference? = null,
+        returnTypeMatchesDeclaringClass: Boolean = false,
+        isStatic: Boolean? = null,
+        requiredCallerMethodNames: List<String> = emptyList(),
+    ) : this(
+        cacheKey, preferredTarget, declaringClassName, declaringClassNamePrefix,
+        declaringClassReference, requiredStrings, requiredInvokedMethodDescriptors,
+        requiredInvokedMethodNames, parameterTypeNames, parameterTypeReferences,
+        returnTypeName, returnTypeNamePrefix, returnTypeReference,
+        returnTypeMatchesDeclaringClass, isStatic, requiredCallerMethodNames, emptyList(),
+    )
+
     @Suppress("unused")
     @Deprecated("Binary compatibility for Provider Packs", level = DeprecationLevel.HIDDEN)
     constructor(
@@ -113,7 +141,7 @@ data class OfficialProviderDexMethodQuery(
         declaringClassReference, requiredStrings, requiredInvokedMethodDescriptors,
         requiredInvokedMethodNames, parameterTypeNames, parameterTypeReferences,
         returnTypeName, returnTypeNamePrefix, returnTypeReference,
-        returnTypeMatchesDeclaringClass, isStatic, emptyList(),
+        returnTypeMatchesDeclaringClass, isStatic, emptyList(), emptyList(),
     )
 
     @Suppress("unused")
@@ -133,7 +161,7 @@ data class OfficialProviderDexMethodQuery(
         cacheKey, preferredTarget, declaringClassName, declaringClassNamePrefix, null,
         requiredStrings, requiredInvokedMethodDescriptors, emptyList(), parameterTypeNames,
         emptyMap(), returnTypeName, null, null, returnTypeMatchesDeclaringClass, isStatic,
-        emptyList(),
+        emptyList(), emptyList(),
     )
 }
 

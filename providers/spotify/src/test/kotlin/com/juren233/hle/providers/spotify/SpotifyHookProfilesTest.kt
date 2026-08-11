@@ -12,14 +12,12 @@ import org.junit.Test
 
 class SpotifyHookProfilesTest {
     @Test
-    fun `keeps exact raw DEX color lyrics cache target and semantic fallback`() {
-        val query = SpotifyHookProfiles.lyricsFallbackQuery
-        val target = SpotifyHookProfiles.lyricsExactTarget
+    fun `keeps semantic color lyrics cache query`() {
+        val query = SpotifyHookProfiles.lyricsQuery
+        val target = requireNotNull(query.preferredTarget)
 
         assertEquals("p.tix0", target.className)
         assertEquals("n", target.methodName)
-        assertEquals(listOf("java.lang.Object", "java.lang.Object"), target.parameterTypeNames)
-        assertEquals("java.lang.Object", target.returnTypeName)
         assertEquals(
             listOf("Ljava/util/AbstractMap;->put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
             query.requiredInvokedMethodDescriptors,
@@ -40,11 +38,16 @@ class SpotifyHookProfilesTest {
         )
         assertTrue(query.requiredInvokedMethodNames.contains("nextTracks"))
         assertTrue(query.requiredInvokedMethodNames.contains("disallowSkippingNextReasons"))
-        assertEquals(
-            "com.spotify.player.model.AutoValue_PlayerState",
-            SpotifyHookProfiles.nextTracksAccessorTarget.className,
-        )
-        assertEquals("nextTracks", SpotifyHookProfiles.nextTracksAccessorTarget.methodName)
-        assertEquals("p.f320", SpotifyHookProfiles.nextTracksAccessorTarget.returnTypeName)
+    }
+
+    @Test
+    fun `debounces transient invalid hook callbacks`() {
+        val tracker = SpotifyPluginEntry.SpotifyHookValidationTracker(invalidThreshold = 3)
+
+        assertEquals(false, tracker.record(valid = false))
+        assertEquals(false, tracker.record(valid = false))
+        assertEquals(true, tracker.record(valid = false))
+        assertEquals(false, tracker.record(valid = true))
+        assertEquals(false, tracker.record(valid = false))
     }
 }

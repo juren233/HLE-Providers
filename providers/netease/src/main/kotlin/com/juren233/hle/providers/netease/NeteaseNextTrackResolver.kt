@@ -61,8 +61,9 @@ internal object NeteaseNextTrackProfiles {
         durationMethodName = "getDuration",
     )
 
-    fun resolve(versionName: String, versionCode: Long): NeteaseNextTrackProfile? =
+    fun resolve(versionName: String, versionCode: Long): NeteaseNextTrackProfile =
         V9_5_61.takeIf { it.versionName == versionName && it.versionCode == versionCode }
+            ?: V9_5_61
 }
 
 internal class NeteaseNextTrackResolver private constructor(
@@ -89,12 +90,16 @@ internal class NeteaseNextTrackResolver private constructor(
     }
 
     companion object {
-        fun queries(application: Application): List<OfficialProviderDexMethodQuery>? {
+        fun queries(application: Application): List<OfficialProviderDexMethodQuery> {
             val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
             val profile = NeteaseNextTrackProfiles.resolve(
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
-            ) ?: NeteaseNextTrackProfiles.V9_5_61
+            )
+            return queries(profile)
+        }
+
+        internal fun queries(profile: NeteaseNextTrackProfile): List<OfficialProviderDexMethodQuery> {
             fun target(
                 className: String,
                 methodName: String,
@@ -107,7 +112,7 @@ internal class NeteaseNextTrackResolver private constructor(
                 isStatic = isStatic,
             )
             val managerType = OfficialProviderDexTypeReference(
-                queryCacheKey = "netease-player-manager-accessor-v2",
+                queryCacheKey = "netease-player-manager-accessor-v3",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
             val musicInfoType = OfficialProviderDexTypeReference(
@@ -129,6 +134,7 @@ internal class NeteaseNextTrackResolver private constructor(
                     ),
                     declaringClassName = profile.serviceClassName,
                     parameterTypeNames = emptyList(),
+                    returnTypeName = profile.playerManagerClassName,
                     isStatic = true,
                 ),
                 OfficialProviderDexMethodQuery(
@@ -139,6 +145,7 @@ internal class NeteaseNextTrackResolver private constructor(
                         profile.musicInfoClassName,
                     ),
                     declaringClassReference = managerType,
+                    requiredCallerMethodNames = listOf("getRealNextMusic"),
                     parameterTypeNames = emptyList(),
                     returnTypeName = profile.musicInfoClassName,
                     isStatic = false,

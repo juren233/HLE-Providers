@@ -167,12 +167,16 @@ internal class KuwoNextTrackResolver private constructor(
     }
 
     companion object {
-        fun queries(application: Application): List<OfficialProviderDexMethodQuery>? {
+        fun queries(application: Application): List<OfficialProviderDexMethodQuery> {
             val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
             val profile = KuwoHookProfiles.resolve(
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
-            ) ?: KuwoHookProfiles.V12_1_8_2
+            )
+            return queries(profile)
+        }
+
+        internal fun queries(profile: KuwoHookProfile): List<OfficialProviderDexMethodQuery> {
             fun target(methodName: String, returnTypeName: String, isStatic: Boolean = false) =
                 OfficialProviderMethodTarget(
                     className = profile.playback.managerClassName,
@@ -181,43 +185,47 @@ internal class KuwoNextTrackResolver private constructor(
                     isStatic = isStatic,
                 )
             val managerType = OfficialProviderDexTypeReference(
-                queryCacheKey = "kuwo-player-singleton-v2",
-                source = OfficialProviderDexTypeSource.RETURN_TYPE,
+                queryCacheKey = "kuwo-next-content-v3",
+                source = OfficialProviderDexTypeSource.DECLARING_CLASS,
             )
             return listOf(
                 OfficialProviderDexMethodQuery(
                     cacheKey = managerType.queryCacheKey,
                     preferredTarget = target(
+                        profile.playback.nextContentMethodName,
+                        profile.playback.contentClassName,
+                    ),
+                    declaringClassNamePrefix =
+                        profile.playback.managerClassName.substringBeforeLast('.') + ".",
+                    requiredStrings = listOf(
+                        "随机模式，获取歌曲下一曲,随机索引空，现在生成",
+                    ),
+                    parameterTypeNames = emptyList(),
+                    returnTypeName = profile.playback.contentClassName,
+                    isStatic = false,
+                ),
+                OfficialProviderDexMethodQuery(
+                    cacheKey = "kuwo-player-singleton-v3",
+                    preferredTarget = target(
                         profile.playback.singletonMethodName,
                         profile.playback.managerClassName,
                         isStatic = true,
                     ),
-                    declaringClassNamePrefix =
-                        profile.playback.managerClassName.substringBeforeLast('.') + ".",
+                    declaringClassReference = managerType,
                     parameterTypeNames = emptyList(),
                     returnTypeMatchesDeclaringClass = true,
                     isStatic = true,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "kuwo-current-music-v2",
+                    cacheKey = "kuwo-current-music-v3",
                     preferredTarget = target(
                         profile.playback.currentMusicMethodName,
                         profile.playback.musicClassName,
                     ),
                     declaringClassReference = managerType,
+                    requiredCallerMethodNames = listOf("seek"),
                     parameterTypeNames = emptyList(),
-                    returnTypeNamePrefix = "cn.kuwo.base.bean.",
-                    isStatic = false,
-                ),
-                OfficialProviderDexMethodQuery(
-                    cacheKey = "kuwo-next-content-v2",
-                    preferredTarget = target(
-                        profile.playback.nextContentMethodName,
-                        profile.playback.contentClassName,
-                    ),
-                    declaringClassReference = managerType,
-                    parameterTypeNames = emptyList(),
-                    returnTypeName = profile.playback.contentClassName,
+                    returnTypeName = profile.playback.musicClassName,
                     isStatic = false,
                 ),
             )
@@ -234,14 +242,14 @@ internal class KuwoNextTrackResolver private constructor(
             val profile = KuwoHookProfiles.resolve(
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
-            ) ?: KuwoHookProfiles.V12_1_8_2
+            )
             require(targets.size == 3) { "酷我下一首目标数量错误" }
             val loader = application.classLoader
             val contentClass = loader.loadClass(profile.playback.contentClassName)
             val methods = targets.map { it.toMethod(loader) }
-            val singletonMethod = methods[0]
-            val currentMusicMethod = methods[1]
-            val nextContentMethod = methods[2]
+            val nextContentMethod = methods[0]
+            val singletonMethod = methods[1]
+            val currentMusicMethod = methods[2]
             val managerClass = singletonMethod.returnType
 
             require(Modifier.isStatic(singletonMethod.modifiers))

@@ -30,7 +30,7 @@ internal data class KuwoHookProfile(
     val music: KuwoMusicHookProfile,
 )
 
-/** Exact-version registry for every Kuwo runtime identifier used by the Provider. */
+/** Verified templates for every Kuwo runtime identifier used by the Provider. */
 internal object KuwoHookProfiles {
     // Verified from the original Kuwo Music 12.1.8.2 (12182) APK DEX on 2026-08-07.
     // Exact descriptors:
@@ -61,8 +61,8 @@ internal object KuwoHookProfiles {
 
     private val exactProfiles = listOf(V12_1_8_2)
 
-    fun resolve(versionName: String, versionCode: Long): KuwoHookProfile? =
+    fun resolve(versionName: String, versionCode: Long): KuwoHookProfile =
         exactProfiles.firstOrNull {
             it.versionName == versionName && it.versionCode == versionCode
-        }
+        } ?: exactProfiles.maxBy(KuwoHookProfile::versionCode)
 }

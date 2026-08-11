@@ -41,8 +41,10 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
@@ -104,6 +106,11 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         private var lastNextTrackFrameSentAtMs = 0L
         private var lastPositionWriteDiagnosticAtMs = 0L
         private val mainHandler = Handler(Looper.getMainLooper())
+        private val nextTrackGeneration = AtomicLong(0L)
+        private val nextTrackValidation = NeteaseNextTrackValidationTracker()
+
+        @Volatile
+        private var nextTrackTask: ScheduledFuture<*>? = null
 
         @Volatile
         private var latestPlaybackState: PlaybackState? = null
@@ -331,10 +338,6 @@ object NeteasePluginEntry : OfficialProviderPlugin {
 
         private fun startNextTrackCapture() {
             val queries = NeteaseNextTrackResolver.queries(application)
-            if (queries == null) {
-                Log.w(TAG, "网易云版本未匹配，跳过下一首适配")
-                return
-            }
             nextTrackValidationKeys = queries.map { it.cacheKey }
             host.resolveDexMethods(
                 application = application,
@@ -345,14 +348,25 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             )
         }
 
+        @Synchronized
         private fun finishNextTrackSetup(targets: List<OfficialProviderMethodTarget>) {
-            nextTrackResolver = runCatching {
+            nextTrackTask?.cancel(false)
+            nextTrackTask = null
+            nextTrackResolver = null
+            nextTrackValidation.reset()
+            val resolver = runCatching {
                 NeteaseNextTrackResolver.create(application, targets)
             }.onFailure { error ->
                 Log.w(TAG, "网易云下一首解析器校验失败", error)
+                reportNextTrackValidation(
+                    valid = false,
+                    detail = "resolver_validation:${error::class.java.simpleName}: ${error.message}",
+                )
             }.getOrNull() ?: return
-            nextTrackScheduler.scheduleWithFixedDelay(
-                ::captureNextTrack,
+            nextTrackResolver = resolver
+            val generation = nextTrackGeneration.incrementAndGet()
+            nextTrackTask = nextTrackScheduler.scheduleWithFixedDelay(
+                { captureNextTrack(generation) },
                 0L,
                 NEXT_TRACK_POLL_INTERVAL_MS,
                 TimeUnit.MILLISECONDS,
@@ -360,34 +374,71 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         }
 
         private fun requestNextTrackCapture() {
-            if (nextTrackResolver != null) nextTrackScheduler.execute(::captureNextTrack)
+            val generation = nextTrackGeneration.get()
+            if (nextTrackResolver != null && nextTrackTask != null) {
+                nextTrackScheduler.execute { captureNextTrack(generation) }
+            }
         }
 
-        private fun captureNextTrack() {
+        private fun captureNextTrack(generation: Long) {
+            if (nextTrackGeneration.get() != generation) return
             val resolver = nextTrackResolver ?: return
             val current = currentTrack
-            runCatching { resolver.resolve() }
-                .onSuccess { next ->
+            runCatching {
+                val resolvedNext = resolver.resolve()
+                if (nextTrackGeneration.get() != generation) return
+                val candidateMatchesCurrent = resolvedNext?.let { candidate ->
+                    NeteaseNextTrackCandidatePolicy.isCurrent(
+                        currentId = current?.id,
+                        currentTitle = current?.title,
+                        currentArtist = current?.artist,
+                        candidate = candidate,
+                    )
+                } == true
+                val next = resolvedNext?.takeUnless { candidateMatchesCurrent }
+                if (candidateMatchesCurrent) {
+                    if (nextTrackValidation.record(candidateMatchesCurrent = true)) {
+                        reportNextTrackValidation(
+                            valid = false,
+                            detail = "candidate_matches_current:${resolvedNext?.id}",
+                        )
+                        stopNextTrackCapture(generation)
+                    }
+                } else {
+                    nextTrackValidation.record(candidateMatchesCurrent = false)
                     reportNextTrackValidation(
                         valid = true,
                         detail = "next=${next?.id ?: "none"}",
                     )
-                    publishNextTrack(current, next)
                 }
+                publishNextTrack(current, next)
+                next
+            }
                 .onFailure { error ->
+                    if (nextTrackGeneration.get() != generation) return@onFailure
                     reportNextTrackValidation(
                         valid = false,
                         detail = "${error::class.java.simpleName}: ${error.message}",
                     )
+                    stopNextTrackCapture(generation)
                     if (BuildConfig.DEBUG) Log.w(TAG, "网易云下一首采集失败", error)
                 }
         }
 
         private fun reportNextTrackValidation(valid: Boolean, detail: String) {
-            if (!BuildConfig.DEBUG) return
+            if (valid && !BuildConfig.DEBUG) return
             nextTrackValidationKeys.forEach { key ->
                 host.reportDexMethodValidation(key, valid, detail)
             }
+        }
+
+        @Synchronized
+        private fun stopNextTrackCapture(generation: Long) {
+            if (nextTrackGeneration.get() != generation) return
+            nextTrackGeneration.incrementAndGet()
+            nextTrackTask?.cancel(false)
+            nextTrackTask = null
+            nextTrackResolver = null
         }
 
         private fun publishNextTrack(current: TrackMetadata?, next: NeteaseNextTrackSnapshot?) {
@@ -645,6 +696,53 @@ object NeteasePluginEntry : OfficialProviderPlugin {
     private fun closest(lines: List<TimelineLine>, position: Long): TimelineLine? = lines
         .minByOrNull { kotlin.math.abs(it.begin - position) }
         ?.takeIf { kotlin.math.abs(it.begin - position) <= 1_000L }
+}
+
+internal object NeteaseNextTrackCandidatePolicy {
+    fun isCurrent(
+        currentId: Long?,
+        currentTitle: String?,
+        currentArtist: String?,
+        candidate: NeteaseNextTrackSnapshot,
+    ): Boolean {
+        val candidateId = candidate.id.toLongOrNull()
+        if (currentId != null && currentId > 0L && candidateId != null && candidateId > 0L) {
+            return currentId == candidateId
+        }
+        val title = normalize(currentTitle)
+        if (title.isEmpty()) return false
+        return title == normalize(candidate.title) &&
+            normalize(currentArtist) == normalize(candidate.artist)
+    }
+
+    private fun normalize(value: String?): String = value.orEmpty().trim().lowercase()
+}
+
+internal class NeteaseNextTrackValidationTracker(
+    private val invalidThreshold: Int = 3,
+) {
+    private var consecutiveCurrentCandidates = 0
+
+    init {
+        require(invalidThreshold > 0)
+    }
+
+    @Synchronized
+    fun record(candidateMatchesCurrent: Boolean): Boolean {
+        if (!candidateMatchesCurrent) {
+            consecutiveCurrentCandidates = 0
+            return false
+        }
+        consecutiveCurrentCandidates += 1
+        if (consecutiveCurrentCandidates < invalidThreshold) return false
+        consecutiveCurrentCandidates = 0
+        return true
+    }
+
+    @Synchronized
+    fun reset() {
+        consecutiveCurrentCandidates = 0
+    }
 }
 
 /** 网易云 LRC 中的纯段落标记（如 [Intro]、[Chorus]）不是可唱歌词行。 */

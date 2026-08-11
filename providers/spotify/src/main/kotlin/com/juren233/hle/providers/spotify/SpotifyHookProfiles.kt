@@ -16,16 +16,15 @@ internal object SpotifyHookProfiles {
 
     // Retrofit paths verified in p.g980 annotations:
     // color-lyrics/v2/track/{trackId} and color-lyrics/v2/download/track/{trackId}.
-    val lyricsExactTarget = OfficialProviderMethodTarget(
-        className = "p.tix0",
-        methodName = "n",
-        parameterTypeNames = listOf("java.lang.Object", "java.lang.Object"),
-        returnTypeName = "java.lang.Object",
-        isStatic = false,
-    )
-
-    val lyricsFallbackQuery = OfficialProviderDexMethodQuery(
+    val lyricsQuery = OfficialProviderDexMethodQuery(
         cacheKey = "spotify-color-lyrics-cache-write-v2",
+        preferredTarget = OfficialProviderMethodTarget(
+            className = "p.tix0",
+            methodName = "n",
+            parameterTypeNames = listOf("java.lang.Object", "java.lang.Object"),
+            returnTypeName = "java.lang.Object",
+            isStatic = false,
+        ),
         declaringClassNamePrefix = "p.",
         requiredInvokedMethodDescriptors = listOf(
             "Ljava/util/AbstractMap;->put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
@@ -60,11 +59,4 @@ internal object SpotifyHookProfiles {
         isStatic = true,
     )
 
-    val nextTracksAccessorTarget = OfficialProviderMethodTarget(
-        className = "com.spotify.player.model.AutoValue_PlayerState",
-        methodName = "nextTracks",
-        parameterTypeNames = emptyList(),
-        returnTypeName = "p.f320",
-        isStatic = false,
-    )
 }

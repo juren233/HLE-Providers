@@ -18,7 +18,11 @@ class KuGouQueryProfileTest {
 
         assertEquals("K4", full[0].preferredTarget?.methodName)
         assertEquals("c4", lite[0].preferredTarget?.methodName)
+        assertEquals("com.kugou.framework.service.KGPlayerManager", full[0].declaringClassName)
+        assertEquals("com.kugou.framework.service.KGPlayerManager", lite[0].returnTypeName)
         assertEquals("k", full[1].preferredTarget?.methodName)
+        assertEquals("kugou-full-next-media-v2", full[1].cacheKey)
+        assertEquals(listOf("w", "v"), full[1].requiredInvokedMethodNames)
         assertNull(lite[1].preferredTarget)
         assertEquals("kugou-lite-next-media-v2", lite[1].cacheKey)
         assertEquals(listOf("getNextMedia"), lite[1].requiredCallerMethodNames)

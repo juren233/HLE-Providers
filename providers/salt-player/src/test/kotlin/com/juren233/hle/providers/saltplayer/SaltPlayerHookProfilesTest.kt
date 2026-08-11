@@ -7,12 +7,11 @@
 package com.juren233.hle.providers.saltplayer
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class SaltPlayerHookProfilesTest {
     @Test
-    fun `resolves only exact original apk versions`() {
+    fun `resolves exact versions and falls back within the Salt Player package family`() {
         assertEquals(
             SaltPlayerHookProfiles.V12_1_1,
             SaltPlayerHookProfiles.resolve("12.1.1", 2_026_070_502L),
@@ -29,8 +28,14 @@ class SaltPlayerHookProfilesTest {
             SaltPlayerHookProfiles.V11_1_0,
             SaltPlayerHookProfiles.resolve("11.1.0", 2_026_031_101L),
         )
-        assertNull(SaltPlayerHookProfiles.resolve("12.1.2", 2_026_070_600L))
-        assertNull(SaltPlayerHookProfiles.resolve("12.1.1", 2_026_070_208L))
+        assertEquals(
+            SaltPlayerHookProfiles.compatibilityProfile,
+            SaltPlayerHookProfiles.resolve("12.1.2", 2_026_070_600L),
+        )
+        assertEquals(
+            SaltPlayerHookProfiles.compatibilityProfile,
+            SaltPlayerHookProfiles.resolve("12.1.1", 2_026_070_208L),
+        )
     }
 
     @Test

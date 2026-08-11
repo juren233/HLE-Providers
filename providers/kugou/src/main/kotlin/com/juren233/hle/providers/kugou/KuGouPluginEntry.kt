@@ -114,8 +114,8 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         val queueManagerClass = "com.kugou.common.player.manager.QueuePlayerManager"
         val mediaInterface = "com.kugou.common.player.manager.IMedia"
         val managerType = OfficialProviderDexTypeReference(
-            queryCacheKey = if (full) "kugou-full-player-singleton-v2" else
-                "kugou-lite-player-singleton-v2",
+            queryCacheKey = if (full) "kugou-full-player-singleton-v3" else
+                "kugou-lite-player-singleton-v3",
             source = OfficialProviderDexTypeSource.RETURN_TYPE,
         )
         val nextMediaQuery = if (full) {
@@ -123,7 +123,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             // Lcom/kugou/common/player/manager/QueuePlayerManager;->k()L.../IMedia;
             // calls PlayQueue.w(): int followed by PlayQueue.v(int): Object.
             OfficialProviderDexMethodQuery(
-                cacheKey = "kugou-full-next-media-v1",
+                cacheKey = "kugou-full-next-media-v2",
                 preferredTarget = OfficialProviderMethodTarget(
                     className = queueManagerClass,
                     methodName = "k",
@@ -131,6 +131,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                     isStatic = false,
                 ),
                 declaringClassName = queueManagerClass,
+                requiredInvokedMethodNames = listOf("w", "v"),
                 parameterTypeNames = emptyList(),
                 returnTypeName = mediaInterface,
                 isStatic = false,
@@ -158,9 +159,9 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                     returnTypeName = managerClass,
                     isStatic = true,
                 ),
-                declaringClassNamePrefix = "com.kugou.framework.service.",
+                declaringClassName = managerClass,
                 parameterTypeNames = emptyList(),
-                returnTypeMatchesDeclaringClass = true,
+                returnTypeName = managerClass,
                 isStatic = true,
             ),
             nextMediaQuery,
@@ -193,9 +194,12 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         private val periodicNextTrackCapture = object : Runnable {
             override fun run() {
                 captureNextTrack()
-                mainHandler.postDelayed(this, NEXT_TRACK_CAPTURE_INTERVAL_MS)
+                if (nextTrackResolver != null) {
+                    mainHandler.postDelayed(this, NEXT_TRACK_CAPTURE_INTERVAL_MS)
+                }
             }
         }
+        private val nextTrackValidation = KuGouNextTrackValidationTracker()
 
         @Volatile
         private var track = KuGouTrackMetadata(null, null, null, null, 0L)
@@ -328,15 +332,21 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
         fun installNextTrackResolver(targets: List<OfficialProviderMethodTarget>) {
             mainHandler.post {
+                mainHandler.removeCallbacks(periodicNextTrackCapture)
+                nextTrackResolver = null
+                nextTrackValidation.reset()
                 nextTrackValidationKeys = nextTrackQueriesFor(host.packageName)
                     .map { it.cacheKey }
-                nextTrackResolver = runCatching {
+                val resolver = runCatching {
                     KuGouNextTrackResolver.create(application, targets)
                 }.onFailure { error ->
                     Log.w(TAG, "酷狗下一首解析器校验失败", error)
-                }.getOrNull()
-                if (nextTrackResolver == null) return@post
-                mainHandler.removeCallbacks(periodicNextTrackCapture)
+                    reportNextTrackValidation(
+                        valid = false,
+                        detail = "resolver_validation:${error::class.java.simpleName}: ${error.message}",
+                    )
+                }.getOrNull() ?: return@post
+                nextTrackResolver = resolver
                 mainHandler.post(periodicNextTrackCapture)
                 Log.i(TAG, "酷狗下一首解析器已启用")
             }
@@ -344,30 +354,46 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
         private fun captureNextTrack() {
             val current = track
-            val resolvedNext = runCatching { nextTrackResolver?.resolve() }
-                .onSuccess { next ->
-                    reportNextTrackValidation(
-                        valid = true,
-                        detail = "next=${next?.id ?: "none"}",
-                    )
-                }
+            val resolver = nextTrackResolver ?: return
+            var resolverFailed = false
+            val resolvedNext = runCatching { resolver.resolve() }
                 .onFailure { error ->
+                    resolverFailed = true
                     Log.w(TAG, "酷狗下一首读取失败", error)
                     reportNextTrackValidation(
                         valid = false,
                         detail = "${error::class.java.simpleName}: ${error.message}",
                     )
+                    deactivateNextTrackResolver()
                 }
                 .getOrNull()
-            val next = resolvedNext?.takeUnless { candidate ->
+            val candidateMatchesCurrent = resolvedNext?.let { candidate ->
                 KuGouNextTrackCandidatePolicy.isCurrent(
                     currentTitle = current.title,
                     currentArtist = current.artist,
                     candidateTitle = candidate.title,
                     candidateArtist = candidate.artist,
                 )
+            } == true
+            val next = resolvedNext?.takeUnless { candidateMatchesCurrent }
+            if (!resolverFailed) {
+                if (candidateMatchesCurrent) {
+                    if (nextTrackValidation.record(candidateMatchesCurrent = true)) {
+                        reportNextTrackValidation(
+                            valid = false,
+                            detail = "candidate_matches_current:${resolvedNext?.id}",
+                        )
+                        deactivateNextTrackResolver()
+                    }
+                } else {
+                    nextTrackValidation.record(candidateMatchesCurrent = false)
+                    reportNextTrackValidation(
+                        valid = true,
+                        detail = "next=${next?.id ?: "none"}",
+                    )
+                }
             }
-            if (resolvedNext != null && next == null && BuildConfig.DEBUG) {
+            if (candidateMatchesCurrent && BuildConfig.DEBUG) {
                 Log.w(
                     TAG,
                     "酷狗下一首候选与当前曲一致，已清空: " +
@@ -412,10 +438,15 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
 
         private fun reportNextTrackValidation(valid: Boolean, detail: String) {
-            if (!BuildConfig.DEBUG) return
+            if (valid && !BuildConfig.DEBUG) return
             nextTrackValidationKeys.forEach { key ->
                 host.reportDexMethodValidation(key, valid, detail)
             }
+        }
+
+        private fun deactivateNextTrackResolver() {
+            nextTrackResolver = null
+            mainHandler.removeCallbacks(periodicNextTrackCapture)
         }
 
         private fun publish(song: Song) {
@@ -691,4 +722,31 @@ internal object KuGouNextTrackCandidatePolicy {
         .trim()
         .replace(whitespace, " ")
         .lowercase(Locale.ROOT)
+}
+
+internal class KuGouNextTrackValidationTracker(
+    private val invalidThreshold: Int = 3,
+) {
+    private var consecutiveCurrentCandidates = 0
+
+    init {
+        require(invalidThreshold > 0)
+    }
+
+    @Synchronized
+    fun record(candidateMatchesCurrent: Boolean): Boolean {
+        if (!candidateMatchesCurrent) {
+            consecutiveCurrentCandidates = 0
+            return false
+        }
+        consecutiveCurrentCandidates += 1
+        if (consecutiveCurrentCandidates < invalidThreshold) return false
+        consecutiveCurrentCandidates = 0
+        return true
+    }
+
+    @Synchronized
+    fun reset() {
+        consecutiveCurrentCandidates = 0
+    }
 }

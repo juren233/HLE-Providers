@@ -88,11 +88,13 @@ internal object QQMusicNextTrackProfiles {
         packageName: String,
         versionName: String,
         versionCode: Long,
-    ): QQMusicNextTrackProfile? = profiles.firstOrNull {
-        it.packageName == packageName &&
-            it.versionName == versionName &&
-            it.versionCode == versionCode
-    }
+    ): QQMusicNextTrackProfile? = profiles.firstOrNull { profile ->
+        profile.packageName == packageName &&
+            profile.versionName == versionName &&
+            profile.versionCode == versionCode
+    } ?: profiles
+        .filter { profile -> profile.packageName == packageName }
+        .maxByOrNull(QQMusicNextTrackProfile::versionCode)
 }
 
 internal class QQMusicNextTrackResolver private constructor(
@@ -150,11 +152,11 @@ internal class QQMusicNextTrackResolver private constructor(
             )
             val cacheNamespace = profile.cacheNamespace
             val managerType = OfficialProviderDexTypeReference(
-                queryCacheKey = "$cacheNamespace-player-singleton-v3",
+                queryCacheKey = "$cacheNamespace-player-singleton-v4",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
             val songInfoType = OfficialProviderDexTypeReference(
-                queryCacheKey = "$cacheNamespace-current-song-v3",
+                queryCacheKey = "$cacheNamespace-current-song-v4",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
             val songInfo = profile.songInfoClassName
@@ -194,12 +196,17 @@ internal class QQMusicNextTrackResolver private constructor(
                     } else {
                         emptyList()
                     },
+                    forbiddenInvokedMethodDescriptors = if (isHd) {
+                        listOf(HD_SONG_ID_METHOD_DESCRIPTOR)
+                    } else {
+                        emptyList()
+                    },
                     parameterTypeNames = emptyList(),
                     returnTypeName = songInfo,
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "$cacheNamespace-next-song-v3",
+                    cacheKey = "$cacheNamespace-next-song-v4",
                     preferredTarget = target(
                         profile.managerClassName,
                         profile.nextSongMethodName,
@@ -217,7 +224,7 @@ internal class QQMusicNextTrackResolver private constructor(
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "$cacheNamespace-song-id-v3",
+                    cacheKey = "$cacheNamespace-song-id-v4",
                     preferredTarget = target(songInfo, profile.songIdMethodName, "long"),
                     declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
@@ -225,7 +232,7 @@ internal class QQMusicNextTrackResolver private constructor(
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "$cacheNamespace-song-title-v3",
+                    cacheKey = "$cacheNamespace-song-title-v4",
                     preferredTarget = target(songInfo, profile.songTitleMethodName, "java.lang.String"),
                     declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
@@ -233,7 +240,7 @@ internal class QQMusicNextTrackResolver private constructor(
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "$cacheNamespace-song-artist-v3",
+                    cacheKey = "$cacheNamespace-song-artist-v4",
                     preferredTarget = target(songInfo, profile.songArtistMethodName, "java.lang.String"),
                     declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
@@ -298,5 +305,11 @@ internal class QQMusicNextTrackResolver private constructor(
             }.toTypedArray()
             return clazz.getDeclaredMethod(methodName, *parameters).apply { isAccessible = true }
         }
+
+        // Verified from the original QQ Music HD 6.12.0.5 DEX. The incorrect V() candidate
+        // performs this public SongInfo ID lookup before a secondary playlist re-query, while
+        // the real current-song l0() method returns MusicPlayListManager.u() directly.
+        private const val HD_SONG_ID_METHOD_DESCRIPTOR =
+            "Lcom/tencent/qqmusic/openapisdk/model/SongInfo;->getSongId()J"
     }
 }

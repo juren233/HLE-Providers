@@ -92,9 +92,12 @@ object KuwoPluginEntry : OfficialProviderPlugin {
         private val periodicNextTrackCapture = object : Runnable {
             override fun run() {
                 captureNextTrack()
-                mainHandler.postDelayed(this, NEXT_TRACK_POLL_INTERVAL_MS)
+                if (nextTrackResolver != null) {
+                    mainHandler.postDelayed(this, NEXT_TRACK_POLL_INTERVAL_MS)
+                }
             }
         }
+        private val nextTrackValidation = KuwoNextTrackValidationTracker()
 
         @Volatile
         var provider: LyriconProvider? = null
@@ -184,10 +187,6 @@ object KuwoPluginEntry : OfficialProviderPlugin {
         private fun startNextTrackCapture() {
             require(Looper.myLooper() == Looper.getMainLooper())
             val queries = KuwoNextTrackResolver.queries(application)
-            if (queries == null) {
-                Log.w(TAG, "酷我版本未匹配，跳过下一首适配")
-                return
-            }
             nextTrackValidationKeys = queries.map { it.cacheKey }
             host.resolveDexMethods(
                 application = application,
@@ -199,12 +198,19 @@ object KuwoPluginEntry : OfficialProviderPlugin {
         }
 
         private fun finishNextTrackSetup(targets: List<OfficialProviderMethodTarget>) {
-            nextTrackResolver = runCatching {
+            mainHandler.removeCallbacks(periodicNextTrackCapture)
+            nextTrackResolver = null
+            nextTrackValidation.reset()
+            val resolver = runCatching {
                 KuwoNextTrackResolver.create(application, targets)
             }.onFailure { error ->
                 Log.w(TAG, "酷我下一首解析器校验失败", error)
+                reportNextTrackValidation(
+                    valid = false,
+                    detail = "resolver_validation:${error::class.java.simpleName}: ${error.message}",
+                )
             }.getOrNull() ?: return
-            mainHandler.removeCallbacks(periodicNextTrackCapture)
+            nextTrackResolver = resolver
             mainHandler.post(periodicNextTrackCapture)
             Log.i(TAG, "酷我下一首 Hook 已安装: process=${Application.getProcessName()}")
         }
@@ -225,11 +231,23 @@ object KuwoPluginEntry : OfficialProviderPlugin {
             }
             runCatching { resolver.resolve(metadata) }
                 .onSuccess { rawSnapshot ->
-                    reportNextTrackValidation(
-                        valid = true,
-                        detail = "next=${rawSnapshot?.next?.id ?: "none"}",
-                    )
                     val snapshot = KuwoNextTrackBinding.align(metadata, rawSnapshot)
+                    when {
+                        rawSnapshot == null || snapshot != null -> {
+                            nextTrackValidation.record(alignmentFailed = false)
+                            reportNextTrackValidation(
+                                valid = true,
+                                detail = "next=${snapshot?.next?.id ?: "none"}",
+                            )
+                        }
+                        nextTrackValidation.record(alignmentFailed = true) -> {
+                            reportNextTrackValidation(
+                                valid = false,
+                                detail = "queue_current_mismatch:${rawSnapshot.current.id}",
+                            )
+                            deactivateNextTrackResolver()
+                        }
+                    }
                     if (
                         BuildConfig.DEBUG &&
                         snapshot != null &&
@@ -248,15 +266,22 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                         valid = false,
                         detail = "${error::class.java.simpleName}: ${error.message}",
                     )
+                    deactivateNextTrackResolver()
                     if (BuildConfig.DEBUG) Log.w(TAG, "酷我下一首采集失败", error)
                 }
         }
 
         private fun reportNextTrackValidation(valid: Boolean, detail: String) {
-            if (!BuildConfig.DEBUG) return
+            if (valid && !BuildConfig.DEBUG) return
             nextTrackValidationKeys.forEach { key ->
                 host.reportDexMethodValidation(key, valid, detail)
             }
+        }
+
+        private fun deactivateNextTrackResolver() {
+            nextTrackResolver = null
+            mainHandler.removeCallbacks(periodicNextTrackCapture)
+            mainHandler.removeCallbacks(requestedNextTrackCapture)
         }
 
         private fun publishNextTrack(
@@ -382,5 +407,32 @@ object KuwoPluginEntry : OfficialProviderPlugin {
             duration = track.durationMs.takeIf { it > 0L } ?: lyrics.lastOrNull()?.end ?: 0L
             this.lyrics = lyrics.takeIf(List<RichLyricLine>::isNotEmpty)
         }
+    }
+}
+
+internal class KuwoNextTrackValidationTracker(
+    private val invalidThreshold: Int = 3,
+) {
+    private var consecutiveAlignmentFailures = 0
+
+    init {
+        require(invalidThreshold > 0)
+    }
+
+    @Synchronized
+    fun record(alignmentFailed: Boolean): Boolean {
+        if (!alignmentFailed) {
+            consecutiveAlignmentFailures = 0
+            return false
+        }
+        consecutiveAlignmentFailures += 1
+        if (consecutiveAlignmentFailures < invalidThreshold) return false
+        consecutiveAlignmentFailures = 0
+        return true
+    }
+
+    @Synchronized
+    fun reset() {
+        consecutiveAlignmentFailures = 0
     }
 }

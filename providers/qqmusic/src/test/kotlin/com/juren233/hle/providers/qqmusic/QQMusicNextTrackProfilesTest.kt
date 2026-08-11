@@ -7,6 +7,7 @@
 package com.juren233.hle.providers.qqmusic
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,8 +69,14 @@ class QQMusicNextTrackProfilesTest {
 
         assertTrue(mobile.all { it.cacheKey.startsWith("qqmusic-mobile-") })
         assertTrue(hd.all { it.cacheKey.startsWith("qqmusic-hd-") })
+        assertTrue(mobile.all { it.cacheKey.endsWith("-v4") })
+        assertTrue(hd.all { it.cacheKey.endsWith("-v4") })
         assertEquals(listOf("getCurrentSongInfo"), hd[1].requiredCallerMethodNames)
         assertEquals(listOf("getNextSongInfo"), hd[2].requiredCallerMethodNames)
+        assertEquals(
+            listOf("Lcom/tencent/qqmusic/openapisdk/model/SongInfo;->getSongId()J"),
+            hd[1].forbiddenInvokedMethodDescriptors,
+        )
         assertNull(hd[1].preferredTarget)
         assertNull(hd[2].preferredTarget)
         assertTrue(hd.none {
@@ -78,21 +85,38 @@ class QQMusicNextTrackProfilesTest {
     }
 
     @Test
-    fun `rejects unverified versions and mismatched package profiles`() {
-        assertNull(
-            QQMusicNextTrackProfiles.resolve(
-                QQMusicRuntimePlan.MOBILE_PACKAGE,
-                "20.6.5.9",
-                7229L,
-            )
+    fun `unknown versions keep the nearest verified template for the same package family`() {
+        val mobile = QQMusicNextTrackProfiles.resolve(
+            QQMusicRuntimePlan.MOBILE_PACKAGE,
+            "20.6.5.9",
+            7229L,
         )
-        assertNull(
-            QQMusicNextTrackProfiles.resolve(
-                QQMusicRuntimePlan.MOBILE_PACKAGE,
-                "6.12.0.5",
-                6_120_005L,
-            )
+        val hd = QQMusicNextTrackResolver.queries(
+            QQMusicRuntimePlan.HD_PACKAGE,
+            "6.13.0.0",
+            6_130_000L,
         )
+
+        assertNotNull(mobile)
+        assertEquals(QQMusicRuntimePlan.MOBILE_PACKAGE, mobile?.packageName)
+        assertNotNull(hd)
+        assertTrue(hd!!.all { it.cacheKey.startsWith("qqmusic-hd-") })
+        assertEquals(
+            listOf("Lcom/tencent/qqmusic/openapisdk/model/SongInfo;->getSongId()J"),
+            hd[1].forbiddenInvokedMethodDescriptors,
+        )
+    }
+
+    @Test
+    fun `does not reuse a template across package families`() {
+        val mobile = QQMusicNextTrackResolver.queries(
+            QQMusicRuntimePlan.MOBILE_PACKAGE,
+            "6.12.0.5",
+            6_120_005L,
+        )
+        assertNotNull(mobile)
+        assertTrue(mobile!!.all { it.cacheKey.startsWith("qqmusic-mobile-") })
+        assertTrue(mobile.none { it.cacheKey.startsWith("qqmusic-hd-") })
         assertNull(
             QQMusicNextTrackResolver.queries(
                 "com.example.music",

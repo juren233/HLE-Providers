@@ -42,8 +42,10 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 object QQMusicPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/QQMusic"
@@ -225,6 +227,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private var lastFrame: String? = null
         private var lastFrameSentAtMs = 0L
         private val mainHandler = Handler(Looper.getMainLooper())
+        private val resolverGeneration = AtomicLong(0L)
+
+        @Volatile
+        private var pollingTask: ScheduledFuture<*>? = null
 
         @Volatile
         private var nextTrackValidationKeys: List<String> = emptyList()
@@ -235,7 +241,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         fun start() {
             val queries = QQMusicNextTrackResolver.queries(application)
             if (queries == null) {
-                Log.w(TAG, "QQ 音乐版本未匹配，跳过下一首适配")
+                Log.w(TAG, "QQ 音乐包名不受支持，跳过下一首适配")
                 return
             }
             nextTrackValidationKeys = queries.map { it.cacheKey }
@@ -248,12 +254,21 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             )
         }
 
+        @Synchronized
         private fun startResolved(
             targets: List<com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget>,
         ) {
-            val resolver = runCatching { QQMusicNextTrackResolver.create(application, targets) }
-                .onFailure { error -> Log.w(TAG, "QQ 音乐下一首解析器校验失败", error) }
-                .getOrNull() ?: return
+            val resolverResult = runCatching {
+                QQMusicNextTrackResolver.create(application, targets)
+            }
+            val resolver = resolverResult.getOrElse { error ->
+                Log.w(TAG, "QQ 音乐下一首解析器校验失败", error)
+                reportNextTrackValidation(
+                    valid = false,
+                    detail = "resolver_validation:${error::class.java.simpleName}: ${error.message}",
+                )
+                return
+            }
             val sharedProvider = runtime?.provider
             provider = sharedProvider ?: LyriconFactory.createProvider(
                 context = application,
@@ -261,8 +276,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 playerPackageName = playerPackage,
             ).also { it.register() }
             nextTrackRuntime = this
-            scheduler.scheduleWithFixedDelay(
-                { capture(resolver) },
+            pollingTask?.cancel(false)
+            val generation = resolverGeneration.incrementAndGet()
+            pollingTask = scheduler.scheduleWithFixedDelay(
+                { capture(resolver, generation) },
                 0L,
                 NEXT_TRACK_POLL_INTERVAL_MS,
                 TimeUnit.MILLISECONDS,
@@ -274,30 +291,46 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             )
         }
 
-        private fun capture(resolver: QQMusicNextTrackResolver) {
-            runCatching { resolver.resolve() }
+        private fun capture(resolver: QQMusicNextTrackResolver, generation: Long) {
+            if (resolverGeneration.get() != generation) return
+            runCatching {
+                val snapshot = resolver.resolve()
+                if (resolverGeneration.get() != generation) return
+                runtime?.onQueueSnapshot(snapshot)
+                publish(snapshot)
+                snapshot
+            }
                 .onSuccess { snapshot ->
+                    if (resolverGeneration.get() != generation) return@onSuccess
                     reportNextTrackValidation(
                         valid = true,
                         detail = "next=${snapshot?.next?.id ?: "none"}",
                     )
-                    runtime?.onQueueSnapshot(snapshot)
-                    publish(snapshot)
                 }
                 .onFailure { error ->
+                    if (resolverGeneration.get() != generation) return@onFailure
                     reportNextTrackValidation(
                         valid = false,
                         detail = "${error::class.java.simpleName}: ${error.message}",
                     )
+                    stopPolling(generation)
                     if (BuildConfig.DEBUG) Log.w(TAG, "QQ 音乐下一首采集失败", error)
                 }
         }
 
         private fun reportNextTrackValidation(valid: Boolean, detail: String) {
-            if (!BuildConfig.DEBUG) return
+            if (valid && !BuildConfig.DEBUG) return
             nextTrackValidationKeys.forEach { key ->
                 host.reportDexMethodValidation(key, valid, detail)
             }
+        }
+
+        @Synchronized
+        private fun stopPolling(generation: Long) {
+            if (resolverGeneration.get() != generation) return
+            resolverGeneration.incrementAndGet()
+            pollingTask?.cancel(false)
+            pollingTask = null
         }
 
         private fun publish(snapshot: QQMusicQueueSnapshot?) {

@@ -46,4 +46,15 @@ class KuGouNextTrackCandidatePolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `requires repeated current-song candidates before repair`() {
+        val tracker = KuGouNextTrackValidationTracker(invalidThreshold = 3)
+
+        assertFalse(tracker.record(candidateMatchesCurrent = true))
+        assertFalse(tracker.record(candidateMatchesCurrent = true))
+        assertTrue(tracker.record(candidateMatchesCurrent = true))
+        assertFalse(tracker.record(candidateMatchesCurrent = false))
+        assertFalse(tracker.record(candidateMatchesCurrent = true))
+    }
 }

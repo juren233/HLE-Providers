@@ -77,8 +77,8 @@ internal object SaltPlayerHookProfiles {
 
     val compatibilityProfile: SaltPlayerHookProfile = V12_1_1
 
-    fun resolve(versionName: String, versionCode: Long): SaltPlayerHookProfile? =
+    fun resolve(versionName: String, versionCode: Long): SaltPlayerHookProfile =
         exactProfiles.firstOrNull {
             it.versionName == versionName && it.versionCode == versionCode
-        }
+        } ?: compatibilityProfile
 }

@@ -7,13 +7,14 @@
 package com.juren233.hle.providers.kuwo
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class KuwoHookProfilesTest {
     @Test
     fun `uses exact original DEX identifiers for Kuwo 12 1 8 2`() {
-        val profile = KuwoHookProfiles.resolve("12.1.8.2", 12_182L)!!
+        val profile = KuwoHookProfiles.resolve("12.1.8.2", 12_182L)
 
         assertEquals("cn.kuwo.mod.playcontrol.n", profile.playback.managerClassName)
         assertEquals("cn.kuwo.base.bean.IContent", profile.playback.contentClassName)
@@ -29,8 +30,39 @@ class KuwoHookProfilesTest {
     }
 
     @Test
-    fun `rejects unverified Kuwo versions`() {
-        assertNull(KuwoHookProfiles.resolve("12.1.8.1", 12_181L))
-        assertNull(KuwoHookProfiles.resolve("12.1.8.3", 12_183L))
+    fun `uses the latest verified template for unknown Kuwo versions`() {
+        assertEquals(KuwoHookProfiles.V12_1_8_2, KuwoHookProfiles.resolve("12.1.8.1", 12_181L))
+        assertEquals(KuwoHookProfiles.V12_1_8_2, KuwoHookProfiles.resolve("12.1.8.3", 12_183L))
+    }
+
+    @Test
+    fun `anchors Kuwo recovery to original DEX semantics`() {
+        val queries = KuwoNextTrackResolver.queries(KuwoHookProfiles.V12_1_8_2)
+        val next = queries[0]
+        val singleton = queries[1]
+        val current = queries[2]
+
+        assertEquals("kuwo-next-content-v3", next.cacheKey)
+        assertEquals(
+            listOf("随机模式，获取歌曲下一曲,随机索引空，现在生成"),
+            next.requiredStrings,
+        )
+        assertEquals("cn.kuwo.base.bean.IContent", next.returnTypeName)
+        assertFalse(next.isStatic ?: true)
+        assertEquals(next.cacheKey, singleton.declaringClassReference?.queryCacheKey)
+        assertEquals(next.cacheKey, current.declaringClassReference?.queryCacheKey)
+        assertEquals(listOf("seek"), current.requiredCallerMethodNames)
+        assertEquals("cn.kuwo.base.bean.Music", current.returnTypeName)
+    }
+
+    @Test
+    fun `debounces transient Kuwo queue alignment failures`() {
+        val tracker = KuwoNextTrackValidationTracker(invalidThreshold = 3)
+
+        assertFalse(tracker.record(alignmentFailed = true))
+        assertFalse(tracker.record(alignmentFailed = true))
+        assertTrue(tracker.record(alignmentFailed = true))
+        assertFalse(tracker.record(alignmentFailed = false))
+        assertFalse(tracker.record(alignmentFailed = true))
     }
 }

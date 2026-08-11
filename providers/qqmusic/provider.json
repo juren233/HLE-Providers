@@ -3,9 +3,9 @@
   "pluginApiVersion": 3,
   "pluginId": "qqmusic",
   "displayName": "QQ 音乐",
-  "versionName": "1.0.7",
-  "versionCode": 8,
-  "minCoreVersionCode": 140076,
+  "versionName": "1.0.8",
+  "versionCode": 9,
+  "minCoreVersionCode": 140077,
   "entryClass": "com.juren233.hle.providers.qqmusic.QQMusicPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.qqmusic",
   "targetPackages": [
