@@ -11,6 +11,15 @@ import org.junit.Test
 
 class NeteasePlaybackPositionTest {
     @Test
+    fun `drops pure section markers but keeps bracketed lyric text`() {
+        assertEquals(true, isNeteaseSectionMarker("[Chorus]"))
+        assertEquals(true, isNeteaseSectionMarker("[Intro 2]"))
+        assertEquals(false, isNeteaseSectionMarker("(Eh, eh)"))
+        assertEquals(false, isNeteaseSectionMarker("[Chorus] Like sugar on my tongue"))
+        assertEquals(false, isNeteaseSectionMarker("[00:15.145]"))
+    }
+
+    @Test
     fun positionSyncUsesLyriconRenderCadence() {
         assertEquals(1_000L / 24L, NETEASE_POSITION_UPDATE_INTERVAL_MS)
     }

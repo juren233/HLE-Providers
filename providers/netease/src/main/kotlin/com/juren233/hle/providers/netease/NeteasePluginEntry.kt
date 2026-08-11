@@ -595,6 +595,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 val matches = lrcTime.findAll(line).toList()
                 if (matches.isEmpty() || matches.first().range.first != 0) return@forEach
                 val content = line.substring(matches.last().range.last + 1).trim()
+                if (isNeteaseSectionMarker(content)) return@forEach
                 matches.forEach { match ->
                     val minutes = match.groupValues[1].toLongOrNull() ?: 0L
                     val seconds = match.groupValues[2].toLongOrNull() ?: 0L
@@ -645,3 +646,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         .minByOrNull { kotlin.math.abs(it.begin - position) }
         ?.takeIf { kotlin.math.abs(it.begin - position) <= 1_000L }
 }
+
+/** 网易云 LRC 中的纯段落标记（如 [Intro]、[Chorus]）不是可唱歌词行。 */
+internal fun isNeteaseSectionMarker(content: String): Boolean =
+    content.matches(Regex("\\[[^\\[\\]\\d][^\\[\\]]*]"))
