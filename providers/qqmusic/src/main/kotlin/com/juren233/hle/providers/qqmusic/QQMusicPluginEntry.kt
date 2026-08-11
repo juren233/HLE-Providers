@@ -39,7 +39,6 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -91,9 +90,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
             Thread(task, "HLE-QQMusic-Lyrics").apply { isDaemon = true }
         }
-        private val metadata = ConcurrentHashMap<String, TrackMetadata>()
+        private val trackCoordinator = QQMusicLyricTrackCoordinator(playerPackage)
         private val cacheDir = File(application.filesDir, "hle-provider/qqmusic")
-        private var currentId: String? = null
+        private var activeLoadKey: String? = null
         private var lastSong: Song? = null
 
         @Volatile
@@ -114,29 +113,74 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             Log.i(TAG, "QQ 音乐 Lyricon Provider 已注册: process=${Application.getProcessName()}")
         }
 
+        @Synchronized
         fun onMetadata(value: MediaMetadata?) {
             val id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.trim()
                 ?.takeIf(String::isNotEmpty) ?: return
             refreshDisplayPreference(provider)
-            val track = TrackMetadata(
-                id = id,
-                title = value.getString(MediaMetadata.METADATA_KEY_TITLE),
-                artist = value.getString(MediaMetadata.METADATA_KEY_ARTIST),
-                duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
+            applyTrackDecision(
+                trackCoordinator.onMetadata(
+                    QQMusicLyricTrack(
+                        id = id,
+                        title = value.getString(MediaMetadata.METADATA_KEY_TITLE),
+                        artist = value.getString(MediaMetadata.METADATA_KEY_ARTIST),
+                        duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
+                    ),
+                ),
             )
-            metadata[id] = track
-            if (currentId == id) return
-            currentId = id
-            publish(loadCached(track) ?: placeholder(track))
-            executor.execute {
-                runCatching { QQClient.fetch(id) }
-                    .onSuccess { payload ->
-                        writeCache(id, payload)
-                        if (currentId == id) publish(toSong(track, payload))
+        }
+
+        @Synchronized
+        fun onQueueSnapshot(snapshot: QQMusicQueueSnapshot?) {
+            applyTrackDecision(trackCoordinator.onQueueSnapshot(snapshot))
+        }
+
+        private fun applyTrackDecision(decision: QQMusicLyricTrackDecision) {
+            when (decision) {
+                is QQMusicLyricTrackDecision.AwaitingVerifiedId -> {
+                    activeLoadKey = null
+                    if (BuildConfig.DEBUG && playerPackage == QQMusicRuntimePlan.HD_PACKAGE) {
+                        Log.i(
+                            TAG,
+                            "QQ HD 歌词等待真实歌曲 ID: " +
+                                "mediaId=${decision.track.id}, title=${decision.track.title}",
+                        )
                     }
-                    .onFailure { error -> Log.w(TAG, "QQ 歌词下载失败: id=$id", error) }
+                    publish(placeholder(decision.track))
+                }
+                is QQMusicLyricTrackDecision.Load -> {
+                    if (BuildConfig.DEBUG && playerPackage == QQMusicRuntimePlan.HD_PACKAGE) {
+                        Log.i(
+                            TAG,
+                            "QQ HD 歌词使用 SongInfo 歌曲 ID: " +
+                                "songId=${decision.track.id}, title=${decision.track.title}",
+                        )
+                    }
+                    load(decision.track)
+                }
+                QQMusicLyricTrackDecision.Unchanged -> Unit
             }
         }
+
+        private fun load(track: QQMusicLyricTrack) {
+            val loadKey = track.loadKey()
+            activeLoadKey = loadKey
+            publish(loadCached(track) ?: placeholder(track))
+            executor.execute {
+                runCatching { QQClient.fetch(track.id) }
+                    .onSuccess { payload ->
+                        writeCache(track.id, payload)
+                        synchronized(this@QQRuntime) {
+                            if (activeLoadKey == loadKey) publish(toSong(track, payload))
+                        }
+                    }
+                    .onFailure { error ->
+                        Log.w(TAG, "QQ 歌词下载失败: id=${track.id}", error)
+                    }
+            }
+        }
+
+        private fun QQMusicLyricTrack.loadKey(): String = "$id\u0000$title\u0000$artist"
 
         private fun refreshDisplayPreference(provider: LyriconProvider?) {
             val target = provider ?: return
@@ -151,14 +195,14 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             provider?.player?.setSong(song)
         }
 
-        private fun placeholder(track: TrackMetadata): Song = Song().apply {
+        private fun placeholder(track: QQMusicLyricTrack): Song = Song().apply {
             id = track.id
             name = track.title
             artist = track.artist
             duration = track.duration
         }
 
-        private fun loadCached(track: TrackMetadata): Song? {
+        private fun loadCached(track: QQMusicLyricTrack): Song? {
             val file = File(cacheDir, "${track.id}.json")
             if (!file.isFile) return null
             return runCatching { toSong(track, QQPayload.fromJson(JSONObject(file.readText()))) }.getOrNull()
@@ -237,6 +281,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         valid = true,
                         detail = "next=${snapshot?.next?.id ?: "none"}",
                     )
+                    runtime?.onQueueSnapshot(snapshot)
                     publish(snapshot)
                 }
                 .onFailure { error ->
@@ -288,13 +333,6 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             }
         }
     }
-
-    private data class TrackMetadata(
-        val id: String,
-        val title: String?,
-        val artist: String?,
-        val duration: Long,
-    )
 
     private const val NEXT_TRACK_POLL_INTERVAL_MS = 1_500L
     private const val NEXT_TRACK_HEARTBEAT_MS = 5_000L
@@ -404,7 +442,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
     }
 
-    private fun toSong(track: TrackMetadata, payload: QQPayload): Song {
+    private fun toSong(track: QQMusicLyricTrack, payload: QQPayload): Song {
         val source = QqQrcParser.parse(payload.lyric).map { it.toTimelineLine() }
             .ifEmpty { LrcParser.parse(payload.lyric) }
         val translations = LrcParser.parse(payload.translation).ifEmpty {
