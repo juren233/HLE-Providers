@@ -26,8 +26,10 @@ internal data class QQMusicQueueSnapshot(
 )
 
 internal data class QQMusicNextTrackProfile(
+    val packageName: String,
     val versionName: String,
     val versionCode: Long,
+    val cacheNamespace: String,
     val managerClassName: String,
     val singletonMethodName: String,
     val currentSongMethodName: String,
@@ -45,8 +47,10 @@ internal object QQMusicNextTrackProfiles {
     // ->M()/E()Lcom/tencent/qqmusicplayerprocess/songinfo/SongInfo;
     // SongInfo.D2()J, f3()Ljava/lang/String;, R3()Ljava/lang/String;.
     val V20_6_5_8 = QQMusicNextTrackProfile(
+        packageName = QQMusicRuntimePlan.MOBILE_PACKAGE,
         versionName = "20.6.5.8",
         versionCode = 7228L,
+        cacheNamespace = "qqmusic-mobile",
         managerClassName = "com.tencent.qqmusic.common.player.d",
         singletonMethodName = "z",
         currentSongMethodName = "M",
@@ -57,8 +61,38 @@ internal object QQMusicNextTrackProfiles {
         songArtistMethodName = "R3",
     )
 
-    fun resolve(versionName: String, versionCode: Long): QQMusicNextTrackProfile? =
-        V20_6_5_8.takeIf { it.versionName == versionName && it.versionCode == versionCode }
+    // Verified from the original QQ Music HD 6.12.0.5 APK DEX on 2026-08-11.
+    // Exact descriptors:
+    // Lcom/tencent/qqmusic/qplayer/core/player/MusicPlayerHelper;
+    // ->a0()Lcom/tencent/qqmusic/qplayer/core/player/MusicPlayerHelper;
+    // ->l0()/g0()Lcom/tencent/qqmusic/openapisdk/model/SongInfo;
+    // SongInfo.getSongId()J, getSongName()/getSingerName()Ljava/lang/String;.
+    val HD_V6_12_0_5 = QQMusicNextTrackProfile(
+        packageName = QQMusicRuntimePlan.HD_PACKAGE,
+        versionName = "6.12.0.5",
+        versionCode = 6_120_005L,
+        cacheNamespace = "qqmusic-hd",
+        managerClassName = "com.tencent.qqmusic.qplayer.core.player.MusicPlayerHelper",
+        singletonMethodName = "a0",
+        currentSongMethodName = "l0",
+        nextSongMethodName = "g0",
+        songInfoClassName = "com.tencent.qqmusic.openapisdk.model.SongInfo",
+        songIdMethodName = "getSongId",
+        songTitleMethodName = "getSongName",
+        songArtistMethodName = "getSingerName",
+    )
+
+    private val profiles = listOf(V20_6_5_8, HD_V6_12_0_5)
+
+    fun resolve(
+        packageName: String,
+        versionName: String,
+        versionCode: Long,
+    ): QQMusicNextTrackProfile? = profiles.firstOrNull {
+        it.packageName == packageName &&
+            it.versionName == versionName &&
+            it.versionCode == versionCode
+    }
 }
 
 internal class QQMusicNextTrackResolver private constructor(
@@ -86,10 +120,23 @@ internal class QQMusicNextTrackResolver private constructor(
     companion object {
         fun queries(application: Application): List<OfficialProviderDexMethodQuery>? {
             val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
+            return queries(
+                packageName = application.packageName,
+                versionName = packageInfo.versionName.orEmpty(),
+                versionCode = packageInfo.longVersionCode,
+            )
+        }
+
+        internal fun queries(
+            packageName: String,
+            versionName: String,
+            versionCode: Long,
+        ): List<OfficialProviderDexMethodQuery>? {
             val profile = QQMusicNextTrackProfiles.resolve(
-                packageInfo.versionName.orEmpty(),
-                packageInfo.longVersionCode,
-            ) ?: QQMusicNextTrackProfiles.V20_6_5_8
+                packageName,
+                versionName,
+                versionCode,
+            ) ?: return null
             fun target(
                 className: String,
                 methodName: String,
@@ -101,15 +148,17 @@ internal class QQMusicNextTrackResolver private constructor(
                 returnTypeName = returnTypeName,
                 isStatic = isStatic,
             )
+            val cacheNamespace = profile.cacheNamespace
             val managerType = OfficialProviderDexTypeReference(
-                queryCacheKey = "qqmusic-player-singleton-v2",
+                queryCacheKey = "$cacheNamespace-player-singleton-v3",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
             val songInfoType = OfficialProviderDexTypeReference(
-                queryCacheKey = "qqmusic-current-song-v2",
+                queryCacheKey = "$cacheNamespace-current-song-v3",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
             val songInfo = profile.songInfoClassName
+            val isHd = profile.packageName == QQMusicRuntimePlan.HD_PACKAGE
             return listOf(
                 OfficialProviderDexMethodQuery(
                     cacheKey = managerType.queryCacheKey,
@@ -119,8 +168,14 @@ internal class QQMusicNextTrackResolver private constructor(
                         profile.managerClassName,
                         isStatic = true,
                     ),
-                    declaringClassNamePrefix = "com.tencent.qqmusic.common.player.",
-                    requiredStrings = listOf("MusicPlayerHelper CAN'T use in Play Process"),
+                    declaringClassName = profile.managerClassName.takeIf { isHd },
+                    declaringClassNamePrefix = "com.tencent.qqmusic.common.player."
+                        .takeUnless { isHd },
+                    requiredStrings = if (isHd) {
+                        emptyList()
+                    } else {
+                        listOf("MusicPlayerHelper CAN'T use in Play Process")
+                    },
                     parameterTypeNames = emptyList(),
                     returnTypeMatchesDeclaringClass = true,
                     isStatic = true,
@@ -131,27 +186,38 @@ internal class QQMusicNextTrackResolver private constructor(
                         profile.managerClassName,
                         profile.currentSongMethodName,
                         songInfo,
-                    ),
+                    ).takeUnless { isHd },
                     declaringClassReference = managerType,
-                    requiredInvokedMethodNames = listOf("getPlaySong"),
+                    requiredInvokedMethodNames = if (isHd) emptyList() else listOf("getPlaySong"),
+                    requiredCallerMethodNames = if (isHd) {
+                        listOf("getCurrentSongInfo")
+                    } else {
+                        emptyList()
+                    },
                     parameterTypeNames = emptyList(),
+                    returnTypeName = songInfo,
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-next-song-v2",
+                    cacheKey = "$cacheNamespace-next-song-v3",
                     preferredTarget = target(
                         profile.managerClassName,
                         profile.nextSongMethodName,
                         songInfo,
-                    ),
+                    ).takeUnless { isHd },
                     declaringClassReference = managerType,
-                    requiredInvokedMethodNames = listOf("getNextSong"),
+                    requiredInvokedMethodNames = if (isHd) emptyList() else listOf("getNextSong"),
+                    requiredCallerMethodNames = if (isHd) {
+                        listOf("getNextSongInfo")
+                    } else {
+                        emptyList()
+                    },
                     parameterTypeNames = emptyList(),
                     returnTypeReference = songInfoType,
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-song-id-v2",
+                    cacheKey = "$cacheNamespace-song-id-v3",
                     preferredTarget = target(songInfo, profile.songIdMethodName, "long"),
                     declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
@@ -159,7 +225,7 @@ internal class QQMusicNextTrackResolver private constructor(
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-song-title-v2",
+                    cacheKey = "$cacheNamespace-song-title-v3",
                     preferredTarget = target(songInfo, profile.songTitleMethodName, "java.lang.String"),
                     declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
@@ -167,7 +233,7 @@ internal class QQMusicNextTrackResolver private constructor(
                     isStatic = false,
                 ),
                 OfficialProviderDexMethodQuery(
-                    cacheKey = "qqmusic-song-artist-v2",
+                    cacheKey = "$cacheNamespace-song-artist-v3",
                     preferredTarget = target(songInfo, profile.songArtistMethodName, "java.lang.String"),
                     declaringClassReference = songInfoType,
                     parameterTypeNames = emptyList(),
@@ -193,9 +259,20 @@ internal class QQMusicNextTrackResolver private constructor(
             val managerClass = singletonMethod.returnType
             val songInfoClass = currentSongMethod.returnType
 
-            require(Modifier.isStatic(singletonMethod.modifiers) && singletonMethod.returnType == managerClass)
-            require(currentSongMethod.returnType == songInfoClass)
+            require(Modifier.isStatic(singletonMethod.modifiers))
+            require(singletonMethod.parameterCount == 0)
+            require(singletonMethod.declaringClass == managerClass)
+            require(currentSongMethod.declaringClass == managerClass)
+            require(nextSongMethod.declaringClass == managerClass)
+            require(!Modifier.isStatic(currentSongMethod.modifiers) && currentSongMethod.parameterCount == 0)
+            require(!Modifier.isStatic(nextSongMethod.modifiers) && nextSongMethod.parameterCount == 0)
             require(nextSongMethod.returnType == songInfoClass)
+            require(songIdMethod.declaringClass == songInfoClass)
+            require(songTitleMethod.declaringClass == songInfoClass)
+            require(songArtistMethod.declaringClass == songInfoClass)
+            require(!Modifier.isStatic(songIdMethod.modifiers) && songIdMethod.parameterCount == 0)
+            require(!Modifier.isStatic(songTitleMethod.modifiers) && songTitleMethod.parameterCount == 0)
+            require(!Modifier.isStatic(songArtistMethod.modifiers) && songArtistMethod.parameterCount == 0)
             require(songIdMethod.returnType == Long::class.javaPrimitiveType)
             require(songTitleMethod.returnType == String::class.java)
             require(songArtistMethod.returnType == String::class.java)

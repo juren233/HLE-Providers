@@ -3,9 +3,9 @@
  * Licensed under the Apache License, Version 2.0
  * http://www.apache.org/licenses/LICENSE-2.0
  *
- * QQ Music exposes playback metadata from the QQPlayerService process. The
- * official Pack keeps the same process split as the upstream LyricProvider,
- * but relies only on the static host callbacks.
+ * QQ Music mobile exposes lyric playback metadata from QQPlayerService while
+ * QQ Music HD keeps both lyric and queue state in its main process. Both apps
+ * share the same lyric backend and Pack, with package-specific runtime routing.
  */
 
 package com.juren233.hle.providers.qqmusic
@@ -49,7 +49,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 object QQMusicPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/QQMusic"
     private const val PROVIDER_PACKAGE = "com.juren233.hyperlyricsenhanced.provider.qqmusic"
-    private const val PLAYER_PROCESS_SUFFIX = ":QQPlayerService"
     private val installed = AtomicBoolean(false)
 
     @Volatile
@@ -59,19 +58,19 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
     private var nextTrackRuntime: QQNextTrackRuntime? = null
 
     override fun install(host: OfficialProviderHost) {
-        require(host.packageName == "com.tencent.qqmusic") {
+        require(QQMusicRuntimePlan.supports(host.packageName)) {
             "Unsupported QQ Music package: ${host.packageName}"
         }
         host.hookApplication { application ->
             val processName = Application.getProcessName()
-            if (processName != host.packageName && processName != host.packageName + PLAYER_PROCESS_SUFFIX) {
-                return@hookApplication
-            }
+            val features = QQMusicRuntimePlan.resolve(host.packageName, processName)
+            if (features.isEmpty()) return@hookApplication
             if (!installed.compareAndSet(false, true)) return@hookApplication
-            if (processName == host.packageName) {
-                QQNextTrackRuntime(application, host.packageName, host).start()
-            } else {
+            if (QQMusicRuntimeFeature.LYRICS in features) {
                 QQRuntime(application, host.packageName).start()
+            }
+            if (QQMusicRuntimeFeature.NEXT_TRACK in features) {
+                QQNextTrackRuntime(application, host.packageName, host).start()
             }
         }
         host.hookMediaSession(
@@ -211,7 +210,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             val resolver = runCatching { QQMusicNextTrackResolver.create(application, targets) }
                 .onFailure { error -> Log.w(TAG, "QQ 音乐下一首解析器校验失败", error) }
                 .getOrNull() ?: return
-            provider = LyriconFactory.createProvider(
+            val sharedProvider = runtime?.provider
+            provider = sharedProvider ?: LyriconFactory.createProvider(
                 context = application,
                 providerPackageName = PROVIDER_PACKAGE,
                 playerPackageName = playerPackage,
@@ -223,7 +223,11 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 NEXT_TRACK_POLL_INTERVAL_MS,
                 TimeUnit.MILLISECONDS,
             )
-            Log.i(TAG, "QQ 音乐下一首 Provider 已注册: process=${Application.getProcessName()}")
+            Log.i(
+                TAG,
+                "QQ 音乐下一首 Provider ${if (sharedProvider == null) "已注册" else "已复用"}: " +
+                    "process=${Application.getProcessName()}",
+            )
         }
 
         private fun capture(resolver: QQMusicNextTrackResolver) {
@@ -440,4 +444,28 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         text = text,
         words = words,
     )
+}
+
+internal enum class QQMusicRuntimeFeature {
+    LYRICS,
+    NEXT_TRACK,
+}
+
+internal object QQMusicRuntimePlan {
+    const val MOBILE_PACKAGE = "com.tencent.qqmusic"
+    const val HD_PACKAGE = "com.tencent.qqmusicpad"
+    private const val MOBILE_PLAYER_PROCESS = "$MOBILE_PACKAGE:QQPlayerService"
+
+    fun supports(packageName: String): Boolean =
+        packageName == MOBILE_PACKAGE || packageName == HD_PACKAGE
+
+    fun resolve(packageName: String, processName: String): Set<QQMusicRuntimeFeature> = when {
+        packageName == MOBILE_PACKAGE && processName == MOBILE_PACKAGE ->
+            setOf(QQMusicRuntimeFeature.NEXT_TRACK)
+        packageName == MOBILE_PACKAGE && processName == MOBILE_PLAYER_PROCESS ->
+            setOf(QQMusicRuntimeFeature.LYRICS)
+        packageName == HD_PACKAGE && processName == HD_PACKAGE ->
+            setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK)
+        else -> emptySet()
+    }
 }

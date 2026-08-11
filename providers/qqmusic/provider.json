@@ -3,13 +3,14 @@
   "pluginApiVersion": 3,
   "pluginId": "qqmusic",
   "displayName": "QQ 音乐",
-  "versionName": "1.0.5",
-  "versionCode": 6,
-  "minCoreVersionCode": 140073,
+  "versionName": "1.0.6",
+  "versionCode": 7,
+  "minCoreVersionCode": 140076,
   "entryClass": "com.juren233.hle.providers.qqmusic.QQMusicPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.qqmusic",
   "targetPackages": [
-    "com.tencent.qqmusic"
+    "com.tencent.qqmusic",
+    "com.tencent.qqmusicpad"
   ],
   "classesSha256": ""
 }

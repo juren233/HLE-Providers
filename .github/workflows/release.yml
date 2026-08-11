@@ -129,9 +129,14 @@ jobs:
           provider_id, version_name, version_code, asset_url, pack_sha = sys.argv[1:]
           catalog_path = pathlib.Path("catalog/catalog.json")
           catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+          manifest_path = pathlib.Path(f"providers/{provider_id}/provider.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if provider_id == "qqmusic":
+              catalog["providers"] = [
+                  item for item in catalog["providers"] if item["id"] != "qqmusic-hd"
+              ]
           canonical_display_names = {
               "qqmusic": "QQ音乐",
-              "qqmusic-hd": "QQ音乐HD",
               "kugou": "酷狗音乐",
               "lxmusic": "LX音乐",
               "qishui": "汽水音乐",
@@ -143,6 +148,7 @@ jobs:
                   item["displayName"] = canonical_display_names[item["id"]]
           provider = next(item for item in catalog["providers"] if item["id"] == provider_id)
           provider.update(
+              targetPackages=manifest["targetPackages"],
               available=True,
               versionName=version_name,
               versionCode=int(version_code),
