@@ -69,6 +69,9 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
         @Volatile
         private var currentRequestKey: String? = null
 
+        private var retryRunnable: Runnable? = null
+        private var retryAttempt = 0
+
         private var lastPublishedSongKey: String? = null
 
         @Volatile
@@ -102,6 +105,7 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
         }
 
         fun stop() {
+            cancelRetry()
             subscription?.release()
             subscription = null
             executor.shutdownNow()
@@ -118,6 +122,7 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
         ) {
             provider?.player?.setPlaybackState(state)
             if (metadata == null) {
+                cancelRetry()
                 currentRequestKey = null
                 lastPublishedSongKey = null
                 return
@@ -140,6 +145,8 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
                 append(track.artist.orEmpty())
             }
             if (currentRequestKey == requestKey) return
+            cancelRetry()
+            retryAttempt = 0
             currentRequestKey = requestKey
             publishPlaceholder(track, trackId ?: requestKey)
 
@@ -151,18 +158,54 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
                 publishLyrics(track, cached)
                 return
             }
+            requestLyrics(track, trackId)
+        }
+
+        private fun requestLyrics(track: QishuiTrackMetadata, trackId: String) {
             executor.execute {
                 runCatching { QishuiApiClient.fetch(trackId) }
                     .onSuccess { payload ->
                         lyricCache[trackId] = payload
                         mainHandler.post {
-                            if (currentRequestKey == trackId) publishLyrics(track, payload)
+                            if (currentRequestKey == trackId) {
+                                cancelRetry()
+                                retryAttempt = 0
+                                publishLyrics(track, payload)
+                            }
                         }
                     }
                     .onFailure { error ->
                         Log.w(TAG, "汽水歌词网络请求失败: trackId=$trackId", error)
+                        mainHandler.post {
+                            if (currentRequestKey == trackId) {
+                                scheduleRetry(track, trackId)
+                            }
+                        }
                     }
             }
+        }
+
+        private fun scheduleRetry(track: QishuiTrackMetadata, trackId: String) {
+            cancelRetry()
+            val delayMs = QishuiRetryPolicy.delayMs(retryAttempt++)
+            retryRunnable = Runnable {
+                retryRunnable = null
+                if (currentRequestKey == trackId && lyricCache[trackId] == null) {
+                    requestLyrics(track, trackId)
+                }
+            }.also { mainHandler.postDelayed(it, delayMs) }
+            if (BuildConfig.DEBUG) {
+                Log.i(
+                    TAG,
+                    "汽水歌词将在 ${delayMs}ms 后自动重试: trackId=$trackId, " +
+                        "attempt=$retryAttempt",
+                )
+            }
+        }
+
+        private fun cancelRetry() {
+            retryRunnable?.let(mainHandler::removeCallbacks)
+            retryRunnable = null
         }
 
         private fun publishPlaceholder(track: QishuiTrackMetadata, id: String) {
@@ -185,7 +228,7 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
             val lines = QishuiLyricsParser.parse(payload, track.durationMs)
             if (lines.isEmpty()) return
             val key = "lyrics:${payload.trackId}:${payload.content.hashCode()}:" +
-                payload.translations.hashCode()
+                "${payload.translations.hashCode()}:${payload.timeline.hashCode()}"
             if (key == lastPublishedSongKey) return
             provider?.player?.setSong(Song().apply {
                 id = payload.trackId
@@ -215,6 +258,7 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
                 Log.i(
                     TAG,
                     "汽水网络歌词已发布: trackId=${payload.trackId}, lines=${lines.size}, " +
+                        "source=${payload.source}, " +
                         "translations=${payload.translations.map { it.language }}",
                 )
             }
@@ -222,6 +266,20 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
     }
 
     private const val MAX_LYRIC_CACHE_SIZE = 32
+}
+
+internal object QishuiRetryPolicy {
+    private val delaysMs = longArrayOf(
+        15_000L,
+        30_000L,
+        60_000L,
+        120_000L,
+        300_000L,
+    )
+
+    fun delayMs(failureCount: Int): Long = delaysMs[
+        failureCount.coerceAtLeast(0).coerceAtMost(delaysMs.lastIndex)
+    ]
 }
 
 internal data class QishuiTrackMetadata(

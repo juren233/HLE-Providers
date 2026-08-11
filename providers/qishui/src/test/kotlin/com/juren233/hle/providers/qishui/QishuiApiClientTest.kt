@@ -8,7 +8,9 @@ package com.juren233.hle.providers.qishui
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class QishuiApiClientTest {
@@ -92,4 +94,111 @@ class QishuiApiClientTest {
             ),
         )
     }
+
+    @Test
+    fun `falls back to the official share page when the PC API body is empty`() {
+        var sharePageRequested = false
+
+        val payload = QishuiApiClient.fetch(
+            trackId = "7356655103695652881",
+            pcApiBody = { "" },
+            sharePageBody = {
+                sharePageRequested = true
+                sharePageFixture(trackId = it)
+            },
+        )
+
+        assertTrue(sharePageRequested)
+        assertEquals(QishuiLyricSource.SHARE_PAGE, payload.source)
+        assertEquals(2, payload.timeline.size)
+        assertEquals("Oh, I leave", payload.timeline.first().text)
+        assertEquals(listOf(390L, 700L), payload.timeline.first().words.map { it.begin })
+        assertEquals(3_000L, payload.timeline.last().end)
+    }
+
+    @Test
+    fun `keeps the PC API ahead of the share page fallback`() {
+        var sharePageRequested = false
+
+        val payload = QishuiApiClient.fetch(
+            trackId = "7356655103695652881",
+            pcApiBody = {
+                """
+                {
+                  "lyric": {
+                    "type": "lrc",
+                    "content": "[00:01.00]primary"
+                  }
+                }
+                """.trimIndent()
+            },
+            sharePageBody = {
+                sharePageRequested = true
+                sharePageFixture(trackId = it)
+            },
+        )
+
+        assertFalse(sharePageRequested)
+        assertEquals(QishuiLyricSource.PC_API, payload.source)
+        assertEquals("[00:01.00]primary", payload.content)
+    }
+
+    @Test
+    fun `rejects a share page whose embedded track id does not match`() {
+        try {
+            QishuiApiClient.parseSharePage(
+                trackId = "7356655103695652881",
+                html = sharePageFixture(trackId = "7592139829673068587"),
+            )
+            fail("Expected mismatched track id to be rejected")
+        } catch (error: IllegalStateException) {
+            assertTrue(error.message.orEmpty().contains("track_id 不匹配"))
+        }
+    }
+
+    @Test
+    fun `caps repeated retry delay instead of stopping self repair`() {
+        assertEquals(15_000L, QishuiRetryPolicy.delayMs(0))
+        assertEquals(30_000L, QishuiRetryPolicy.delayMs(1))
+        assertEquals(300_000L, QishuiRetryPolicy.delayMs(20))
+    }
+
+    private fun sharePageFixture(trackId: String): String =
+        """
+        <!doctype html>
+        <script>window.fake = "_ROUTER_DATA = not-json";</script>
+        <script>
+          _ROUTER_DATA = {
+            "loaderData": {
+              "track_page": {
+                "audioWithLyricsOption": {
+                  "track_id": "$trackId",
+                  "duration": 3.0,
+                  "trackInfo": {"duration": 3000},
+                  "lyrics": {
+                    "lyricType": "krc",
+                    "sentences": [
+                      {
+                        "text": "Oh, I leave",
+                        "startMs": 0,
+                        "endMs": 1500,
+                        "words": [
+                          {"text": "Oh, ", "startMs": 390, "endMs": 700},
+                          {"text": "I leave", "startMs": 700, "endMs": 1500}
+                        ]
+                      },
+                      {
+                        "text": "Contributor",
+                        "startMs": 2500,
+                        "endMs": 9007199254740991,
+                        "words": []
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          };
+        </script>
+        """.trimIndent()
 }

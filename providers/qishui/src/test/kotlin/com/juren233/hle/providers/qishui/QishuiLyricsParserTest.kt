@@ -98,4 +98,35 @@ class QishuiLyricsParserTest {
 
         assertEquals(listOf("中文一", "中文二"), lines.map { it.translation })
     }
+
+    @Test
+    fun `uses structured share page timing without converting it back to KRC`() {
+        val lines = QishuiLyricsParser.parse(
+            QishuiLyricPayload(
+                trackId = "123456",
+                type = "krc",
+                content = "",
+                translations = emptyList(),
+                source = QishuiLyricSource.SHARE_PAGE,
+                timeline = listOf(
+                    QishuiTimelineLine(
+                        begin = 1_000L,
+                        end = 2_000L,
+                        text = "a < b",
+                        translation = null,
+                        words = listOf(
+                            QishuiTimelineWord(1_000L, 1_500L, "a < "),
+                            QishuiTimelineWord(1_500L, 2_000L, "b"),
+                        ),
+                    ),
+                ),
+            ),
+            durationMs = 1_900L,
+        )
+
+        assertEquals("a < b", lines.single().text)
+        assertEquals(listOf("a < ", "b"), lines.single().words.map { it.text })
+        assertEquals(1_900L, lines.single().end)
+        assertEquals(1_900L, lines.single().words.last().end)
+    }
 }

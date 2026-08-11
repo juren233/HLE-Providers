@@ -11,7 +11,14 @@ internal data class QishuiLyricPayload(
     val type: String,
     val content: String,
     val translations: List<QishuiTranslationPayload>,
+    val source: QishuiLyricSource = QishuiLyricSource.PC_API,
+    val timeline: List<QishuiTimelineLine> = emptyList(),
 )
+
+internal enum class QishuiLyricSource {
+    PC_API,
+    SHARE_PAGE,
+}
 
 internal data class QishuiTranslationPayload(
     val language: String,
@@ -42,11 +49,19 @@ internal object QishuiLyricsParser {
         payload: QishuiLyricPayload,
         durationMs: Long = -1L,
     ): List<QishuiTimelineLine> {
-        val primary = when (payload.type.uppercase()) {
-            "KRC" -> parseKrc(payload.content)
-            "TEXT" -> parseText(payload.content)
-            else -> parseLrc(payload.content)
-        }
+        val primary = payload.timeline
+            .asSequence()
+            .filter { it.text.isNotBlank() }
+            .filter { durationMs <= 0L || it.begin < durationMs }
+            .map { line -> boundStructuredLine(line, durationMs) }
+            .sortedBy(QishuiTimelineLine::begin)
+            .toList()
+            .takeIf(List<QishuiTimelineLine>::isNotEmpty)
+            ?: when (payload.type.uppercase()) {
+                "KRC" -> parseKrc(payload.content)
+                "TEXT" -> parseText(payload.content)
+                else -> parseLrc(payload.content)
+            }
         if (primary.isEmpty()) return emptyList()
 
         val translations = payload.translations
@@ -76,9 +91,27 @@ internal object QishuiLyricsParser {
                 ?.first
                 ?.text
                 ?.takeIf { it != line.text }
-            line.copy(translation = translation)
+            line.copy(translation = translation ?: line.translation)
         }
         return completeEnds(aligned, durationMs)
+    }
+
+    private fun boundStructuredLine(
+        line: QishuiTimelineLine,
+        durationMs: Long,
+    ): QishuiTimelineLine {
+        if (durationMs <= line.begin) return line
+        val words = line.words
+            .asSequence()
+            .filter { it.begin < durationMs }
+            .map { word ->
+                word.copy(end = minOf(maxOf(word.end, word.begin), durationMs))
+            }
+            .toList()
+        return line.copy(
+            end = minOf(maxOf(line.end, line.begin), durationMs),
+            words = words,
+        )
     }
 
     private data class TranslationCandidate(
