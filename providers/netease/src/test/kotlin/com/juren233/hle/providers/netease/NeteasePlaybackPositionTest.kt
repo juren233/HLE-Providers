@@ -11,6 +11,11 @@ import org.junit.Test
 
 class NeteasePlaybackPositionTest {
     @Test
+    fun positionSyncUsesLyriconRenderCadence() {
+        assertEquals(1_000L / 24L, NETEASE_POSITION_UPDATE_INTERVAL_MS)
+    }
+
+    @Test
     fun playingStateAdvancesFromElapsedRealtimeAnchor() {
         assertEquals(
             15_000L,

@@ -133,7 +133,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                     host.reportDiagnostic(TAG, message)
                     lastPositionWriteDiagnosticAtMs = now
                 }
-                mainHandler.postDelayed(this, POSITION_WRITE_INTERVAL_MS)
+                mainHandler.postDelayed(this, NETEASE_POSITION_UPDATE_INTERVAL_MS)
             }
         }
 
@@ -233,7 +233,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 .onFailure { manualFailure = it }
                 .getOrNull()
             val intervalResult = runCatching {
-                player?.setPositionUpdateInterval(CENTRAL_POSITION_UPDATE_INTERVAL_MS)
+                player?.setPositionUpdateInterval(NETEASE_POSITION_UPDATE_INTERVAL_MS.toInt())
             }.getOrNull()
             val position = state?.let {
                 extrapolatePlaybackPosition(
@@ -277,6 +277,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                     "playerAvailable=$playerAvailable, playerActive=$playerActive, " +
                     "autoResult=$autoResult, manualResult=$manualResult, " +
                     "intervalResult=$intervalResult, positionResult=$positionResult, " +
+                    "intervalMs=$NETEASE_POSITION_UPDATE_INTERVAL_MS, " +
                     "state=${state?.state}, position=${state?.position}, " +
                     "updatedAt=${state?.lastPositionUpdateTime}, decision=$decision, " +
                     "failure=${autoFailure?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"}"
@@ -457,8 +458,6 @@ object NeteasePluginEntry : OfficialProviderPlugin {
 
     private const val NEXT_TRACK_POLL_INTERVAL_MS = 1_500L
     private const val NEXT_TRACK_HEARTBEAT_MS = 5_000L
-    private const val POSITION_WRITE_INTERVAL_MS = 250L
-    private const val CENTRAL_POSITION_UPDATE_INTERVAL_MS = 1_000
     private const val POSITION_DIAGNOSTIC_INTERVAL_MS = 5_000L
 
     private data class NeteasePayload(

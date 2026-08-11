@@ -6,6 +6,8 @@
 
 package com.juren233.hle.providers.netease
 
+internal const val NETEASE_POSITION_UPDATE_INTERVAL_MS = 1_000L / 24L
+
 internal fun extrapolatePlaybackPosition(
     basePosition: Long,
     lastUpdateTime: Long,
