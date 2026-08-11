@@ -24,9 +24,9 @@ class QQMusicRuntimePlanTest {
     }
 
     @Test
-    fun `routes mobile player process to lyrics only`() {
+    fun `routes mobile player process to lyrics and buffering state`() {
         assertEquals(
-            setOf(QQMusicRuntimeFeature.LYRICS),
+            setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.BUFFERING_STATE),
             QQMusicRuntimePlan.resolve(
                 QQMusicRuntimePlan.MOBILE_PACKAGE,
                 "${QQMusicRuntimePlan.MOBILE_PACKAGE}:QQPlayerService",

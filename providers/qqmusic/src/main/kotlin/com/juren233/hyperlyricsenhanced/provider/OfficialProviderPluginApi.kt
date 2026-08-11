@@ -27,6 +27,17 @@ interface OfficialProviderHost {
         metadataCallback: OfficialProviderMetadataCallback,
     )
 
+    fun hookAfterMethod(
+        target: OfficialProviderMethodTarget,
+        callback: OfficialProviderMethodCallback,
+    )
+
+    fun hookAfterDexMethod(
+        application: Application,
+        query: OfficialProviderDexMethodQuery,
+        callback: OfficialProviderMethodCallback,
+    )
+
     fun resolveDexMethods(
         application: Application,
         queries: List<OfficialProviderDexMethodQuery>,
@@ -50,6 +61,10 @@ fun interface OfficialProviderPlaybackStateCallback {
 
 fun interface OfficialProviderMetadataCallback {
     fun onMetadataChanged(metadata: MediaMetadata?)
+}
+
+fun interface OfficialProviderMethodCallback {
+    fun onMethodCalled(receiver: Any?, arguments: Array<Any?>)
 }
 
 data class OfficialProviderMethodTarget(

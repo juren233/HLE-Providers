@@ -58,6 +58,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
     @Volatile
     private var nextTrackRuntime: QQNextTrackRuntime? = null
 
+    @Volatile
+    private var bufferRuntime: QQBufferRuntime? = null
+
     override fun install(host: OfficialProviderHost) {
         require(QQMusicRuntimePlan.supports(host.packageName)) {
             "Unsupported QQ Music package: ${host.packageName}"
@@ -67,8 +70,15 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             val features = QQMusicRuntimePlan.resolve(host.packageName, processName)
             if (features.isEmpty()) return@hookApplication
             if (!installed.compareAndSet(false, true)) return@hookApplication
+            var lyricRuntime: QQRuntime? = null
             if (QQMusicRuntimeFeature.LYRICS in features) {
-                QQRuntime(application, host.packageName).start()
+                lyricRuntime = QQRuntime(application, host.packageName).also { it.start() }
+            }
+            if (QQMusicRuntimeFeature.BUFFERING_STATE in features && lyricRuntime != null) {
+                QQBufferRuntime(application, host, lyricRuntime).also {
+                    it.start()
+                    bufferRuntime = it
+                }
             }
             if (QQMusicRuntimeFeature.NEXT_TRACK in features) {
                 QQNextTrackRuntime(application, host.packageName, host).start()
@@ -76,7 +86,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
-                runtime?.provider?.player?.setPlaybackState(state)
+                runtime?.onPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
                 runtime?.onMetadata(metadata)
@@ -93,9 +103,12 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             Thread(task, "HLE-QQMusic-Lyrics").apply { isDaemon = true }
         }
         private val trackCoordinator = QQMusicLyricTrackCoordinator(playerPackage)
+        private val bufferCoordinator = QQMusicBufferStateCoordinator()
         private val cacheDir = File(application.filesDir, "hle-provider/qqmusic")
         private var activeLoadKey: String? = null
         private var lastSong: Song? = null
+        private var lastMetadataId: String? = null
+        private var latestPlaybackState: PlaybackState? = null
 
         @Volatile
         var provider: LyriconProvider? = null
@@ -119,6 +132,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         fun onMetadata(value: MediaMetadata?) {
             val id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.trim()
                 ?.takeIf(String::isNotEmpty) ?: return
+            if (lastMetadataId != id) {
+                lastMetadataId = id
+                bufferCoordinator.reset()
+            }
             refreshDisplayPreference(provider)
             applyTrackDecision(
                 trackCoordinator.onMetadata(
@@ -130,6 +147,73 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     ),
                 ),
             )
+        }
+
+        @Synchronized
+        fun onPlaybackState(state: PlaybackState?) {
+            latestPlaybackState = state
+            when (val decision = bufferCoordinator.onPlaybackState(state?.toSnapshot())) {
+                QQMusicPlaybackDecision.Forward -> provider?.player?.setPlaybackState(state)
+                QQMusicPlaybackDecision.Ignore -> Unit
+                is QQMusicPlaybackDecision.Publish -> publishSyntheticPlaybackState(
+                    decision.state,
+                    reason = "media_session_while_buffering",
+                )
+            }
+        }
+
+        @Synchronized
+        fun onBufferStarted() {
+            when (val decision = bufferCoordinator.onBufferStarted(SystemClock.elapsedRealtime())) {
+                is QQMusicPlaybackDecision.Publish -> publishSyntheticPlaybackState(
+                    decision.state,
+                    reason = "buffer_started",
+                )
+                QQMusicPlaybackDecision.Forward,
+                QQMusicPlaybackDecision.Ignore,
+                -> Unit
+            }
+        }
+
+        @Synchronized
+        fun onBufferEnded() {
+            when (val decision = bufferCoordinator.onBufferEnded(SystemClock.elapsedRealtime())) {
+                is QQMusicPlaybackDecision.Publish -> publishSyntheticPlaybackState(
+                    decision.state,
+                    reason = "buffer_ended",
+                )
+                QQMusicPlaybackDecision.Forward,
+                QQMusicPlaybackDecision.Ignore,
+                -> Unit
+            }
+        }
+
+        private fun PlaybackState.toSnapshot() = QQMusicPlaybackSnapshot(
+            state = state,
+            position = position,
+            updatedAtMs = lastPositionUpdateTime,
+            speed = playbackSpeed,
+        )
+
+        private fun publishSyntheticPlaybackState(
+            snapshot: QQMusicPlaybackSnapshot,
+            reason: String,
+        ) {
+            val builder = latestPlaybackState?.let(PlaybackState::Builder) ?: PlaybackState.Builder()
+            val state = builder.setState(
+                snapshot.state,
+                snapshot.position,
+                snapshot.speed,
+                snapshot.updatedAtMs,
+            ).build()
+            val result = provider?.player?.setPlaybackState(state)
+            if (BuildConfig.DEBUG) {
+                Log.i(
+                    TAG,
+                    "QQ 缓冲状态已发布: reason=$reason state=${snapshot.state}, " +
+                        "position=${snapshot.position}, updatedAt=${snapshot.updatedAtMs}, result=$result",
+                )
+            }
         }
 
         @Synchronized
@@ -213,6 +297,45 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private fun writeCache(id: String, payload: QQPayload) {
             runCatching { File(cacheDir, "$id.json").writeText(payload.toJson().toString()) }
                 .onFailure { Log.w(TAG, "QQ 歌词缓存写入失败: id=$id", it) }
+        }
+    }
+
+    private class QQBufferRuntime(
+        private val application: Application,
+        private val host: OfficialProviderHost,
+        private val lyricRuntime: QQRuntime,
+    ) {
+        private val firstStartCallback = AtomicBoolean(false)
+        private val firstEndCallback = AtomicBoolean(false)
+
+        fun start() {
+            val queries = QQMusicBufferHookResolver.queries(application) ?: return
+            queries.forEach { query ->
+                host.hookAfterDexMethod(
+                    application = application,
+                    query = query,
+                    callback = com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback {
+                            _, _ ->
+                        when (query.cacheKey) {
+                            QQMusicBufferHookResolver.BUFFER_START_CACHE_KEY -> {
+                                if (BuildConfig.DEBUG && firstStartCallback.compareAndSet(false, true)) {
+                                    Log.i(TAG, "QQ 缓冲开始 Hook 首次命中")
+                                }
+                                lyricRuntime.onBufferStarted()
+                            }
+                            QQMusicBufferHookResolver.BUFFER_END_CACHE_KEY -> {
+                                if (BuildConfig.DEBUG && firstEndCallback.compareAndSet(false, true)) {
+                                    Log.i(TAG, "QQ 缓冲结束 Hook 首次命中")
+                                }
+                                lyricRuntime.onBufferEnded()
+                            }
+                        }
+                    },
+                )
+            }
+            if (BuildConfig.DEBUG) {
+                Log.i(TAG, "QQ 缓冲边界 Hook 已请求安装: queries=${queries.size}")
+            }
         }
     }
 
@@ -519,6 +642,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
 internal enum class QQMusicRuntimeFeature {
     LYRICS,
+    BUFFERING_STATE,
     NEXT_TRACK,
 }
 
@@ -534,7 +658,7 @@ internal object QQMusicRuntimePlan {
         packageName == MOBILE_PACKAGE && processName == MOBILE_PACKAGE ->
             setOf(QQMusicRuntimeFeature.NEXT_TRACK)
         packageName == MOBILE_PACKAGE && processName == MOBILE_PLAYER_PROCESS ->
-            setOf(QQMusicRuntimeFeature.LYRICS)
+            setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.BUFFERING_STATE)
         packageName == HD_PACKAGE && processName == HD_PACKAGE ->
             setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK)
         else -> emptySet()
