@@ -44,6 +44,23 @@ internal object SpotifyTrackIdentity {
         .lowercase()
         .filter(Char::isLetterOrDigit)
 
+    fun requestUri(value: String?): String? {
+        val raw = value?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        val trackId = when {
+            base62TrackId.matches(raw) -> raw
+            raw.startsWith("spotify:track:") -> raw.substringAfter("spotify:track:")
+                .substringBefore('?')
+                .takeIf(base62TrackId::matches)
+            "/track/" in raw -> raw.substringAfter("/track/")
+                .substringBefore('?')
+                .substringBefore('/')
+                .takeIf(base62TrackId::matches)
+            else -> null
+        } ?: return null
+        return "spotify:track:$trackId"
+    }
+
     fun sameTrack(first: SpotifyTrackMetadata?, second: SpotifyTrackMetadata): Boolean {
         first ?: return false
         val firstIds = candidates(first.mediaId)

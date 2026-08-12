@@ -14,6 +14,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderConstructorCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
@@ -49,12 +50,14 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         val startup = SpotifyStartupCoordinator(host)
         val runtimeStarted = AtomicBoolean(false)
         startup.installLyricsHooks()
+        startup.installLyricsRepositoryHook()
         host.hookApplication { application ->
             if (Application.getProcessName() != host.packageName) return@hookApplication
             if (!runtimeStarted.compareAndSet(false, true)) return@hookApplication
             val createdRuntime = SpotifyRuntime(application, host).also(SpotifyRuntime::start)
             startup.attach(createdRuntime)
             startup.installLyricsHooks()
+            startup.installLyricsRepositoryHook()
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
@@ -72,7 +75,10 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
     ) {
         private val stateLock = Any()
         private val lyricsHookInstallLock = Any()
+        private val lyricsRepositoryHookInstallLock = Any()
         private val installedLyricsTargets = linkedSetOf<String>()
+        private var lyricsRepositoryHookInstalled = false
+        private val firstLyricsRepositoryHit = AtomicBoolean(false)
         private val firstLyricsRequestHit = AtomicBoolean(false)
         private val firstLyricsHit = AtomicBoolean(false)
         private val pending = SpotifyStartupBuffer<
@@ -82,6 +88,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         >(MAX_STARTUP_LYRICS_CACHE_SIZE, SpotifyLyricsPayload::trackUri)
 
         private var activeRuntime: SpotifyRuntime? = null
+        private var pendingLyricsRepository: Any? = null
 
         fun installLyricsHooks() {
             synchronized(lyricsHookInstallLock) {
@@ -150,12 +157,36 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             }
         }
 
+        fun installLyricsRepositoryHook() {
+            synchronized(lyricsRepositoryHookInstallLock) {
+                if (lyricsRepositoryHookInstalled) return
+                runCatching {
+                    host.hookAfterConstructor(
+                        target = SpotifyHookProfiles.lyricsRepositoryOwner,
+                        callback = OfficialProviderConstructorCallback { _, arguments ->
+                            arguments.getOrNull(1)?.let(::onLyricsRepository)
+                        },
+                    )
+                }.onSuccess {
+                    lyricsRepositoryHookInstalled = true
+                    Log.i(TAG, "Spotify cla0 歌词仓库构造 Hook 已安装")
+                }.onFailure { error ->
+                    Log.e(
+                        TAG,
+                        "Spotify cla0 歌词仓库构造 Hook 安装失败，等待生命周期阶段重试",
+                        error,
+                    )
+                }
+            }
+        }
+
         fun attach(runtime: SpotifyRuntime) {
-            synchronized(stateLock) {
+            val startupState = synchronized(stateLock) {
                 if (activeRuntime != null) return
                 activeRuntime = runtime
-                runtime.postStartupSnapshot(pending.drain())
+                pending.drain() to pendingLyricsRepository.also { pendingLyricsRepository = null }
             }
+            runtime.postStartupSnapshot(startupState.first, startupState.second)
         }
 
         fun onMetadata(metadata: MediaMetadata?) {
@@ -194,6 +225,19 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             }
             runtime.postLyricsPayload(payload)
         }
+
+        private fun onLyricsRepository(repository: Any) {
+            if (firstLyricsRepositoryHit.compareAndSet(false, true)) {
+                Log.i(TAG, "Spotify cla0 歌词仓库构造 Hook 首次命中: ${repository.javaClass.name}")
+            }
+            val runtime = synchronized(stateLock) {
+                activeRuntime ?: run {
+                    pendingLyricsRepository = repository
+                    return
+                }
+            }
+            runtime.postLyricsRepository(repository)
+        }
     }
 
     private class SpotifyRuntime(
@@ -216,6 +260,41 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private var lastPublishedSongKey: String? = null
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
+        private val lyricsFallback = SpotifyLyricsFallbackCoordinator(
+            scheduler = SpotifyHandlerLyricsFallbackScheduler(mainHandler),
+            requestDelayMs = LYRICS_FALLBACK_DELAY_MS,
+            requestStarter = SpotifyLyricsFallbackRequestStarter<Any> { repository, trackUri, success, error ->
+                SpotifyLyricsRepositoryRequester.start(
+                    repository = repository,
+                    trackUri = trackUri,
+                    onSuccess = { value -> mainHandler.post { success(value) } },
+                    onError = { failure -> mainHandler.post { error(failure) } },
+                )
+            },
+            onSuccess = { trackUri, result ->
+                val payload = SpotifyLyricsPayloadExtractor.extract(trackUri, result)
+                if (payload == null) {
+                    Log.w(TAG, "Spotify 主动歌词成功值解析失败: track=$trackUri")
+                } else {
+                    Log.i(
+                        TAG,
+                        "Spotify 主动歌词请求成功: track=$trackUri, lines=${payload.lines.size}",
+                    )
+                    onLyricsPayload(payload)
+                }
+            },
+            onFailure = { trackUri, error ->
+                Log.w(TAG, "Spotify 主动歌词请求失败: track=$trackUri", error)
+            },
+            onScheduled = { trackUri, delayMs ->
+                if (BuildConfig.DEBUG) {
+                    Log.i(TAG, "Spotify 主动歌词兜底已安排: track=$trackUri, delayMs=$delayMs")
+                }
+            },
+            onRequestStarted = { trackUri ->
+                Log.i(TAG, "Spotify 主动歌词请求开始: track=$trackUri")
+            },
+        )
 
         private val nextTrackHeartbeat = object : Runnable {
             override fun run() {
@@ -261,14 +340,20 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             mainHandler.post { onLyricsPayload(payload) }
         }
 
+        fun postLyricsRepository(repository: Any) {
+            mainHandler.post { lyricsFallback.onRepositoryAvailable(repository) }
+        }
+
         fun postStartupSnapshot(
             snapshot: SpotifyStartupSnapshot<
                 MediaMetadata,
                 SpotifyLyricsPayload,
                 PlaybackState,
             >,
+            lyricsRepository: Any?,
         ) {
             mainHandler.post {
+                lyricsRepository?.let(lyricsFallback::onRepositoryAvailable)
                 if (snapshot.metadataReceived) onMetadata(snapshot.metadata)
                 snapshot.lyrics.forEach(::onLyricsPayload)
                 if (snapshot.playbackStateReceived) {
@@ -333,6 +418,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
 
         private fun onMetadata(value: MediaMetadata?) {
             if (value == null) {
+                lyricsFallback.clearTrack()
                 currentTrack = null
                 activeQueueCurrentId = null
                 lastPublishedSongKey = null
@@ -350,10 +436,12 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             val sameTrack = SpotifyTrackIdentity.sameTrack(currentTrack, track)
             currentTrack = track
             if (!sameTrack) {
+                lyricsFallback.onTrackChanged(track.mediaId)
                 activeQueueCurrentId = null
                 publishPlaceholder(track)
-            } else if (lastPublishedSongKey == null) {
-                publishPlaceholder(track)
+            } else {
+                lyricsFallback.onTrackMetadataUpdated(track.mediaId)
+                if (lastPublishedSongKey == null) publishPlaceholder(track)
             }
             publishCachedLyrics()
             publishAlignedNextTrack()
@@ -368,6 +456,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             latestQueueSnapshot = snapshot
             val aligned = SpotifyQueueBinding.align(currentTrack, snapshot)
             activeQueueCurrentId = aligned?.current?.id
+            lyricsFallback.onTrackMetadataUpdated(activeQueueCurrentId)
             publishCachedLyrics()
             publishNextTrack(currentTrack, aligned)
         }
@@ -379,6 +468,10 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 activeQueueCurrentId?.let { addAll(SpotifyTrackIdentity.candidates(it)) }
             }
             val payload = ids.asSequence().mapNotNull(lyricsCache::get).firstOrNull() ?: return
+            if (payload.lines.size > 1) {
+                lyricsFallback.onTrackMetadataUpdated(payload.trackUri)
+                lyricsFallback.onLyricsAvailable(payload.trackUri)
+            }
             val lines = SpotifyLyricsTimelineMapper.map(payload, metadata.durationMs)
             if (lines.isEmpty()) return
             val songKey = "lyrics:${payload.trackUri}:${payload.lines.hashCode()}:" +
@@ -571,4 +664,5 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
     private const val MAX_LYRICS_CACHE_SIZE = 64
     private const val MAX_STARTUP_LYRICS_CACHE_SIZE = 8
     private const val NEXT_TRACK_HEARTBEAT_MS = 5_000L
+    private const val LYRICS_FALLBACK_DELAY_MS = 1_200L
 }

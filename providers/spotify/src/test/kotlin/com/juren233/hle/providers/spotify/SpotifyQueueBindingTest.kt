@@ -12,6 +12,27 @@ import org.junit.Test
 
 class SpotifyQueueBindingTest {
     @Test
+    fun `normalizes only verified Spotify track identities for active requests`() {
+        assertEquals(
+            "spotify:track:AAAAAAAAAAAAAAAAAAAAAA",
+            SpotifyTrackIdentity.requestUri("https://open.spotify.com/track/AAAAAAAAAAAAAAAAAAAAAA?si=x"),
+        )
+        assertEquals(
+            "spotify:track:BBBBBBBBBBBBBBBBBBBBBB",
+            SpotifyTrackIdentity.requestUri("spotify:track:BBBBBBBBBBBBBBBBBBBBBB"),
+        )
+        assertEquals(
+            "spotify:track:CCCCCCCCCCCCCCCCCCCCCC",
+            SpotifyTrackIdentity.requestUri("CCCCCCCCCCCCCCCCCCCCCC"),
+        )
+        assertEquals(null, SpotifyTrackIdentity.requestUri("spotify:episode:short"))
+        assertEquals(
+            null,
+            SpotifyTrackIdentity.requestUri("spotify:episode:DDDDDDDDDDDDDDDDDDDDDD"),
+        )
+    }
+
+    @Test
     fun `aligns base62 MediaSession id with Spotify URI`() {
         val snapshot = snapshot("spotify:track:1234567890123456789012", "Current")
         val metadata = SpotifyTrackMetadata(

@@ -13,6 +13,21 @@ import org.junit.Test
 
 class SpotifyHookProfilesTest {
     @Test
+    fun `keeps exact cla0 repository owner constructor from original dex`() {
+        val target = SpotifyHookProfiles.lyricsRepositoryOwner
+
+        assertEquals("p.cla0", target.className)
+        assertEquals(
+            listOf(
+                "com.spotify.kodiak.dataloader.DataPool",
+                "p.kg80",
+            ),
+            target.parameterTypeNames,
+        )
+        assertNotEquals("p.kf80", target.className)
+    }
+
+    @Test
     fun `keeps both exact kg80 implementation request descriptors`() {
         val targets = SpotifyHookProfiles.lyricsRequests
 
