@@ -88,7 +88,17 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             MediaMetadata,
             SpotifyLyricsPayload,
             PlaybackState,
-        >(MAX_STARTUP_LYRICS_CACHE_SIZE, SpotifyLyricsPayload::trackUri)
+        >(
+            maxLyrics = MAX_STARTUP_LYRICS_CACHE_SIZE,
+            lyricsKey = SpotifyLyricsPayload::trackUri,
+            metadataIsUsable = { metadata ->
+                metadata != null &&
+                    (
+                        !metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).isNullOrBlank() ||
+                            !metadata.getString(MediaMetadata.METADATA_KEY_TITLE).isNullOrBlank()
+                    )
+            },
+        )
 
         private var activeRuntime: SpotifyRuntime? = null
         private var pendingLyricsClient: SpotifySelectedLyricsClient<Any>? = null
@@ -692,6 +702,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
     internal class SpotifyStartupBuffer<Metadata, Lyrics, Playback>(
         private val maxLyrics: Int,
         private val lyricsKey: (Lyrics) -> String,
+        private val metadataIsUsable: (Metadata?) -> Boolean,
     ) {
         private val pendingLyrics = object : LinkedHashMap<String, Lyrics>(
             maxLyrics,
@@ -704,6 +715,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
 
         private var metadataReceived = false
+        private var usableMetadataReceived = false
         private var metadata: Metadata? = null
         private var playbackStateReceived = false
         private var playbackState: Playback? = null
@@ -713,6 +725,14 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
 
         fun onMetadata(value: Metadata?) {
+            val usable = metadataIsUsable(value)
+            if (usable) {
+                metadataReceived = true
+                usableMetadataReceived = true
+                metadata = value
+                return
+            }
+            if (usableMetadataReceived) return
             metadataReceived = true
             metadata = value
         }
@@ -735,6 +755,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 playbackState = playbackState,
             )
             metadataReceived = false
+            usableMetadataReceived = false
             metadata = null
             pendingLyrics.clear()
             playbackStateReceived = false

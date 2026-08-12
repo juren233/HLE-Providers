@@ -1,5 +1,16 @@
 # Provider Debugging Mistakes
 
+## SPOTIFY-PROGRESS-001: 冷启动首曲 metadata 被启动噪声覆盖
+
+- 状态：已实现 Spotify Provider `1.0.10 (11)` 候选修复并通过本地回归测试；尚待真机首次播放验收。
+- 症状与复现：问题只在 Spotify 进程启动后的第一次播放出现，系统媒体通知和递增 PlaybackState 均存在，但岛上没有当前 Song，表现为进度不跟随；同一进程第一次切歌后立即恢复，后续播放正常。本条只处理当前 Song 与位置的冷启动绑定，不修改 Spotify 歌词接口或下一首歌曲列表。
+- 可靠运行证据：Core `140090` 真机仍可复现，否定了“只需从同一 MediaSession controller 回放当前 metadata”的上一方向。当前 PID 日志显示切歌到《make you mine》后，SystemUI 在 `2026-08-13 00:04:49.628` 收到同曲空歌词 Song，约 `1.489s` 后收到 60 行歌词 Song，此后位置与显示持续正常；说明正常切歌链、Central、Subscriber 和渲染均可工作。
+- 代码证据：`SpotifyStartupCoordinator` 在 Runtime 建立前将 MediaSession 回调写入 `SpotifyStartupBuffer`；该缓存只保留最后一次 metadata，`null` 或 mediaId/title 均为空的启动噪声会覆盖先到的有效首曲。Runtime 建立后 drain 只回放这个末值，因此可能只转发空 metadata 与 PlaybackState，形成有递增位置但无 Song；切歌时 Runtime 已建立，不再经过该覆盖窗口。
+- 已尝试方向：Core `140090` 在 PlaybackState 前读取 `MediaSession.controller.metadata` 并回放，真机行为没有变化。不得继续增加 metadata 快照轮询、延迟或重复读取；该假设已经被用户实际复现否定。
+- 当前未知：修改后的 Provider 是否能在真实冷启动中保住有效首曲 metadata，以及真实 Spotify 启动序列是否还包含另一种不完整但应判为有效的 metadata。
+- 下一个判别性证据：单测覆盖“有效首曲后收到 null”“有效首曲后收到空白 metadata”“只有 null”以及“后续有效首曲替换启动噪声”；打包安装后由用户在不切歌的首次播放中验收。
+- 验收条件：重启 Spotify 后第一次播放不需要切歌即可先收到非空 Song，并持续显示递增进度；暂停恢复和首次切歌仍正常；歌词与下一首列表无回归。编译、打包、安装和 Hook 日志不能关闭本条。
+
 ## SPOTIFY-LYRICS-001: 等待歌词页面请求并从非必经 cla0 捕获客户端
 
 - 状态：Spotify Provider `1.0.8 (9)` 真机仍有歌词缺失，准备改为捕获 Spotify DI 实际创建的 v2/v3 歌词客户端；等待新候选真机验收。
