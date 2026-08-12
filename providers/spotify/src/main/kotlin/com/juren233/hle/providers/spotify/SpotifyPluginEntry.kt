@@ -8,6 +8,7 @@ package com.juren233.hle.providers.spotify
 
 import android.app.Application
 import android.media.MediaMetadata
+import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -35,27 +36,164 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
 
     private val installed = AtomicBoolean(false)
 
-    @Volatile
-    private var runtime: SpotifyRuntime? = null
-
     override fun install(host: OfficialProviderHost) {
         require(host.packageName == TARGET_PACKAGE) {
             "Unexpected target package: ${host.packageName}"
         }
+        if (host.processName != host.packageName) {
+            Log.i(TAG, "跳过 Spotify 非主进程: process=${host.processName}")
+            return
+        }
+        if (!installed.compareAndSet(false, true)) return
+
+        val startup = SpotifyStartupCoordinator(host)
+        val runtimeStarted = AtomicBoolean(false)
+        startup.installLyricsHooks()
         host.hookApplication { application ->
             if (Application.getProcessName() != host.packageName) return@hookApplication
-            if (!installed.compareAndSet(false, true)) return@hookApplication
-            SpotifyRuntime(application, host).start()
+            if (!runtimeStarted.compareAndSet(false, true)) return@hookApplication
+            val createdRuntime = SpotifyRuntime(application, host).also(SpotifyRuntime::start)
+            startup.attach(createdRuntime)
+            startup.installLyricsHooks()
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
-                runtime?.provider?.player?.setPlaybackState(state)
+                startup.onPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
-                runtime?.postMetadata(metadata)
+                startup.onMetadata(metadata)
             },
         )
         Log.i(TAG, "Spotify Provider Hook 已安装")
+    }
+
+    private class SpotifyStartupCoordinator(
+        private val host: OfficialProviderHost,
+    ) {
+        private val stateLock = Any()
+        private val lyricsHookInstallLock = Any()
+        private val installedLyricsTargets = linkedSetOf<String>()
+        private val firstLyricsRequestHit = AtomicBoolean(false)
+        private val firstLyricsHit = AtomicBoolean(false)
+        private val pending = SpotifyStartupBuffer<
+            MediaMetadata,
+            SpotifyLyricsPayload,
+            PlaybackState,
+        >(MAX_STARTUP_LYRICS_CACHE_SIZE, SpotifyLyricsPayload::trackUri)
+
+        private var activeRuntime: SpotifyRuntime? = null
+
+        fun installLyricsHooks() {
+            synchronized(lyricsHookInstallLock) {
+                SpotifyHookProfiles.lyricsRequests.forEach { target ->
+                    val targetKey = "${target.className}#${target.methodName}"
+                    if (targetKey in installedLyricsTargets) return@forEach
+                    runCatching {
+                        host.hookMethodResult(
+                            target = target,
+                            callback = OfficialProviderMethodResultCallback { receiver, arguments, result ->
+                                if (firstLyricsRequestHit.compareAndSet(false, true)) {
+                                    Log.i(
+                                        TAG,
+                                        "Spotify color-lyrics 方法结果 Hook 首次命中: " +
+                                            "target=${receiver?.javaClass?.name ?: target.className}",
+                                    )
+                                }
+                                SpotifySingleSuccessObserver.wrap(
+                                    result = result,
+                                    trackUri = arguments.getOrNull(0) as? String,
+                                    onSuccess = { trackUri, lyricsResult ->
+                                        val payload = SpotifyLyricsPayloadExtractor.extract(
+                                            trackUri,
+                                            lyricsResult,
+                                        )
+                                        if (payload == null) {
+                                            if (BuildConfig.DEBUG) {
+                                                Log.w(TAG, "Spotify 异步歌词成功值解析失败")
+                                            }
+                                            return@wrap
+                                        }
+                                        if (firstLyricsHit.compareAndSet(false, true)) {
+                                            Log.i(
+                                                TAG,
+                                                "Spotify color-lyrics 异步成功首次命中: " +
+                                                    "lines=${payload.lines.size}, " +
+                                                    "translations=${payload.translations.size}, " +
+                                                    "syncType=${payload.syncType}",
+                                            )
+                                        }
+                                        onLyricsPayload(payload)
+                                    },
+                                    onObserverFailure = { error ->
+                                        if (BuildConfig.DEBUG) {
+                                            Log.w(TAG, "Spotify 异步歌词观察回调失败", error)
+                                        }
+                                    },
+                                )
+                            },
+                        )
+                    }.onSuccess {
+                        installedLyricsTargets += targetKey
+                        Log.i(
+                            TAG,
+                            "Spotify color-lyrics 请求结果 Hook 已安装: $targetKey",
+                        )
+                    }.onFailure { error ->
+                        Log.e(
+                            TAG,
+                            "Spotify color-lyrics 请求结果 Hook 安装失败，等待生命周期阶段重试: " +
+                                "$targetKey",
+                            error,
+                        )
+                    }
+                }
+            }
+        }
+
+        fun attach(runtime: SpotifyRuntime) {
+            synchronized(stateLock) {
+                if (activeRuntime != null) return
+                activeRuntime = runtime
+                runtime.postStartupSnapshot(pending.drain())
+            }
+        }
+
+        fun onMetadata(metadata: MediaMetadata?) {
+            val runtime = synchronized(stateLock) {
+                activeRuntime ?: run {
+                    pending.onMetadata(metadata)
+                    return
+                }
+            }
+            runtime.postMetadata(metadata)
+        }
+
+        fun onPlaybackState(state: PlaybackState?) {
+            val runtime = synchronized(stateLock) {
+                activeRuntime ?: run {
+                    pending.onPlaybackState(state)
+                    return
+                }
+            }
+            runtime.postPlaybackState(state)
+        }
+
+        private fun onLyricsPayload(payload: SpotifyLyricsPayload) {
+            val runtime = synchronized(stateLock) {
+                activeRuntime ?: run {
+                    pending.onLyrics(payload)
+                    if (BuildConfig.DEBUG) {
+                        Log.i(
+                            TAG,
+                            "Spotify 启动阶段歌词已暂存: track=${payload.trackUri}, " +
+                                "lines=${payload.lines.size}",
+                        )
+                    }
+                    return
+                }
+            }
+            runtime.postLyricsPayload(payload)
+        }
     }
 
     private class SpotifyRuntime(
@@ -63,8 +201,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private val host: OfficialProviderHost,
     ) {
         private val mainHandler = Handler(Looper.getMainLooper())
-        private val firstLyricsRequestHit = AtomicBoolean(false)
-        private val firstLyricsHit = AtomicBoolean(false)
         private val firstQueueHit = AtomicBoolean(false)
         private val queueValidation = SpotifyHookValidationTracker()
         private val queueExtractionInProgress = ThreadLocal<Boolean>()
@@ -102,8 +238,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 it.player.setDisplayRoma(false)
                 it.register()
             }
-            runtime = this
-            installLyricsHook()
             installQueueHook()
             mainHandler.removeCallbacks(nextTrackHeartbeat)
             mainHandler.post(nextTrackHeartbeat)
@@ -119,49 +253,27 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             mainHandler.post { onMetadata(metadata) }
         }
 
-        private fun installLyricsHook() {
-            SpotifyHookProfiles.lyricsRequests.forEach { target ->
-                val callback = OfficialProviderMethodResultCallback { receiver, arguments, result ->
-                    if (firstLyricsRequestHit.compareAndSet(false, true)) {
-                        Log.i(
-                            TAG,
-                            "Spotify color-lyrics 方法结果 Hook 首次命中: " +
-                                "target=${receiver?.javaClass?.name ?: target.className}",
-                        )
-                    }
-                    SpotifySingleSuccessObserver.wrap(
-                        result = result,
-                        trackUri = arguments.getOrNull(0) as? String,
-                        onSuccess = { trackUri, lyricsResult ->
-                            val payload = SpotifyLyricsPayloadExtractor.extract(trackUri, lyricsResult)
-                            if (payload == null) {
-                                if (BuildConfig.DEBUG) Log.w(TAG, "Spotify 异步歌词成功值解析失败")
-                                return@wrap
-                            }
-                            if (firstLyricsHit.compareAndSet(false, true)) {
-                                Log.i(
-                                    TAG,
-                                    "Spotify color-lyrics 异步成功首次命中: " +
-                                        "lines=${payload.lines.size}, " +
-                                        "translations=${payload.translations.size}, " +
-                                        "syncType=${payload.syncType}",
-                                )
-                            }
-                            mainHandler.post { onLyricsPayload(payload) }
-                        },
-                        onObserverFailure = { error ->
-                            if (BuildConfig.DEBUG) {
-                                Log.w(TAG, "Spotify 异步歌词观察回调失败", error)
-                            }
-                        }
-                    )
+        fun postPlaybackState(state: PlaybackState?) {
+            mainHandler.post { provider?.player?.setPlaybackState(state) }
+        }
+
+        fun postLyricsPayload(payload: SpotifyLyricsPayload) {
+            mainHandler.post { onLyricsPayload(payload) }
+        }
+
+        fun postStartupSnapshot(
+            snapshot: SpotifyStartupSnapshot<
+                MediaMetadata,
+                SpotifyLyricsPayload,
+                PlaybackState,
+            >,
+        ) {
+            mainHandler.post {
+                if (snapshot.metadataReceived) onMetadata(snapshot.metadata)
+                snapshot.lyrics.forEach(::onLyricsPayload)
+                if (snapshot.playbackStateReceived) {
+                    provider?.player?.setPlaybackState(snapshot.playbackState)
                 }
-                host.hookMethodResult(target = target, callback = callback)
-                Log.i(
-                    TAG,
-                    "Spotify color-lyrics 请求结果 Hook 已安装: " +
-                        "${target.className}#${target.methodName}",
-                )
             }
         }
 
@@ -394,6 +506,69 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
     }
 
+    internal class SpotifyStartupBuffer<Metadata, Lyrics, Playback>(
+        private val maxLyrics: Int,
+        private val lyricsKey: (Lyrics) -> String,
+    ) {
+        private val pendingLyrics = object : LinkedHashMap<String, Lyrics>(
+            maxLyrics,
+            0.75f,
+            true,
+        ) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<String, Lyrics>?,
+            ): Boolean = size > maxLyrics
+        }
+
+        private var metadataReceived = false
+        private var metadata: Metadata? = null
+        private var playbackStateReceived = false
+        private var playbackState: Playback? = null
+
+        init {
+            require(maxLyrics > 0)
+        }
+
+        fun onMetadata(value: Metadata?) {
+            metadataReceived = true
+            metadata = value
+        }
+
+        fun onLyrics(value: Lyrics) {
+            pendingLyrics[lyricsKey(value)] = value
+        }
+
+        fun onPlaybackState(value: Playback?) {
+            playbackStateReceived = true
+            playbackState = value
+        }
+
+        fun drain(): SpotifyStartupSnapshot<Metadata, Lyrics, Playback> {
+            val snapshot = SpotifyStartupSnapshot(
+                metadataReceived = metadataReceived,
+                metadata = metadata,
+                lyrics = pendingLyrics.values.toList(),
+                playbackStateReceived = playbackStateReceived,
+                playbackState = playbackState,
+            )
+            metadataReceived = false
+            metadata = null
+            pendingLyrics.clear()
+            playbackStateReceived = false
+            playbackState = null
+            return snapshot
+        }
+    }
+
+    internal data class SpotifyStartupSnapshot<Metadata, Lyrics, Playback>(
+        val metadataReceived: Boolean,
+        val metadata: Metadata?,
+        val lyrics: List<Lyrics>,
+        val playbackStateReceived: Boolean,
+        val playbackState: Playback?,
+    )
+
     private const val MAX_LYRICS_CACHE_SIZE = 64
+    private const val MAX_STARTUP_LYRICS_CACHE_SIZE = 8
     private const val NEXT_TRACK_HEARTBEAT_MS = 5_000L
 }
