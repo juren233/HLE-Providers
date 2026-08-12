@@ -24,6 +24,7 @@ import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
 import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 import io.github.proify.lyricon.lyric.model.Song
+import io.github.proify.lyricon.provider.ConnectionListener
 import io.github.proify.lyricon.provider.LyriconFactory
 import io.github.proify.lyricon.provider.LyriconProvider
 import java.util.LinkedHashMap
@@ -88,17 +89,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             MediaMetadata,
             SpotifyLyricsPayload,
             PlaybackState,
-        >(
-            maxLyrics = MAX_STARTUP_LYRICS_CACHE_SIZE,
-            lyricsKey = SpotifyLyricsPayload::trackUri,
-            metadataIsUsable = { metadata ->
-                metadata != null &&
-                    (
-                        !metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).isNullOrBlank() ||
-                            !metadata.getString(MediaMetadata.METADATA_KEY_TITLE).isNullOrBlank()
-                    )
-            },
-        )
+        >(MAX_STARTUP_LYRICS_CACHE_SIZE, SpotifyLyricsPayload::trackUri)
 
         private var activeRuntime: SpotifyRuntime? = null
         private var pendingLyricsClient: SpotifySelectedLyricsClient<Any>? = null
@@ -330,8 +321,25 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private var currentTrack: SpotifyTrackMetadata? = null
         private var latestQueueSnapshot: SpotifyQueueSnapshot? = null
         private var lastPublishedSongKey: String? = null
+        private val providerPublisher = SpotifyProviderPublisher<Song>(
+            songSender = { song -> provider?.player?.setSong(song) == true },
+            controlSender = { frame -> provider?.player?.sendText(frame) == true },
+        )
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
+        private val connectionListener = object : ConnectionListener {
+            override fun onConnected(provider: LyriconProvider) {
+                postCurrentSongReplay(provider, source = "connected")
+            }
+
+            override fun onReconnected(provider: LyriconProvider) {
+                postCurrentSongReplay(provider, source = "reconnected")
+            }
+
+            override fun onDisconnected(provider: LyriconProvider) = Unit
+
+            override fun onConnectTimeout(provider: LyriconProvider) = Unit
+        }
         private val lyricsFallback = SpotifyLyricsFallbackCoordinator(
             scheduler = SpotifyHandlerLyricsFallbackScheduler(mainHandler),
             requestDelayMs = LYRICS_FALLBACK_DELAY_MS,
@@ -380,15 +388,19 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             private set
 
         fun start() {
-            provider = LyriconFactory.createProvider(
+            val createdProvider = LyriconFactory.createProvider(
                 context = application,
                 providerPackageName = PROVIDER_PACKAGE,
                 playerPackageName = host.packageName,
-            ).also {
-                it.player.setDisplayTranslation(true)
-                it.player.setDisplayRoma(false)
-                it.register()
-            }
+            )
+            provider = createdProvider
+            // Provider SDK auto-syncs through a single SONG/TEXT cache slot. The callback posts
+            // our independent Song replay after the whole listener dispatch, so listener order
+            // cannot let a next-track control frame remain as the final restored lyric value.
+            createdProvider.service.addConnectionListener(connectionListener)
+            createdProvider.player.setDisplayTranslation(true)
+            createdProvider.player.setDisplayRoma(false)
+            createdProvider.register()
             installQueueHook()
             mainHandler.removeCallbacks(nextTrackHeartbeat)
             mainHandler.post(nextTrackHeartbeat)
@@ -531,6 +543,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 lyricsFallback.clearTrack()
                 currentTrack = null
                 lastPublishedSongKey = null
+                providerPublisher.clearSong()
                 publishNextTrack(null, null)
                 return
             }
@@ -579,7 +592,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             val songKey = "lyrics:${payload.trackUri}:${payload.lines.hashCode()}:" +
                 payload.translations.hashCode()
             if (songKey == lastPublishedSongKey) return
-            provider?.player?.setSong(Song().apply {
+            publishSong(Song().apply {
                 id = payload.trackUri
                 name = metadata.title
                 artist = metadata.artist
@@ -617,13 +630,33 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 ?: "spotify:${track.title.orEmpty()}:${track.artist.orEmpty()}"
             val songKey = "placeholder:$id:${track.title}:${track.artist}:${track.durationMs}"
             if (songKey == lastPublishedSongKey) return
-            provider?.player?.setSong(Song().apply {
+            publishSong(Song().apply {
                 this.id = id
                 name = track.title
                 artist = track.artist
                 duration = track.durationMs.coerceAtLeast(0L)
             })
             lastPublishedSongKey = songKey
+        }
+
+        private fun publishSong(song: Song) {
+            providerPublisher.publishSong(song)
+        }
+
+        private fun postCurrentSongReplay(
+            connectedProvider: LyriconProvider,
+            source: String,
+        ) {
+            mainHandler.post {
+                val replay = providerPublisher.replaySong(
+                    connectedProvider.player::setSong,
+                ) ?: return@post
+                Log.i(
+                    TAG,
+                    "Spotify 当前 Song 连接重放: source=$source, " +
+                        "id=${replay.first.id}, success=${replay.second}",
+                )
+            }
         }
 
         private fun publishAlignedNextTrack() {
@@ -670,7 +703,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             ) {
                 return
             }
-            if (provider?.player?.sendText(frame) == true) {
+            if (providerPublisher.publishControlFrame(frame)) {
                 lastNextTrackFrame = frame
                 lastNextTrackFrameSentAtMs = now
             }
@@ -702,7 +735,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
     internal class SpotifyStartupBuffer<Metadata, Lyrics, Playback>(
         private val maxLyrics: Int,
         private val lyricsKey: (Lyrics) -> String,
-        private val metadataIsUsable: (Metadata?) -> Boolean,
     ) {
         private val pendingLyrics = object : LinkedHashMap<String, Lyrics>(
             maxLyrics,
@@ -715,7 +747,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
 
         private var metadataReceived = false
-        private var usableMetadataReceived = false
         private var metadata: Metadata? = null
         private var playbackStateReceived = false
         private var playbackState: Playback? = null
@@ -725,14 +756,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
 
         fun onMetadata(value: Metadata?) {
-            val usable = metadataIsUsable(value)
-            if (usable) {
-                metadataReceived = true
-                usableMetadataReceived = true
-                metadata = value
-                return
-            }
-            if (usableMetadataReceived) return
             metadataReceived = true
             metadata = value
         }
@@ -755,12 +778,40 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 playbackState = playbackState,
             )
             metadataReceived = false
-            usableMetadataReceived = false
             metadata = null
             pendingLyrics.clear()
             playbackStateReceived = false
             playbackState = null
             return snapshot
+        }
+    }
+
+    internal class SpotifyProviderPublisher<Song>(
+        private val songSender: (Song) -> Boolean,
+        private val controlSender: (String) -> Boolean,
+    ) {
+        private var song: Song? = null
+
+        fun publishSong(value: Song): Boolean {
+            synchronized(this) {
+                song = value
+            }
+            return songSender(value)
+        }
+
+        fun publishControlFrame(frame: String): Boolean = controlSender(frame)
+
+        @Synchronized
+        fun clearSong() {
+            song = null
+        }
+
+        @Synchronized
+        fun currentSong(): Song? = song
+
+        fun replaySong(sender: (Song) -> Boolean): Pair<Song, Boolean>? {
+            val current = currentSong() ?: return null
+            return current to sender(current)
         }
     }
 

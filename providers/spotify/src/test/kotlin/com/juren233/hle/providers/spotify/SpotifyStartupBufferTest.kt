@@ -70,45 +70,10 @@ class SpotifyStartupBufferTest {
         assertNull(second.playbackState)
     }
 
-    @Test
-    fun `startup null cannot overwrite an already usable track`() {
-        val buffer = buffer(maxLyrics = 2)
-
-        buffer.onMetadata("track-a")
-        buffer.onMetadata(null)
-
-        val snapshot = buffer.drain()
-
-        assertTrue(snapshot.metadataReceived)
-        assertEquals("track-a", snapshot.metadata)
-    }
-
-    @Test
-    fun `startup blank metadata cannot overwrite an already usable track`() {
-        val buffer = buffer(maxLyrics = 2)
-
-        buffer.onMetadata("track-a")
-        buffer.onMetadata(" ")
-
-        assertEquals("track-a", buffer.drain().metadata)
-    }
-
-    @Test
-    fun `later usable track replaces startup noise`() {
-        val buffer = buffer(maxLyrics = 2)
-
-        buffer.onMetadata(null)
-        buffer.onMetadata(" ")
-        buffer.onMetadata("track-a")
-
-        assertEquals("track-a", buffer.drain().metadata)
-    }
-
     private fun buffer(maxLyrics: Int) =
         SpotifyPluginEntry.SpotifyStartupBuffer<String, Lyrics, String>(
             maxLyrics = maxLyrics,
             lyricsKey = Lyrics::trackUri,
-            metadataIsUsable = { !it.isNullOrBlank() },
         )
 
     private data class Lyrics(
