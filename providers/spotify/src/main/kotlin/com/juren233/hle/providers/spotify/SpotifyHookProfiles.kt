@@ -71,4 +71,17 @@ internal object SpotifyHookProfiles {
         isStatic = true,
     )
 
+    // Spotify 9.1.72.1891 原始 classes6.dex：
+    // Lcom/spotify/player/model/AutoValue_PlayerState;->nextTracks()Lp/f320;
+    // 这是 PlayerState 的真实 AutoValue 实现，不是反编译器显示别名。保留
+    // p.zw21.g DexKit 主路径，同时直接观察所有真实 PlayerState 队列读取，
+    // 避免特定播放上下文不经过 p.zw21.g 时永久拿不到下一首。
+    val nextTracksAccessorTarget = OfficialProviderMethodTarget(
+        className = "com.spotify.player.model.AutoValue_PlayerState",
+        methodName = "nextTracks",
+        parameterTypeNames = emptyList(),
+        returnTypeName = "p.f320",
+        isStatic = false,
+    )
+
 }

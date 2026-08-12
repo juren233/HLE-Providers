@@ -61,6 +61,17 @@ class SpotifyHookProfilesTest {
     }
 
     @Test
+    fun `keeps exact AutoValue PlayerState nextTracks accessor from original dex`() {
+        val target = SpotifyHookProfiles.nextTracksAccessorTarget
+
+        assertEquals("com.spotify.player.model.AutoValue_PlayerState", target.className)
+        assertEquals("nextTracks", target.methodName)
+        assertEquals(emptyList<String>(), target.parameterTypeNames)
+        assertEquals("p.f320", target.returnTypeName)
+        assertEquals(false, target.isStatic)
+    }
+
+    @Test
     fun `debounces transient invalid hook callbacks`() {
         val tracker = SpotifyPluginEntry.SpotifyHookValidationTracker(invalidThreshold = 3)
 

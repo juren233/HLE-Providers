@@ -245,7 +245,8 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private val host: OfficialProviderHost,
     ) {
         private val mainHandler = Handler(Looper.getMainLooper())
-        private val firstQueueHit = AtomicBoolean(false)
+        private val firstQueueDexCallbackHit = AtomicBoolean(false)
+        private val firstQueueAccessorCallbackHit = AtomicBoolean(false)
         private val queueValidation = SpotifyHookValidationTracker()
         private val queueExtractionInProgress = ThreadLocal<Boolean>()
         private val lyricsCache = object : LinkedHashMap<String, SpotifyLyricsPayload>(32, 0.75f, true) {
@@ -255,7 +256,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
 
         private var currentTrack: SpotifyTrackMetadata? = null
-        private var activeQueueCurrentId: String? = null
         private var latestQueueSnapshot: SpotifyQueueSnapshot? = null
         private var lastPublishedSongKey: String? = null
         private var lastNextTrackFrame: String? = null
@@ -363,7 +363,42 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
 
         private fun installQueueHook() {
-            val callback = OfficialProviderMethodCallback { receiver, arguments ->
+            val dexCallback = queueCallback(
+                source = "dexkit_state_mapper",
+                firstCallbackHit = firstQueueDexCallbackHit,
+                reportDexValidation = true,
+            )
+            val accessorCallback = queueCallback(
+                source = "auto_value_next_tracks",
+                firstCallbackHit = firstQueueAccessorCallbackHit,
+                reportDexValidation = false,
+            )
+            host.hookAfterDexMethod(
+                application = application,
+                query = SpotifyHookProfiles.queueStateQuery,
+                callback = dexCallback,
+            )
+            runCatching {
+                host.hookAfterMethod(
+                    target = SpotifyHookProfiles.nextTracksAccessorTarget,
+                    callback = accessorCallback,
+                )
+            }.onSuccess {
+                Log.i(TAG, "Spotify nextTracks 精确辅助 Hook 已安装")
+            }.onFailure { error ->
+                Log.e(TAG, "Spotify nextTracks 精确辅助 Hook 安装失败", error)
+            }
+            Log.i(TAG, "Spotify nextTracks DexKit 主 Hook 与精确辅助 Hook 安装流程已启动")
+        }
+
+        private fun queueCallback(
+            source: String,
+            firstCallbackHit: AtomicBoolean,
+            reportDexValidation: Boolean,
+        ) = OfficialProviderMethodCallback { receiver, arguments ->
+            if (BuildConfig.DEBUG && firstCallbackHit.compareAndSet(false, true)) {
+                Log.i(TAG, "Spotify nextTracks Hook 首次真实回调: source=$source")
+            }
                 if (queueExtractionInProgress.get() == true) return@OfficialProviderMethodCallback
                 queueExtractionInProgress.set(true)
                 val snapshot = try {
@@ -372,36 +407,33 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                     queueExtractionInProgress.remove()
                 }
                 if (snapshot == null) {
-                    reportHookValidation(
-                        cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
-                        tracker = queueValidation,
-                        valid = false,
-                        detail = "snapshot=null",
-                    )
+                    if (reportDexValidation) {
+                        reportHookValidation(
+                            cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
+                            tracker = queueValidation,
+                            valid = false,
+                            detail = "snapshot=null",
+                        )
+                    }
                     return@OfficialProviderMethodCallback
                 }
                 val valid = snapshot.current.id.isNotBlank() && snapshot.current.title.isNotBlank()
-                reportHookValidation(
-                    cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
-                    tracker = queueValidation,
-                    valid = valid,
-                    detail = "current=${snapshot.current.id}, next=${snapshot.next?.id}",
-                )
-                if (BuildConfig.DEBUG && firstQueueHit.compareAndSet(false, true)) {
+                if (reportDexValidation) {
+                    reportHookValidation(
+                        cacheKey = SpotifyHookProfiles.queueStateQuery.cacheKey,
+                        tracker = queueValidation,
+                        valid = valid,
+                        detail = "current=${snapshot.current.id}, next=${snapshot.next?.id}",
+                    )
+                }
+                if (BuildConfig.DEBUG) {
                     Log.i(
                         TAG,
-                        "Spotify nextTracks Hook 首次命中: current=${snapshot.current.id}, " +
+                        "Spotify nextTracks 快照: source=$source, current=${snapshot.current.id}, " +
                             "next=${snapshot.next?.id}",
                     )
                 }
                 mainHandler.post { onQueueSnapshot(snapshot) }
-            }
-            host.hookAfterDexMethod(
-                application = application,
-                query = SpotifyHookProfiles.queueStateQuery,
-                callback = callback,
-            )
-            Log.i(TAG, "Spotify nextTracks DexKit Hook 安装流程已启动")
         }
 
         private fun reportHookValidation(
@@ -420,7 +452,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             if (value == null) {
                 lyricsFallback.clearTrack()
                 currentTrack = null
-                activeQueueCurrentId = null
                 lastPublishedSongKey = null
                 publishNextTrack(null, null)
                 return
@@ -437,7 +468,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             currentTrack = track
             if (!sameTrack) {
                 lyricsFallback.onTrackChanged(track.mediaId)
-                activeQueueCurrentId = null
                 publishPlaceholder(track)
             } else {
                 lyricsFallback.onTrackMetadataUpdated(track.mediaId)
@@ -455,18 +485,12 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private fun onQueueSnapshot(snapshot: SpotifyQueueSnapshot) {
             latestQueueSnapshot = snapshot
             val aligned = SpotifyQueueBinding.align(currentTrack, snapshot)
-            activeQueueCurrentId = aligned?.current?.id
-            lyricsFallback.onTrackMetadataUpdated(activeQueueCurrentId)
-            publishCachedLyrics()
             publishNextTrack(currentTrack, aligned)
         }
 
         private fun publishCachedLyrics() {
             val metadata = currentTrack ?: return
-            val ids = buildSet {
-                addAll(SpotifyTrackIdentity.candidates(metadata.mediaId))
-                activeQueueCurrentId?.let { addAll(SpotifyTrackIdentity.candidates(it)) }
-            }
+            val ids = SpotifyTrackIdentity.candidates(metadata.mediaId)
             val payload = ids.asSequence().mapNotNull(lyricsCache::get).firstOrNull() ?: return
             if (payload.lines.size > 1) {
                 lyricsFallback.onTrackMetadataUpdated(payload.trackUri)
@@ -527,8 +551,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private fun publishAlignedNextTrack() {
             val metadata = currentTrack
             val snapshot = SpotifyQueueBinding.align(metadata, latestQueueSnapshot)
-            activeQueueCurrentId = snapshot?.current?.id
-            publishCachedLyrics()
             publishNextTrack(metadata, snapshot)
         }
 
