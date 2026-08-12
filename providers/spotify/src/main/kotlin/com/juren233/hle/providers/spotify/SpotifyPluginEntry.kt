@@ -13,10 +13,10 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderConstructorCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodResultCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
 import io.github.proify.lyricon.lyric.model.LyricWord
@@ -119,27 +119,39 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
 
         private fun installLyricsHook() {
-            val callback = OfficialProviderConstructorCallback { _, arguments ->
-                    val payload = SpotifyLyricsSuccessEventExtractor.extract(arguments)
-                    if (payload == null) {
-                        if (BuildConfig.DEBUG) Log.w(TAG, "Spotify 歌词成功事件解析失败")
-                        return@OfficialProviderConstructorCallback
+            val callback = OfficialProviderMethodResultCallback { _, arguments, result ->
+                SpotifySingleSuccessObserver.wrap(
+                    result = result,
+                    trackUri = arguments.getOrNull(0) as? String,
+                    onSuccess = { trackUri, lyricsResult ->
+                        val payload = SpotifyLyricsPayloadExtractor.extract(trackUri, lyricsResult)
+                        if (payload == null) {
+                            if (BuildConfig.DEBUG) Log.w(TAG, "Spotify 异步歌词成功值解析失败")
+                            return@wrap
+                        }
+                        if (firstLyricsHit.compareAndSet(false, true)) {
+                            Log.i(
+                                TAG,
+                                "Spotify color-lyrics 异步成功首次命中: " +
+                                    "lines=${payload.lines.size}, " +
+                                    "translations=${payload.translations.size}, " +
+                                    "syncType=${payload.syncType}",
+                            )
+                        }
+                        mainHandler.post { onLyricsPayload(payload) }
+                    },
+                    onObserverFailure = { error ->
+                        if (BuildConfig.DEBUG) {
+                            Log.w(TAG, "Spotify 异步歌词观察回调失败", error)
+                        }
                     }
-                    if (BuildConfig.DEBUG && firstLyricsHit.compareAndSet(false, true)) {
-                        Log.i(
-                            TAG,
-                            "Spotify color-lyrics Hook 首次命中: track=${payload.trackUri}, " +
-                                "lines=${payload.lines.size}, translations=${payload.translations.size}, " +
-                                "syncType=${payload.syncType}",
-                        )
-                    }
-                    mainHandler.post { onLyricsPayload(payload) }
-                }
-            host.hookAfterConstructor(
-                target = SpotifyHookProfiles.lyricsSuccessConstructor,
+                )
+            }
+            host.hookMethodResult(
+                target = SpotifyHookProfiles.lyricsRequest,
                 callback = callback,
             )
-            Log.i(TAG, "Spotify color-lyrics 成功事件 Hook 已安装")
+            Log.i(TAG, "Spotify color-lyrics 公共请求结果 Hook 已安装")
         }
 
         private fun installQueueHook() {

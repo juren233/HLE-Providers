@@ -37,7 +37,7 @@ class SpotifyLyricsPayloadTest {
     }
 
     @Test
-    fun `extracts the exact constructor argument order and rejects reversed identity`() {
+    fun `binds the request URI directly to its asynchronous success value`() {
         val lyrics = FakeLyrics(
             a = listOf(FakeLine(1_000L, "Hello", emptyList())),
             b = 2,
@@ -46,19 +46,14 @@ class SpotifyLyricsPayloadTest {
         )
 
         val payload = requireNotNull(
-            SpotifyLyricsSuccessEventExtractor.extract(
-                arrayOf("spotify:track:1234567890123456789012", FakeResult(lyrics)),
+            SpotifyLyricsPayloadExtractor.extract(
+                trackKey = "spotify:track:1234567890123456789012",
+                result = FakeResult(lyrics),
             ),
         )
 
         assertEquals("spotify:track:1234567890123456789012", payload.trackUri)
         assertEquals("Hello", payload.lines.single().text)
-        assertEquals(
-            null,
-            SpotifyLyricsSuccessEventExtractor.extract(
-                arrayOf(FakeResult(lyrics), "spotify:track:1234567890123456789012"),
-            ),
-        )
     }
 
     @Test

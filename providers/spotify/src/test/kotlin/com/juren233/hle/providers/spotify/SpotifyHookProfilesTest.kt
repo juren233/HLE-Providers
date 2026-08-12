@@ -7,19 +7,24 @@
 package com.juren233.hle.providers.spotify
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SpotifyHookProfilesTest {
     @Test
-    fun `keeps exact track bound color lyrics success constructor`() {
-        val target = SpotifyHookProfiles.lyricsSuccessConstructor
+    fun `keeps exact normal playback color lyrics request descriptor`() {
+        val target = SpotifyHookProfiles.lyricsRequest
 
-        assertEquals("p.v581", target.className)
+        assertEquals("p.lg80", target.className)
+        assertEquals("b", target.methodName)
         assertEquals(
-            listOf("java.lang.String", "p.s2e"),
+            listOf("java.lang.String", "java.lang.String"),
             target.parameterTypeNames,
         )
+        assertEquals("io.reactivex.rxjava3.core.Single", target.returnTypeName)
+        assertEquals(false, target.isStatic)
+        assertNotEquals("p.v581", target.className)
     }
 
     @Test

@@ -45,6 +45,12 @@ interface OfficialProviderHost {
         callback: OfficialProviderMethodCallback,
     )
 
+    /** 在精确方法返回后观察或包装返回值。 */
+    fun hookMethodResult(
+        target: OfficialProviderMethodTarget,
+        callback: OfficialProviderMethodResultCallback,
+    )
+
     /** 为精确构造函数描述符安装执行后 Hook。 */
     fun hookAfterConstructor(
         target: OfficialProviderConstructorTarget,
@@ -321,6 +327,10 @@ internal object OfficialProviderDexMethodQueryValidator {
 
 fun interface OfficialProviderMethodCallback {
     fun onMethodCalled(receiver: Any?, arguments: Array<Any?>)
+}
+
+fun interface OfficialProviderMethodResultCallback {
+    fun onMethodReturned(receiver: Any?, arguments: Array<Any?>, result: Any?): Any?
 }
 
 /** 接收已构造实例和原始构造参数。 */
