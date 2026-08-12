@@ -13,18 +13,21 @@ import org.junit.Test
 
 class SpotifyHookProfilesTest {
     @Test
-    fun `keeps exact normal playback color lyrics request descriptor`() {
-        val target = SpotifyHookProfiles.lyricsRequest
+    fun `keeps both exact kg80 implementation request descriptors`() {
+        val targets = SpotifyHookProfiles.lyricsRequests
 
-        assertEquals("p.lg80", target.className)
-        assertEquals("b", target.methodName)
-        assertEquals(
-            listOf("java.lang.String", "java.lang.String"),
-            target.parameterTypeNames,
-        )
-        assertEquals("io.reactivex.rxjava3.core.Single", target.returnTypeName)
-        assertEquals(false, target.isStatic)
-        assertNotEquals("p.v581", target.className)
+        assertEquals(listOf("p.am80", "p.lg80"), targets.map { it.className })
+        assertEquals(2, targets.size)
+        targets.forEach { target ->
+            assertEquals("b", target.methodName)
+            assertEquals(
+                listOf("java.lang.String", "java.lang.String"),
+                target.parameterTypeNames,
+            )
+            assertEquals("io.reactivex.rxjava3.core.Single", target.returnTypeName)
+            assertEquals(false, target.isStatic)
+            assertNotEquals("p.v581", target.className)
+        }
     }
 
     @Test
