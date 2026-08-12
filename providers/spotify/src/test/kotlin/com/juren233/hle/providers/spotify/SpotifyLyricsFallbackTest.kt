@@ -15,7 +15,7 @@ class SpotifyLyricsFallbackTest {
     @Test
     fun `track change cancels old delay and active request`() {
         val fixture = Fixture()
-        fixture.coordinator.onRepositoryAvailable(REPOSITORY)
+        fixture.coordinator.onClientAvailable(CLIENT)
         fixture.coordinator.onTrackChanged(TRACK_A)
 
         fixture.scheduler.advanceBy(1_200L)
@@ -32,7 +32,7 @@ class SpotifyLyricsFallbackTest {
     @Test
     fun `same song metadata completion does not schedule twice`() {
         val fixture = Fixture()
-        fixture.coordinator.onRepositoryAvailable(REPOSITORY)
+        fixture.coordinator.onClientAvailable(CLIENT)
         fixture.coordinator.onTrackChanged(null)
         fixture.coordinator.onTrackMetadataUpdated(TRACK_A)
         fixture.coordinator.onTrackMetadataUpdated(TRACK_A)
@@ -47,7 +47,7 @@ class SpotifyLyricsFallbackTest {
     @Test
     fun `official lyrics arriving first cancel fallback`() {
         val fixture = Fixture()
-        fixture.coordinator.onRepositoryAvailable(REPOSITORY)
+        fixture.coordinator.onClientAvailable(CLIENT)
         fixture.coordinator.onTrackChanged(TRACK_A)
 
         fixture.scheduler.advanceBy(400L)
@@ -60,7 +60,7 @@ class SpotifyLyricsFallbackTest {
     @Test
     fun `official lyrics cancel an already active fallback subscription`() {
         val fixture = Fixture()
-        fixture.coordinator.onRepositoryAvailable(REPOSITORY)
+        fixture.coordinator.onClientAvailable(CLIENT)
         fixture.coordinator.onTrackChanged(TRACK_A)
         fixture.scheduler.advanceBy(1_200L)
         val request = fixture.requester.requests.single()
@@ -73,12 +73,12 @@ class SpotifyLyricsFallbackTest {
     }
 
     @Test
-    fun `repository arriving after metadata still starts one request`() {
+    fun `client arriving after metadata still starts one request`() {
         val fixture = Fixture()
         fixture.coordinator.onTrackChanged(TRACK_A)
         fixture.scheduler.advanceBy(2_000L)
 
-        fixture.coordinator.onRepositoryAvailable(REPOSITORY)
+        fixture.coordinator.onClientAvailable(CLIENT)
         fixture.scheduler.runCurrent()
 
         assertEquals(listOf(TRACK_A), fixture.requester.startedTracks)
@@ -87,13 +87,13 @@ class SpotifyLyricsFallbackTest {
     @Test
     fun `each track attempts active request at most once`() {
         val fixture = Fixture()
-        fixture.coordinator.onRepositoryAvailable(REPOSITORY)
+        fixture.coordinator.onClientAvailable(CLIENT)
         fixture.coordinator.onTrackChanged(TRACK_A)
         fixture.scheduler.advanceBy(1_200L)
         fixture.requester.requests.single().error(IllegalStateException("network"))
 
         fixture.coordinator.onTrackMetadataUpdated(TRACK_A)
-        fixture.coordinator.onRepositoryAvailable(Any())
+        fixture.coordinator.onClientAvailable(Any())
         fixture.scheduler.advanceBy(5_000L)
 
         assertEquals(listOf(TRACK_A), fixture.requester.startedTracks)
@@ -102,7 +102,7 @@ class SpotifyLyricsFallbackTest {
     @Test
     fun `old song async success cannot reach current song`() {
         val fixture = Fixture()
-        fixture.coordinator.onRepositoryAvailable(REPOSITORY)
+        fixture.coordinator.onClientAvailable(CLIENT)
         fixture.coordinator.onTrackChanged(TRACK_A)
         fixture.scheduler.advanceBy(1_200L)
         val oldRequest = fixture.requester.requests.single()
@@ -131,7 +131,7 @@ class SpotifyLyricsFallbackTest {
             get() = requests.map(Request::trackUri)
 
         override fun start(
-            repository: Any,
+            client: Any,
             trackUri: String,
             onSuccess: (Any) -> Unit,
             onError: (Throwable) -> Unit,
@@ -197,7 +197,7 @@ class SpotifyLyricsFallbackTest {
     }
 
     private companion object {
-        val REPOSITORY = Any()
+        val CLIENT = Any()
         const val TRACK_A = "spotify:track:AAAAAAAAAAAAAAAAAAAAAA"
         const val TRACK_B = "spotify:track:BBBBBBBBBBBBBBBBBBBBBB"
     }

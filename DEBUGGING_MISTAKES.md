@@ -1,5 +1,16 @@
 # Provider Debugging Mistakes
 
+## SPOTIFY-LYRICS-001: 等待歌词页面请求并从非必经 cla0 捕获客户端
+
+- 状态：Spotify Provider `1.0.8 (9)` 真机仍有歌词缺失，准备改为捕获 Spotify DI 实际创建的 v2/v3 歌词客户端；等待新候选真机验收。
+- 症状与复现：Spotify `9.1.72.1891 (144716725)` 正常播放时，超级岛与大岛可能只有覆盖整曲的单行占位；切歌后曾偶发恢复多行官方歌词，但更新 Provider、重启 Spotify 和 SystemUI 后仍能复现。用户当前无法提供本轮日志。Spotify 自 2026-08-09 安装后没有更新，不能将回归归因于 Spotify 更新。
+- 可靠运行与二进制证据：既有真机日志证明 `p.am80.b`/`p.lg80.b` 结果 Hook 安装后，冷启动当前曲可能一次也不调用，后续切歌却能返回多行 `p.s2e`；Provider `1.0.7` 从 `p.cla0(DataPool, kg80)` 构造参数捕获仓库并主动请求，真机仍未恢复，说明 `cla0` 不是稳定实例来源。Spotify 原始 `classes6.dex` 进一步确认 DI 直接构造 `p.am80(p.xl80,p.q2m,p.xhe)` 与 `p.lg80(p.g980,p.q2m,p.q2m,p.xhe)`；`am80` 封装 `color-lyrics/v3/track/{trackId}`，`lg80` 封装 v2，二者的 `b(String,String)` 会自行生成 vocal-removal、preview 和语言参数并把 protobuf 映射为 `p.s2e`。同一 DEX 确认 `p.hx3.b()` 是 `enable_v3_lyrics_endpoint`，`true` 选择 `am80`，`false` 选择 `lg80`。
+- 已尝试方向：先后尝试通用缓存 Hook、`p.v581` 构造、只 Hook `lg80`、同时 Hook `am80/lg80` 被动结果、提前安装结果 Hook、启动缓存，以及从 `cla0` 捕获 `kg80` 后主动请求；构建和单测均不能改变真机冷启动/重启后仍缺歌词的事实。
+- 不得重复的方向：不得继续扩大 `cla0`、追加 `kf80` 或调整同一请求延迟；不得裸拼 Spotify URL、读取 token、自建 Retrofit/OkHttp 或硬编码四参数接口的 preview/vocal-removal；不得让下一首队列 ID 参与歌词身份或触发；不得把 Spotify 未发生的更新作为解释。
+- 当前未知：Spotify 进程中 `am80`/`lg80` 构造 Hook 是否会在真实 DI 创建时命中；观察到的 `hx3.b()` 选择是否与捕获客户端对齐；直接调用所选包装器后是否稳定返回当前 track 的多行 `p.s2e`。
+- 下一个判别性证据：只替换歌词主动请求实例来源，记录两个构造 Hook 的安装和首次命中、`hx3.b()` 选择、当前 track 请求开始、Rx 成功/错误、解析行数与最终歌词发布；歌曲列表 Hook 保持不变。
+- 验收条件：重启 Spotify/SystemUI 后的当前歌曲以及后续切歌都能收到与 MediaMetadata ID 对齐的多行官方歌词；旧请求在切歌时取消，迟到响应不能覆盖新歌；大岛和超级岛均实际显示并随进度推进。编译、安装、Hook 安装和请求日志都不能单独关闭本条。
+
 ## SALT-INLINE-TRANSLATION-001: 将同行双语内嵌歌词误当成重复时间戳格式
 
 - 状态：已按椒盐 12.1.1 原始 DEX 重写并通过本地校验，等待真机验收。

@@ -13,18 +13,43 @@ import org.junit.Test
 
 class SpotifyHookProfilesTest {
     @Test
-    fun `keeps exact cla0 repository owner constructor from original dex`() {
-        val target = SpotifyHookProfiles.lyricsRepositoryOwner
+    fun `keeps exact v3 and v2 lyrics client constructors from original dex`() {
+        val profiles = SpotifyHookProfiles.lyricsClientConstructors
 
-        assertEquals("p.cla0", target.className)
         assertEquals(
             listOf(
-                "com.spotify.kodiak.dataloader.DataPool",
-                "p.kg80",
+                SpotifyLyricsEndpoint.V3 to "p.am80",
+                SpotifyLyricsEndpoint.V2 to "p.lg80",
             ),
-            target.parameterTypeNames,
+            profiles.map { it.endpoint to it.target.className },
         )
-        assertNotEquals("p.kf80", target.className)
+        assertEquals(
+            listOf("p.xl80", "p.q2m", "p.xhe"),
+            profiles.single { it.endpoint == SpotifyLyricsEndpoint.V3 }.target.parameterTypeNames,
+        )
+        assertEquals(
+            listOf("p.g980", "p.q2m", "p.q2m", "p.xhe"),
+            profiles.single { it.endpoint == SpotifyLyricsEndpoint.V2 }.target.parameterTypeNames,
+        )
+        assertTrue(profiles.none { it.target.className == "p.cla0" })
+        assertTrue(profiles.none { it.target.className == "p.kf80" })
+    }
+
+    @Test
+    fun `keeps exact endpoint selection method from original dex`() {
+        val target = SpotifyHookProfiles.lyricsEndpointSelection
+
+        assertEquals("p.hx3", target.className)
+        assertEquals("b", target.methodName)
+        assertEquals(emptyList<String>(), target.parameterTypeNames)
+        assertEquals("boolean", target.returnTypeName)
+        assertEquals(false, target.isStatic)
+    }
+
+    @Test
+    fun `maps enable v3 flag to the same endpoint as Spotify dependency injection`() {
+        assertEquals(SpotifyLyricsEndpoint.V3, SpotifyLyricsEndpoint.fromEnableV3(true))
+        assertEquals(SpotifyLyricsEndpoint.V2, SpotifyLyricsEndpoint.fromEnableV3(false))
     }
 
     @Test

@@ -14,19 +14,40 @@ internal object SpotifyHookProfiles {
     const val VERIFIED_VERSION_NAME = "9.1.72.1891"
     const val VERIFIED_VERSION_CODE = 144716725L
     const val PLAYER_STATE_CLASS = "com.spotify.player.model.PlayerState"
-    const val LYRICS_REPOSITORY_INTERFACE = "p.kg80"
+    const val LYRICS_CLIENT_INTERFACE = "p.kg80"
 
     // Spotify 9.1.72.1891 原始 classes6.dex：
-    // Lp/cla0;-><init>(Lcom/spotify/kodiak/dataloader/DataPool;Lp/kg80;)V
-    // 构造函数将第二个参数原样保存到字段 b，且 cla0.b(...) 官方路径会调用
-    // 该实例的 kg80.b(trackUri, null)。这里必须使用原始 DEX 名称，不能采用
-    // 反编译器显示别名，也不能自行构造 am80/lg80 或扫描任意对象图。
-    val lyricsRepositoryOwner = OfficialProviderConstructorTarget(
-        className = "p.cla0",
-        parameterTypeNames = listOf(
-            "com.spotify.kodiak.dataloader.DataPool",
-            LYRICS_REPOSITORY_INTERFACE,
+    // Lp/am80;-><init>(Lp/xl80;Lp/q2m;Lp/xhe;)V 封装 v3 Retrofit；
+    // Lp/lg80;-><init>(Lp/g980;Lp/q2m;Lp/q2m;Lp/xhe;)V 封装 v2 Retrofit。
+    // 二者都由 Spotify DI 直接创建，b(trackUri, language) 会自行计算
+    // vocalRemoval、preview 与 clientLanguage，并把 protobuf 映射成 p.s2e。
+    // 必须捕获构造完成后的实例，不能自行构造客户端或读取 token。
+    val lyricsClientConstructors = listOf(
+        SpotifyLyricsClientConstructorProfile(
+            endpoint = SpotifyLyricsEndpoint.V3,
+            target = OfficialProviderConstructorTarget(
+                className = "p.am80",
+                parameterTypeNames = listOf("p.xl80", "p.q2m", "p.xhe"),
+            ),
         ),
+        SpotifyLyricsClientConstructorProfile(
+            endpoint = SpotifyLyricsEndpoint.V2,
+            target = OfficialProviderConstructorTarget(
+                className = "p.lg80",
+                parameterTypeNames = listOf("p.g980", "p.q2m", "p.q2m", "p.xhe"),
+            ),
+        ),
+    )
+
+    // p.hx3.b() 对应远程配置 enable_v3_lyrics_endpoint。原始 DI 分支确认
+    // true 选择 v3 am80，false 选择 v2 lg80。观察结果只决定使用哪个已经
+    // 捕获的 Spotify 客户端，不修改返回值，也不自行覆盖远程配置。
+    val lyricsEndpointSelection = OfficialProviderMethodTarget(
+        className = "p.hx3",
+        methodName = "b",
+        parameterTypeNames = emptyList(),
+        returnTypeName = "boolean",
+        isStatic = false,
     )
 
     // Spotify 9.1.72.1891 原始 DEX 确认 p.kg80 只有两个具体实现，
@@ -85,3 +106,19 @@ internal object SpotifyHookProfiles {
     )
 
 }
+
+internal enum class SpotifyLyricsEndpoint {
+    V2,
+    V3,
+    ;
+
+    companion object {
+        fun fromEnableV3(enableV3: Boolean): SpotifyLyricsEndpoint =
+            if (enableV3) V3 else V2
+    }
+}
+
+internal data class SpotifyLyricsClientConstructorProfile(
+    val endpoint: SpotifyLyricsEndpoint,
+    val target: OfficialProviderConstructorTarget,
+)

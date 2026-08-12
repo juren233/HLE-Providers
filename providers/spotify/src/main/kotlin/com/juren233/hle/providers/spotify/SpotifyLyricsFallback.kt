@@ -24,9 +24,9 @@ internal interface SpotifyLyricsFallbackScheduler {
     ): SpotifyLyricsFallbackCancellation
 }
 
-internal fun interface SpotifyLyricsFallbackRequestStarter<Repository> {
+internal fun interface SpotifyLyricsFallbackRequestStarter<Client> {
     fun start(
-        repository: Repository,
+        client: Client,
         trackUri: String,
         onSuccess: (Any) -> Unit,
         onError: (Throwable) -> Unit,
@@ -36,13 +36,14 @@ internal fun interface SpotifyLyricsFallbackRequestStarter<Repository> {
 /**
  * 每首歌最多发起一次的 Spotify 官方歌词主动请求兜底。
  *
- * 该状态机不猜测 Spotify 对象图：仓库实例只能来自已验证的 cla0 构造参数。
+ * 该状态机不猜测 Spotify 对象图：客户端只能来自已验证的 am80/lg80 构造实例，
+ * 并由 Spotify 自己的 enable_v3_lyrics_endpoint 选择结果决定使用哪一个。
  * 所有调用均应在同一调度线程执行；生产环境使用 Spotify 主线程 Handler。
  */
-internal class SpotifyLyricsFallbackCoordinator<Repository>(
+internal class SpotifyLyricsFallbackCoordinator<Client>(
     private val scheduler: SpotifyLyricsFallbackScheduler,
     private val requestDelayMs: Long,
-    private val requestStarter: SpotifyLyricsFallbackRequestStarter<Repository>,
+    private val requestStarter: SpotifyLyricsFallbackRequestStarter<Client>,
     private val onSuccess: (trackUri: String, value: Any) -> Unit,
     private val onFailure: (trackUri: String, error: Throwable) -> Unit = { _, _ -> },
     private val onScheduled: (trackUri: String, delayMs: Long) -> Unit = { _, _ -> },
@@ -52,7 +53,7 @@ internal class SpotifyLyricsFallbackCoordinator<Repository>(
     private var hasTrack = false
     private var currentTrackUri: String? = null
     private var firstSeenAtMs = 0L
-    private var repository: Repository? = null
+    private var client: Client? = null
     private var attempted = false
     private var lyricsAvailable = false
     private var scheduledRequest: SpotifyLyricsFallbackCancellation? = null
@@ -89,8 +90,8 @@ internal class SpotifyLyricsFallbackCoordinator<Repository>(
         lyricsAvailable = false
     }
 
-    fun onRepositoryAvailable(value: Repository) {
-        repository = value
+    fun onClientAvailable(value: Client) {
+        client = value
         scheduleIfNeeded()
     }
 
@@ -105,7 +106,7 @@ internal class SpotifyLyricsFallbackCoordinator<Repository>(
         if (!hasTrack || attempted || lyricsAvailable) return
         if (scheduledRequest != null || activeRequestGeneration != null) return
         val trackUri = currentTrackUri ?: return
-        repository ?: return
+        client ?: return
         val requestGeneration = generation
         val elapsed = (scheduler.nowMs() - firstSeenAtMs).coerceAtLeast(0L)
         val remainingDelay = (requestDelayMs - elapsed).coerceAtLeast(0L)
@@ -129,13 +130,13 @@ internal class SpotifyLyricsFallbackCoordinator<Repository>(
         ) {
             return
         }
-        val activeRepository = repository ?: return
+        val activeClient = client ?: return
         attempted = true
         activeRequestGeneration = requestGeneration
         onRequestStarted(trackUri)
         val cancellation = runCatching {
             requestStarter.start(
-                repository = activeRepository,
+                client = activeClient,
                 trackUri = trackUri,
                 onSuccess = { value -> onRequestSuccess(requestGeneration, trackUri, value) },
                 onError = { error -> onRequestFailure(requestGeneration, trackUri, error) },
@@ -195,6 +196,48 @@ internal class SpotifyLyricsFallbackCoordinator<Repository>(
     }
 }
 
+internal data class SpotifySelectedLyricsClient<Client>(
+    val endpoint: SpotifyLyricsEndpoint,
+    val client: Client,
+)
+
+/**
+ * 合并两个独立到达的运行时事实：Spotify 已构造的 v2/v3 客户端，以及
+ * enable_v3_lyrics_endpoint 的真实选择结果。只有二者对齐后才交给请求状态机。
+ */
+internal class SpotifyLyricsClientSelector<Client> {
+    private val clients = mutableMapOf<SpotifyLyricsEndpoint, Client>()
+    private var selectedEndpoint: SpotifyLyricsEndpoint? = null
+    private var deliveredEndpoint: SpotifyLyricsEndpoint? = null
+    private var deliveredClient: Client? = null
+
+    @Synchronized
+    fun onClientAvailable(
+        endpoint: SpotifyLyricsEndpoint,
+        client: Client,
+    ): SpotifySelectedLyricsClient<Client>? {
+        clients[endpoint] = client
+        return selectionIfChanged()
+    }
+
+    @Synchronized
+    fun onEndpointSelected(
+        endpoint: SpotifyLyricsEndpoint,
+    ): SpotifySelectedLyricsClient<Client>? {
+        selectedEndpoint = endpoint
+        return selectionIfChanged()
+    }
+
+    private fun selectionIfChanged(): SpotifySelectedLyricsClient<Client>? {
+        val endpoint = selectedEndpoint ?: return null
+        val client = clients[endpoint] ?: return null
+        if (endpoint == deliveredEndpoint && client === deliveredClient) return null
+        deliveredEndpoint = endpoint
+        deliveredClient = client
+        return SpotifySelectedLyricsClient(endpoint, client)
+    }
+}
+
 internal class SpotifyHandlerLyricsFallbackScheduler(
     private val handler: Handler,
 ) : SpotifyLyricsFallbackScheduler {
@@ -210,29 +253,29 @@ internal class SpotifyHandlerLyricsFallbackScheduler(
     }
 }
 
-/** 使用 Spotify 进程自身的 RxJava 类型主动订阅 kg80.b(trackUri, null)。 */
-internal object SpotifyLyricsRepositoryRequester {
+/** 使用 Spotify 进程自身的 RxJava 类型主动订阅所选 am80/lg80 的 kg80.b。 */
+internal object SpotifyLyricsClientRequester {
     private const val SINGLE_CLASS_NAME = "io.reactivex.rxjava3.core.Single"
     private const val CONSUMER_CLASS_NAME = "io.reactivex.rxjava3.functions.Consumer"
     private const val DISPOSABLE_CLASS_NAME = "io.reactivex.rxjava3.disposables.Disposable"
 
     fun start(
-        repository: Any,
+        client: Any,
         trackUri: String,
         onSuccess: (Any) -> Unit,
         onError: (Throwable) -> Unit,
     ): SpotifyLyricsFallbackCancellation {
-        val classLoader = repository.javaClass.classLoader
+        val classLoader = client.javaClass.classLoader
             ?: Thread.currentThread().contextClassLoader
-        val repositoryInterface = Class.forName(
-            SpotifyHookProfiles.LYRICS_REPOSITORY_INTERFACE,
+        val clientInterface = Class.forName(
+            SpotifyHookProfiles.LYRICS_CLIENT_INTERFACE,
             false,
             classLoader,
         )
-        check(repositoryInterface.isInstance(repository)) {
-            "Captured object does not implement ${SpotifyHookProfiles.LYRICS_REPOSITORY_INTERFACE}"
+        check(clientInterface.isInstance(client)) {
+            "Captured object does not implement ${SpotifyHookProfiles.LYRICS_CLIENT_INTERFACE}"
         }
-        val requestMethod = repositoryInterface.getMethod(
+        val requestMethod = clientInterface.getMethod(
             "b",
             String::class.java,
             String::class.java,
@@ -240,7 +283,7 @@ internal object SpotifyLyricsRepositoryRequester {
         check(requestMethod.returnType.name == SINGLE_CLASS_NAME) {
             "Unexpected kg80.b return type: ${requestMethod.returnType.name}"
         }
-        val single = requestMethod.invoke(repository, trackUri, null)
+        val single = requestMethod.invoke(client, trackUri, null)
             ?: error("kg80.b returned null")
         val rxClassLoader = single.javaClass.classLoader ?: classLoader
         val consumerClass = Class.forName(CONSUMER_CLASS_NAME, false, rxClassLoader)

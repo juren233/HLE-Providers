@@ -50,14 +50,14 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         val startup = SpotifyStartupCoordinator(host)
         val runtimeStarted = AtomicBoolean(false)
         startup.installLyricsHooks()
-        startup.installLyricsRepositoryHook()
+        startup.installLyricsClientHooks()
         host.hookApplication { application ->
             if (Application.getProcessName() != host.packageName) return@hookApplication
             if (!runtimeStarted.compareAndSet(false, true)) return@hookApplication
             val createdRuntime = SpotifyRuntime(application, host).also(SpotifyRuntime::start)
             startup.attach(createdRuntime)
             startup.installLyricsHooks()
-            startup.installLyricsRepositoryHook()
+            startup.installLyricsClientHooks()
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
@@ -75,12 +75,15 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
     ) {
         private val stateLock = Any()
         private val lyricsHookInstallLock = Any()
-        private val lyricsRepositoryHookInstallLock = Any()
+        private val lyricsClientHookInstallLock = Any()
         private val installedLyricsTargets = linkedSetOf<String>()
-        private var lyricsRepositoryHookInstalled = false
-        private val firstLyricsRepositoryHit = AtomicBoolean(false)
+        private val installedLyricsClientConstructors = linkedSetOf<SpotifyLyricsEndpoint>()
+        private var lyricsEndpointSelectionHookInstalled = false
+        private val firstLyricsClientHits = mutableMapOf<SpotifyLyricsEndpoint, AtomicBoolean>()
+        private val firstLyricsEndpointSelectionHit = AtomicBoolean(false)
         private val firstLyricsRequestHit = AtomicBoolean(false)
         private val firstLyricsHit = AtomicBoolean(false)
+        private val lyricsClientSelector = SpotifyLyricsClientSelector<Any>()
         private val pending = SpotifyStartupBuffer<
             MediaMetadata,
             SpotifyLyricsPayload,
@@ -88,7 +91,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         >(MAX_STARTUP_LYRICS_CACHE_SIZE, SpotifyLyricsPayload::trackUri)
 
         private var activeRuntime: SpotifyRuntime? = null
-        private var pendingLyricsRepository: Any? = null
+        private var pendingLyricsClient: SpotifySelectedLyricsClient<Any>? = null
 
         fun installLyricsHooks() {
             synchronized(lyricsHookInstallLock) {
@@ -157,25 +160,57 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             }
         }
 
-        fun installLyricsRepositoryHook() {
-            synchronized(lyricsRepositoryHookInstallLock) {
-                if (lyricsRepositoryHookInstalled) return
-                runCatching {
-                    host.hookAfterConstructor(
-                        target = SpotifyHookProfiles.lyricsRepositoryOwner,
-                        callback = OfficialProviderConstructorCallback { _, arguments ->
-                            arguments.getOrNull(1)?.let(::onLyricsRepository)
-                        },
-                    )
-                }.onSuccess {
-                    lyricsRepositoryHookInstalled = true
-                    Log.i(TAG, "Spotify cla0 歌词仓库构造 Hook 已安装")
-                }.onFailure { error ->
-                    Log.e(
-                        TAG,
-                        "Spotify cla0 歌词仓库构造 Hook 安装失败，等待生命周期阶段重试",
-                        error,
-                    )
+        fun installLyricsClientHooks() {
+            synchronized(lyricsClientHookInstallLock) {
+                SpotifyHookProfiles.lyricsClientConstructors.forEach { profile ->
+                    if (profile.endpoint in installedLyricsClientConstructors) return@forEach
+                    runCatching {
+                        host.hookAfterConstructor(
+                            target = profile.target,
+                            callback = OfficialProviderConstructorCallback { instance, _ ->
+                                instance?.let { onLyricsClient(profile.endpoint, it) }
+                            },
+                        )
+                    }.onSuccess {
+                        installedLyricsClientConstructors += profile.endpoint
+                        Log.i(
+                            TAG,
+                            "Spotify ${profile.endpoint} 歌词客户端构造 Hook 已安装: " +
+                                profile.target.className,
+                        )
+                    }.onFailure { error ->
+                        Log.e(
+                            TAG,
+                            "Spotify ${profile.endpoint} 歌词客户端构造 Hook 安装失败，" +
+                                "等待生命周期阶段重试",
+                            error,
+                        )
+                    }
+                }
+
+                if (!lyricsEndpointSelectionHookInstalled) {
+                    runCatching {
+                        host.hookMethodResult(
+                            target = SpotifyHookProfiles.lyricsEndpointSelection,
+                            callback = OfficialProviderMethodResultCallback { _, _, result ->
+                                (result as? Boolean)?.let { enableV3 ->
+                                    onLyricsEndpointSelected(
+                                        SpotifyLyricsEndpoint.fromEnableV3(enableV3),
+                                    )
+                                }
+                                result
+                            },
+                        )
+                    }.onSuccess {
+                        lyricsEndpointSelectionHookInstalled = true
+                        Log.i(TAG, "Spotify 歌词 endpoint 选择 Hook 已安装: p.hx3#b")
+                    }.onFailure { error ->
+                        Log.e(
+                            TAG,
+                            "Spotify 歌词 endpoint 选择 Hook 安装失败，等待生命周期阶段重试",
+                            error,
+                        )
+                    }
                 }
             }
         }
@@ -184,7 +219,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             val startupState = synchronized(stateLock) {
                 if (activeRuntime != null) return
                 activeRuntime = runtime
-                pending.drain() to pendingLyricsRepository.also { pendingLyricsRepository = null }
+                pending.drain() to pendingLyricsClient.also { pendingLyricsClient = null }
             }
             runtime.postStartupSnapshot(startupState.first, startupState.second)
         }
@@ -226,17 +261,44 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             runtime.postLyricsPayload(payload)
         }
 
-        private fun onLyricsRepository(repository: Any) {
-            if (firstLyricsRepositoryHit.compareAndSet(false, true)) {
-                Log.i(TAG, "Spotify cla0 歌词仓库构造 Hook 首次命中: ${repository.javaClass.name}")
+        private fun onLyricsClient(
+            endpoint: SpotifyLyricsEndpoint,
+            client: Any,
+        ) {
+            val firstHit = synchronized(firstLyricsClientHits) {
+                firstLyricsClientHits.getOrPut(endpoint, ::AtomicBoolean)
             }
+            if (firstHit.compareAndSet(false, true)) {
+                Log.i(
+                    TAG,
+                    "Spotify $endpoint 歌词客户端构造 Hook 首次命中: ${client.javaClass.name}",
+                )
+            }
+            lyricsClientSelector.onClientAvailable(endpoint, client)?.let(::onSelectedLyricsClient)
+        }
+
+        private fun onLyricsEndpointSelected(endpoint: SpotifyLyricsEndpoint) {
+            if (firstLyricsEndpointSelectionHit.compareAndSet(false, true)) {
+                Log.i(TAG, "Spotify 歌词 endpoint 首次选择: $endpoint")
+            } else if (BuildConfig.DEBUG) {
+                Log.i(TAG, "Spotify 歌词 endpoint 选择: $endpoint")
+            }
+            lyricsClientSelector.onEndpointSelected(endpoint)?.let(::onSelectedLyricsClient)
+        }
+
+        private fun onSelectedLyricsClient(selection: SpotifySelectedLyricsClient<Any>) {
+            Log.i(
+                TAG,
+                "Spotify 歌词客户端已就绪: endpoint=${selection.endpoint}, " +
+                    "class=${selection.client.javaClass.name}",
+            )
             val runtime = synchronized(stateLock) {
                 activeRuntime ?: run {
-                    pendingLyricsRepository = repository
+                    pendingLyricsClient = selection
                     return
                 }
             }
-            runtime.postLyricsRepository(repository)
+            runtime.postLyricsClient(selection)
         }
     }
 
@@ -263,9 +325,9 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private val lyricsFallback = SpotifyLyricsFallbackCoordinator(
             scheduler = SpotifyHandlerLyricsFallbackScheduler(mainHandler),
             requestDelayMs = LYRICS_FALLBACK_DELAY_MS,
-            requestStarter = SpotifyLyricsFallbackRequestStarter<Any> { repository, trackUri, success, error ->
-                SpotifyLyricsRepositoryRequester.start(
-                    repository = repository,
+            requestStarter = SpotifyLyricsFallbackRequestStarter<Any> { client, trackUri, success, error ->
+                SpotifyLyricsClientRequester.start(
+                    client = client,
                     trackUri = trackUri,
                     onSuccess = { value -> mainHandler.post { success(value) } },
                     onError = { failure -> mainHandler.post { error(failure) } },
@@ -292,7 +354,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 }
             },
             onRequestStarted = { trackUri ->
-                Log.i(TAG, "Spotify 主动歌词请求开始: track=$trackUri")
+                Log.i(TAG, "Spotify 内部接口歌词请求开始: track=$trackUri")
             },
         )
 
@@ -340,8 +402,11 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             mainHandler.post { onLyricsPayload(payload) }
         }
 
-        fun postLyricsRepository(repository: Any) {
-            mainHandler.post { lyricsFallback.onRepositoryAvailable(repository) }
+        fun postLyricsClient(selection: SpotifySelectedLyricsClient<Any>) {
+            mainHandler.post {
+                Log.i(TAG, "Spotify 内部歌词接口启用: endpoint=${selection.endpoint}")
+                lyricsFallback.onClientAvailable(selection.client)
+            }
         }
 
         fun postStartupSnapshot(
@@ -350,10 +415,13 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 SpotifyLyricsPayload,
                 PlaybackState,
             >,
-            lyricsRepository: Any?,
+            lyricsClient: SpotifySelectedLyricsClient<Any>?,
         ) {
             mainHandler.post {
-                lyricsRepository?.let(lyricsFallback::onRepositoryAvailable)
+                lyricsClient?.let { selection ->
+                    Log.i(TAG, "Spotify 启动阶段内部歌词接口启用: endpoint=${selection.endpoint}")
+                    lyricsFallback.onClientAvailable(selection.client)
+                }
                 if (snapshot.metadataReceived) onMetadata(snapshot.metadata)
                 snapshot.lyrics.forEach(::onLyricsPayload)
                 if (snapshot.playbackStateReceived) {

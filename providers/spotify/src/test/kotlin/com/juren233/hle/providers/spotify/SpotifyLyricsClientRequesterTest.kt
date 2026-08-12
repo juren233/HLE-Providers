@@ -13,21 +13,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import p.kg80
 
-class SpotifyLyricsRepositoryRequesterTest {
+class SpotifyLyricsClientRequesterTest {
     @Test
     fun `invokes exact kg80 request and observes success through target RxJava`() {
         val value = Any()
-        val repository = FakeRepository(Single.just(value))
+        val client = FakeClient(Single.just(value))
         val successes = mutableListOf<Any>()
 
-        SpotifyLyricsRepositoryRequester.start(
-            repository = repository,
+        SpotifyLyricsClientRequester.start(
+            client = client,
             trackUri = TRACK,
             onSuccess = successes::add,
             onError = { error -> throw AssertionError(error) },
         )
 
-        assertEquals(listOf(TRACK to null), repository.calls)
+        assertEquals(listOf(TRACK to null), client.calls)
         assertEquals(1, successes.size)
         assertSame(value, successes.single())
     }
@@ -35,11 +35,11 @@ class SpotifyLyricsRepositoryRequesterTest {
     @Test
     fun `forwards target RxJava error`() {
         val failure = IllegalStateException("network")
-        val repository = FakeRepository(Single.error(failure))
+        val client = FakeClient(Single.error(failure))
         val errors = mutableListOf<Throwable>()
 
-        SpotifyLyricsRepositoryRequester.start(
-            repository = repository,
+        SpotifyLyricsClientRequester.start(
+            client = client,
             trackUri = TRACK,
             onSuccess = { error("unexpected success") },
             onError = errors::add,
@@ -51,9 +51,9 @@ class SpotifyLyricsRepositoryRequesterTest {
     @Test
     fun `cancellation disposes returned target subscription`() {
         val response = Single.just<Any>(Any())
-        val repository = FakeRepository(response)
-        val cancellation = SpotifyLyricsRepositoryRequester.start(
-            repository = repository,
+        val client = FakeClient(response)
+        val cancellation = SpotifyLyricsClientRequester.start(
+            client = client,
             trackUri = TRACK,
             onSuccess = {},
             onError = { error -> throw AssertionError(error) },
@@ -65,7 +65,7 @@ class SpotifyLyricsRepositoryRequesterTest {
         assertTrue(requireNotNull(response.lastDisposable).isDisposed)
     }
 
-    private class FakeRepository(
+    private class FakeClient(
         private val response: Single<Any>,
     ) : kg80 {
         val calls = mutableListOf<Pair<String, String?>>()
