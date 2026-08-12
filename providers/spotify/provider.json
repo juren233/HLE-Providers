@@ -3,9 +3,9 @@
   "pluginApiVersion": 3,
   "pluginId": "spotify",
   "displayName": "Spotify",
-  "versionName": "1.0.2",
-  "versionCode": 3,
-  "minCoreVersionCode": 140077,
+  "versionName": "1.0.3",
+  "versionCode": 4,
+  "minCoreVersionCode": 140088,
   "entryClass": "com.juren233.hle.providers.spotify.SpotifyPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.spotify",
   "targetPackages": [

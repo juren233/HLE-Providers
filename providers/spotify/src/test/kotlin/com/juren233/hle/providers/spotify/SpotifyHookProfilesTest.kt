@@ -12,17 +12,14 @@ import org.junit.Test
 
 class SpotifyHookProfilesTest {
     @Test
-    fun `keeps semantic color lyrics cache query`() {
-        val query = SpotifyHookProfiles.lyricsQuery
-        val target = requireNotNull(query.preferredTarget)
+    fun `keeps exact track bound color lyrics success constructor`() {
+        val target = SpotifyHookProfiles.lyricsSuccessConstructor
 
-        assertEquals("p.tix0", target.className)
-        assertEquals("n", target.methodName)
+        assertEquals("p.v581", target.className)
         assertEquals(
-            listOf("Ljava/util/AbstractMap;->put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
-            query.requiredInvokedMethodDescriptors,
+            listOf("java.lang.String", "p.s2e"),
+            target.parameterTypeNames,
         )
-        assertEquals(listOf("accept"), query.requiredCallerMethodNames)
     }
 
     @Test

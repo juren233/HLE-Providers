@@ -123,6 +123,15 @@ internal object SpotifyLyricsPayloadExtractor {
         value.stringFields().size == 1 && value.instanceFields().any { it.read(value).asObjectList().isNotEmpty() }
 }
 
+internal object SpotifyLyricsSuccessEventExtractor {
+    /** 按原始构造参数顺序提取 track URI 与已解析歌词。 */
+    fun extract(arguments: Array<Any?>): SpotifyLyricsPayload? =
+        SpotifyLyricsPayloadExtractor.extract(
+            trackKey = arguments.getOrNull(0),
+            result = arguments.getOrNull(1),
+        )
+}
+
 internal object SpotifyLyricsTimelineMapper {
     fun map(
         payload: SpotifyLyricsPayload,

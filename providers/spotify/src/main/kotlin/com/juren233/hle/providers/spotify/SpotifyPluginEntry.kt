@@ -13,6 +13,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderConstructorCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
@@ -64,7 +65,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private val mainHandler = Handler(Looper.getMainLooper())
         private val firstLyricsHit = AtomicBoolean(false)
         private val firstQueueHit = AtomicBoolean(false)
-        private val lyricsValidation = SpotifyHookValidationTracker()
         private val queueValidation = SpotifyHookValidationTracker()
         private val queueExtractionInProgress = ThreadLocal<Boolean>()
         private val lyricsCache = object : LinkedHashMap<String, SpotifyLyricsPayload>(32, 0.75f, true) {
@@ -119,28 +119,12 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
 
         private fun installLyricsHook() {
-            val callback = OfficialProviderMethodCallback { _, arguments ->
-                    val payload = SpotifyLyricsPayloadExtractor.extract(
-                        trackKey = arguments.getOrNull(0),
-                        result = arguments.getOrNull(1),
-                    )
+            val callback = OfficialProviderConstructorCallback { _, arguments ->
+                    val payload = SpotifyLyricsSuccessEventExtractor.extract(arguments)
                     if (payload == null) {
-                        reportHookValidation(
-                            cacheKey = SpotifyHookProfiles.lyricsQuery.cacheKey,
-                            tracker = lyricsValidation,
-                            valid = false,
-                            detail = "payload=null",
-                        )
-                        return@OfficialProviderMethodCallback
+                        if (BuildConfig.DEBUG) Log.w(TAG, "Spotify 歌词成功事件解析失败")
+                        return@OfficialProviderConstructorCallback
                     }
-                    val valid = payload.lines.isNotEmpty()
-                    reportHookValidation(
-                        cacheKey = SpotifyHookProfiles.lyricsQuery.cacheKey,
-                        tracker = lyricsValidation,
-                        valid = valid,
-                        detail = "track=${payload.trackUri}, lines=${payload.lines.size}, " +
-                            "translations=${payload.translations.size}",
-                    )
                     if (BuildConfig.DEBUG && firstLyricsHit.compareAndSet(false, true)) {
                         Log.i(
                             TAG,
@@ -151,11 +135,11 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                     }
                     mainHandler.post { onLyricsPayload(payload) }
                 }
-            host.hookAfterDexMethod(
-                application = application,
-                query = SpotifyHookProfiles.lyricsQuery,
+            host.hookAfterConstructor(
+                target = SpotifyHookProfiles.lyricsSuccessConstructor,
                 callback = callback,
             )
+            Log.i(TAG, "Spotify color-lyrics 成功事件 Hook 已安装")
         }
 
         private fun installQueueHook() {

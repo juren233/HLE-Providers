@@ -45,6 +45,12 @@ interface OfficialProviderHost {
         callback: OfficialProviderMethodCallback,
     )
 
+    /** 为精确构造函数描述符安装执行后 Hook。 */
+    fun hookAfterConstructor(
+        target: OfficialProviderConstructorTarget,
+        callback: OfficialProviderConstructorCallback,
+    )
+
     /**
      * Resolves an obfuscation-sensitive method from the original target DEX.
      *
@@ -89,6 +95,12 @@ data class OfficialProviderMethodTarget(
     val parameterTypeNames: List<String> = emptyList(),
     val returnTypeName: String,
     val isStatic: Boolean,
+)
+
+/** 由原始二进制类名和参数类型组成的构造函数目标。 */
+data class OfficialProviderConstructorTarget(
+    val className: String,
+    val parameterTypeNames: List<String> = emptyList(),
 )
 
 enum class OfficialProviderDexTypeSource {
@@ -309,6 +321,11 @@ internal object OfficialProviderDexMethodQueryValidator {
 
 fun interface OfficialProviderMethodCallback {
     fun onMethodCalled(receiver: Any?, arguments: Array<Any?>)
+}
+
+/** 接收已构造实例和原始构造参数。 */
+fun interface OfficialProviderConstructorCallback {
+    fun onConstructed(instance: Any?, arguments: Array<Any?>)
 }
 
 fun interface OfficialProviderDexMethodsCallback {

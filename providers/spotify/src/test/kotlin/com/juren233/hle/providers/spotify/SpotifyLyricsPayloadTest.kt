@@ -37,6 +37,31 @@ class SpotifyLyricsPayloadTest {
     }
 
     @Test
+    fun `extracts the exact constructor argument order and rejects reversed identity`() {
+        val lyrics = FakeLyrics(
+            a = listOf(FakeLine(1_000L, "Hello", emptyList())),
+            b = 2,
+            c = emptyList(),
+            d = "en",
+        )
+
+        val payload = requireNotNull(
+            SpotifyLyricsSuccessEventExtractor.extract(
+                arrayOf("spotify:track:1234567890123456789012", FakeResult(lyrics)),
+            ),
+        )
+
+        assertEquals("spotify:track:1234567890123456789012", payload.trackUri)
+        assertEquals("Hello", payload.lines.single().text)
+        assertEquals(
+            null,
+            SpotifyLyricsSuccessEventExtractor.extract(
+                arrayOf(FakeResult(lyrics), "spotify:track:1234567890123456789012"),
+            ),
+        )
+    }
+
+    @Test
     fun `maps syllable timing and translation by line index`() {
         val payload = SpotifyLyricsPayload(
             trackUri = "spotify:track:1234567890123456789012",
