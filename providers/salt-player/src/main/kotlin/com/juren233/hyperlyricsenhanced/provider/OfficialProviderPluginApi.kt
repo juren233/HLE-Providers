@@ -56,6 +56,15 @@ interface OfficialProviderHost {
         valid: Boolean,
         detail: String? = null,
     ) = Unit
+
+    /**
+     * 读取主模块远端 Hook 配置中的布尔键，Provider Pack 用它决定本地歌词策略。
+     *
+     * 例如椒盐音乐在“优先使用在线源”开启时跳过内置歌词与同目录歌词读取。
+     * 默认实现返回 [default]，保持旧 Provider Pack 的二进制兼容；调用此方法的
+     * Pack 应相应提高 manifest 的 minCoreVersionCode，避免在旧主模块上静默降级。
+     */
+    fun getBooleanPreference(key: String, default: Boolean): Boolean = default
 }
 
 fun interface OfficialProviderApplicationCallback {

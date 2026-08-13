@@ -33,6 +33,11 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
     private const val PROVIDER_PACKAGE =
         "com.juren233.hyperlyricsenhanced.provider.salt-player"
 
+    /** 主模块远端 Hook 配置键，与 HyperLyrics-Enhanced 的 RootConstants 保持一致。 */
+    private const val KEY_ONLINE_TRANSLATION_APP_SALT = "key_hook_online_translation_app_salt"
+    private const val KEY_ONLINE_TRANSLATION_SALT_PREFER_ONLINE =
+        "key_hook_online_translation_salt_prefer_online"
+
     private val initialized = AtomicBoolean(false)
 
     @Volatile
@@ -242,6 +247,28 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                 localLyricsGeneration.incrementAndGet()
                 pendingLocalLyricsTask?.cancel(true)
                 pendingLocalLyricsTask = null
+                return
+            }
+            val preferOnlineSources = host.getBooleanPreference(
+                KEY_ONLINE_TRANSLATION_APP_SALT,
+                default = false,
+            ) && host.getBooleanPreference(
+                KEY_ONLINE_TRANSLATION_SALT_PREFER_ONLINE,
+                default = false,
+            )
+            if (preferOnlineSources) {
+                // “优先使用在线源”：不再读取歌曲文件内置歌词与同目录歌词文件，
+                // 交由主模块在线匹配；清掉可能残留的本地歌词文档并发布占位。
+                localLyricsGeneration.incrementAndGet()
+                pendingLocalLyricsTask?.cancel(true)
+                pendingLocalLyricsTask = null
+                if (document != null) {
+                    document = null
+                    publishCurrent()
+                }
+                if (BuildConfig.DEBUG) {
+                    Log.i(TAG, "椒盐音乐优先使用在线源，跳过本地文件歌词读取")
+                }
                 return
             }
             if (requestKey == lastLocalLyricsRequestKey) return
