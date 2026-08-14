@@ -5,3 +5,6 @@ dist/
 .signing/
 local.properties
 
+DEBUGGING_MISTAKES.md
+.codegraph/
+.trae/
