@@ -195,8 +195,7 @@ internal class KuwoNextTrackResolver private constructor(
                         profile.playback.nextContentMethodName,
                         profile.playback.contentClassName,
                     ),
-                    declaringClassNamePrefix =
-                        profile.playback.managerClassName.substringBeforeLast('.') + ".",
+                    declaringClassNamePrefix = "cn.kuwo.",
                     requiredStrings = listOf(
                         "随机模式，获取歌曲下一曲,随机索引空，现在生成",
                     ),

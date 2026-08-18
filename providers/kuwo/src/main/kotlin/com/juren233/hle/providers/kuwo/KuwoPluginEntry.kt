@@ -10,6 +10,7 @@ package com.juren233.hle.providers.kuwo
 
 import android.app.Application
 import android.media.MediaMetadata
+import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -54,7 +55,7 @@ object KuwoPluginEntry : OfficialProviderPlugin {
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
-                runtime?.provider?.player?.setPlaybackState(state)
+                runtime?.onPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
                 runtime?.onMetadata(metadata)
@@ -76,6 +77,7 @@ object KuwoPluginEntry : OfficialProviderPlugin {
 
         private val requestGuard = KuwoRequestGuard()
         private val firstNextTrackHit = AtomicBoolean(false)
+        private val nextTrackSetupStarted = AtomicBoolean(false)
 
         private var lastSong: Song? = null
         private var lastNextTrackFrame: String? = null
@@ -115,8 +117,14 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                 it.register()
             }
             runtime = this
-            mainHandler.post(::startNextTrackCapture)
             Log.i(TAG, "酷我音乐 Lyricon Provider 已注册: process=${Application.getProcessName()}")
+        }
+
+        fun onPlaybackState(state: PlaybackState?) {
+            provider?.player?.setPlaybackState(state)
+            if (state?.state == PlaybackState.STATE_PLAYING) {
+                ensureNextTrackCaptureStarted()
+            }
         }
 
         fun onMetadata(value: MediaMetadata?) {
@@ -135,6 +143,7 @@ object KuwoPluginEntry : OfficialProviderPlugin {
             )
             if (track.mediaId.isNullOrBlank() && track.title.isNullOrBlank()) return
             currentTrack = track
+            ensureNextTrackCaptureStarted()
             requestNextTrackCapture()
 
             val directRid = KuwoTrackIdResolver.directRid(track.mediaId)
@@ -144,6 +153,12 @@ object KuwoPluginEntry : OfficialProviderPlugin {
 
             executor.execute {
                 loadTrack(requestKey, track, directRid)
+            }
+        }
+
+        private fun ensureNextTrackCaptureStarted() {
+            if (nextTrackSetupStarted.compareAndSet(false, true)) {
+                mainHandler.post(::startNextTrackCapture)
             }
         }
 
