@@ -51,7 +51,46 @@ import javax.crypto.spec.SecretKeySpec
 object NeteasePluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/Netease"
     private const val PROVIDER_PACKAGE = "com.juren233.hyperlyricsenhanced.provider.netease"
-    private val installed = AtomicBoolean(false)
+
+    @Volatile
+    private var runtime: NeteaseRuntime? = null
+
+    private fun ensureRuntime(
+        host: OfficialProviderHost,
+        application: Application? = null,
+    ): NeteaseRuntime? {
+        val existing = runtime
+        if (existing != null) return existing
+
+        val app = application ?: runCatching {
+            val activityThreadClass = Class.forName(
+                "android.app.ActivityThread",
+                false,
+                javaClass.classLoader,
+            )
+            activityThreadClass.getDeclaredMethod("currentApplication").invoke(null) as? Application
+        }.getOrNull() ?: return null
+
+        val process = Application.getProcessName()
+        if (process != host.packageName && process != "${host.packageName}:play") return null
+
+        return synchronized(this) {
+            val doubleCheck = runtime
+            if (doubleCheck != null) {
+                doubleCheck
+            } else {
+                val newRuntime = NeteaseRuntime(
+                    application = app,
+                    playerPackage = host.packageName,
+                    enableNextTrack = process == host.packageName,
+                    host = host,
+                )
+                runtime = newRuntime
+                newRuntime.start()
+                newRuntime
+            }
+        }
+    }
 
     override fun install(host: OfficialProviderHost) {
         require(host.packageName == "com.netease.cloudmusic" ||
@@ -60,30 +99,19 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         }
 
         host.hookApplication { application ->
-            val process = Application.getProcessName()
-            if (process != host.packageName && process != "${host.packageName}:play") return@hookApplication
-            if (!installed.compareAndSet(false, true)) return@hookApplication
-            NeteaseRuntime(
-                application = application,
-                playerPackage = host.packageName,
-                enableNextTrack = process == host.packageName,
-                host = host,
-            ).start()
+            ensureRuntime(host, application)
         }
 
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
-                runtime?.onPlaybackState(state)
+                ensureRuntime(host)?.onPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
-                runtime?.onMetadata(metadata)
+                ensureRuntime(host)?.onMetadata(metadata)
             },
         )
         Log.i(TAG, "网易云音乐 Provider Hook 已安装: package=${host.packageName}")
     }
-
-    @Volatile
-    private var runtime: NeteaseRuntime? = null
 
     private class NeteaseRuntime(
         private val application: Application,

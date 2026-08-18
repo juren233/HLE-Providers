@@ -49,7 +49,7 @@ class NeteaseNextTrackProfilesTest {
 
         assertEquals("netease-player-manager-accessor-v3", accessor.cacheKey)
         assertEquals("tr0.z", accessor.returnTypeName)
-        assertEquals(listOf("getRealNextMusic"), next.requiredCallerMethodNames)
+        assertEquals(listOf("switchToNextDataSource"), next.requiredCallerMethodNames)
         assertEquals(accessor.cacheKey, next.declaringClassReference?.queryCacheKey)
     }
 
