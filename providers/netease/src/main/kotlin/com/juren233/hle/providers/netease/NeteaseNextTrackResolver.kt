@@ -136,39 +136,29 @@ internal class NeteaseNextTrackResolver private constructor(
                 isStatic = isStatic,
             )
             val managerType = OfficialProviderDexTypeReference(
-                queryCacheKey = "netease-player-manager-accessor-v3",
+                queryCacheKey = "netease-player-manager-accessor-v4",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
             val musicInfoType = OfficialProviderDexTypeReference(
-                queryCacheKey = "netease-next-music-v2",
+                queryCacheKey = "netease-next-music-v3",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
             val simpleMusicInfoType = OfficialProviderDexTypeReference(
-                queryCacheKey = "netease-simple-music-v2",
+                queryCacheKey = "netease-simple-music-v3",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
             return listOf(
                 OfficialProviderDexMethodQuery(
                     cacheKey = managerType.queryCacheKey,
-                    preferredTarget = target(
-                        profile.serviceClassName,
-                        profile.playerManagerAccessorName,
-                        profile.playerManagerClassName,
-                        isStatic = true,
-                    ),
                     declaringClassName = profile.serviceClassName,
+                    requiredCallerMethodNames = listOf("getRealNextMusic"),
                     parameterTypeNames = emptyList(),
-                    returnTypeName = profile.playerManagerClassName,
                     isStatic = true,
                 ),
                 OfficialProviderDexMethodQuery(
                     cacheKey = musicInfoType.queryCacheKey,
-                    preferredTarget = target(
-                        profile.playerManagerClassName,
-                        profile.nextMusicMethodName,
-                        profile.musicInfoClassName,
-                    ),
                     declaringClassReference = managerType,
+                    requiredCallerMethodNames = listOf("getRealNextMusic"),
                     parameterTypeNames = emptyList(),
                     returnTypeName = profile.musicInfoClassName,
                     isStatic = false,
@@ -230,7 +220,7 @@ internal class NeteaseNextTrackResolver private constructor(
             returnTypeName: String,
             declaringClassReference: OfficialProviderDexTypeReference,
         ) = OfficialProviderDexMethodQuery(
-            cacheKey = "netease-simple-$key-v2",
+            cacheKey = "netease-simple-$key-v3",
             preferredTarget = OfficialProviderMethodTarget(
                 className = className,
                 methodName = methodName,

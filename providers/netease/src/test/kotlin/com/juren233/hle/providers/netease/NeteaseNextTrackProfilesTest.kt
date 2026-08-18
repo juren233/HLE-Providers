@@ -68,9 +68,10 @@ class NeteaseNextTrackProfilesTest {
         val accessor = queries[0]
         val next = queries[1]
 
-        assertEquals("netease-player-manager-accessor-v3", accessor.cacheKey)
-        assertEquals("tr0.z", accessor.returnTypeName)
-        assertEquals(emptyList<String>(), next.requiredCallerMethodNames)
+        assertEquals("netease-player-manager-accessor-v4", accessor.cacheKey)
+        org.junit.Assert.assertNull(accessor.returnTypeName)
+        assertEquals(listOf("getRealNextMusic"), accessor.requiredCallerMethodNames)
+        assertEquals(listOf("getRealNextMusic"), next.requiredCallerMethodNames)
         assertEquals(accessor.cacheKey, next.declaringClassReference?.queryCacheKey)
     }
 
