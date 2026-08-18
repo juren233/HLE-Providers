@@ -222,7 +222,6 @@ internal class KuwoNextTrackResolver private constructor(
                         profile.playback.musicClassName,
                     ),
                     declaringClassReference = managerType,
-                    requiredCallerMethodNames = listOf("seek"),
                     parameterTypeNames = emptyList(),
                     returnTypeName = profile.playback.musicClassName,
                     isStatic = false,

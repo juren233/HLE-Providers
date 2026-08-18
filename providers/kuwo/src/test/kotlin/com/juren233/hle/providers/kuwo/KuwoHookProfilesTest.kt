@@ -51,7 +51,7 @@ class KuwoHookProfilesTest {
         assertFalse(next.isStatic ?: true)
         assertEquals(next.cacheKey, singleton.declaringClassReference?.queryCacheKey)
         assertEquals(next.cacheKey, current.declaringClassReference?.queryCacheKey)
-        assertEquals(listOf("seek"), current.requiredCallerMethodNames)
+        assertTrue(current.requiredCallerMethodNames.isEmpty())
         assertEquals("cn.kuwo.base.bean.Music", current.returnTypeName)
     }
 

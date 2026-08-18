@@ -75,3 +75,13 @@
 - 已证伪方向：不得继续以“正式版 20.7.5 也有 getNextMedia 调用方桥”为前提；不得把概念版锚点推广到正式版。
 - 修复边界：正式版恢复 `kugou-full-next-media-v2` 查询（首选 `k`，后备 `requiredInvokedMethodNames=["w","v"]`，无 caller 约束）；概念版保持 `getNextMedia` caller 锚点不变。单测锁定两个变体的差异。
 - 验收条件：酷狗正式版更新修复后的 Provider，日志出现 `酷狗下一首解析器已启用`，控制帧携带变化的下一首 ID；切歌后岛上下一首预览正常，歌词与逐字不回归。
+
+## KUWO-CRASH-002: 首选目标与 caller 约束同用被宿主校验拒绝导致酷我闪退
+
+- 状态：修复中，等待真机验收。
+- 症状与复现：主模块 `140255` 上酷我音乐一打开即闪退，每次启动进程都触发同一个 FATAL EXCEPTION；禁用酷我插件后不再复现。
+- 可靠运行证据：设备 crash buffer 多次记录 `Process: cn.kuwo.player` 的 `java.lang.IllegalArgumentException: Provider DexKit 调用方约束不能与未经语义校验的首选目标同时使用`，栈为 `OfficialProviderDexMethodQueryValidator.validate(OfficialProviderPluginApi.kt:430)` <- `OfficialProviderHookHost.resolveDexMethods(OfficialProviderHookHost.kt:368)` <- `KuwoPluginEntry$KuwoRuntime.startNextTrackCapture`。设备酷我版本为 `12.2.0.0 (12200)`。
+- 代码证据与因果链：`kuwo-current-music-v3` 同时设置了 `preferredTarget`（`S() -> Music`）和 `requiredCallerMethodNames = ["seek"]`。宿主新增的校验明确拒绝“未经语义校验的首选目标 + caller 约束”组合，因为首选目标命中时不会校验 caller 语义，缓存结果可能违反查询契约。异常发生在 DexKit 扫描之前，因此这不是 DexKit 引擎问题，而是插件查询描述违反宿主契约。
+- 已证伪方向：不得再给带首选目标的查询追加 caller/forbidden 约束；不得把闪退归因于 DexKit 加载或开屏扫描。KUWO-STARTUP-001 的懒加载方向保持有效，不能回退为启动期急切解析。
+- 修复边界：`kuwo-current-music-v3` 移除 `requiredCallerMethodNames`，保留已验证的首选目标 `S`。酷我 12.2.0.0 原始 DEX 确认 `L()`、`S()`、`g0()` 三个首选目标均存在，命中后不会触发 DexKit 全量扫描。单测改为断言该查询无 caller 约束。
+- 验收条件：酷我 `12.2.0.0` 打开不闪退；播放后出现 `酷我下一首 Hook 已安装`，下一首控制帧与歌词正常；日志中不再出现上述 IllegalArgumentException。
