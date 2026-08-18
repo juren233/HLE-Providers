@@ -66,3 +66,12 @@
 - 不得重复的方向：不得在 `Application.onCreate` 或开屏阶段急切触发 DexKit 全量扫描；不得因一次失败彻底放弃自修复与重试能力。
 - 修复边界：将下一首 Dex 检索与解析推迟到首次有效播放（`onMetadata`/`PlaybackState.STATE_PLAYING`）时懒加载；放宽查询包名前缀约束为 `cn.kuwo.`；保持播放时的正常重试与自修复通道。
 - 验收条件：酷我音乐在启用官方插件且勾选作用域下能秒进 App 首页；播放音乐后正常获取歌词与逐字；下一首预览在播放后异步就绪。
+
+## KUGOU-NEXT-PREVIEW-001: 正式版复用概念版 getNextMedia 锚点导致 DexKit 解析不到下一首方法
+
+- 状态：修复中，等待真机验收。
+- 症状与复现：酷狗正式版更新到 Provider `1.0.9 (10)` 后，下一首预览完全失效，下一首控制帧停止出现；歌词仍正常。
+- 代码与二进制证据：`460e689` 把正式版查询改为 `kugou-full-next-media-v3` + `requiredCallerMethodNames=["getNextMedia"]`。但酷狗正式版 `20.7.5 (20759)` APK 的全部 30 个 `classes*.dex` 中没有任何名为 `getNextMedia` 的方法（仅有一条日志字符串 `QUEUE_CHANGED -> getNextMedia():`）；该锚点是概念版 `5.2.4` 的稳定桥。正式版 `20.7.5` 的下一首实现是 `QueuePlayerManager.k(): IMedia`，它调用 `PlayQueue.w():int` 与 `PlayQueue.v(int):Object`。查询因此零匹配，Host DexKit 批量解析失败并再触发一次 `forceFresh` 重试，Provider 收不到回调、`KuGouNextTrackResolver` 不安装，预览链路整体中断。
+- 已证伪方向：不得继续以“正式版 20.7.5 也有 getNextMedia 调用方桥”为前提；不得把概念版锚点推广到正式版。
+- 修复边界：正式版恢复 `kugou-full-next-media-v2` 查询（首选 `k`，后备 `requiredInvokedMethodNames=["w","v"]`，无 caller 约束）；概念版保持 `getNextMedia` caller 锚点不变。单测锁定两个变体的差异。
+- 验收条件：酷狗正式版更新修复后的 Provider，日志出现 `酷狗下一首解析器已启用`，控制帧携带变化的下一首 ID；切歌后岛上下一首预览正常，歌词与逐字不回归。

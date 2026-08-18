@@ -119,13 +119,20 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             source = OfficialProviderDexTypeSource.RETURN_TYPE,
         )
         val nextMediaQuery = if (full) {
-            // KuGou 20.7.5 and above: QueuePlayerManager.getNextMedia() bridges to
-            // the internal next-media method. Anchor by getNextMedia caller relationship
-            // so obfuscated queue helper renames do not break resolution.
+            // KuGou full 20.7.5 DEX: QueuePlayerManager.k() -> IMedia reads the next
+            // item through PlayQueue.w():int and PlayQueue.v(int):Object. Unlike Lite,
+            // the full APK defines no method named getNextMedia in any classes*.dex,
+            // so the Lite caller anchor must never be reused here.
             OfficialProviderDexMethodQuery(
-                cacheKey = "kugou-full-next-media-v3",
+                cacheKey = "kugou-full-next-media-v2",
+                preferredTarget = OfficialProviderMethodTarget(
+                    className = queueManagerClass,
+                    methodName = "k",
+                    returnTypeName = mediaInterface,
+                    isStatic = false,
+                ),
                 declaringClassName = queueManagerClass,
-                requiredCallerMethodNames = listOf("getNextMedia"),
+                requiredInvokedMethodNames = listOf("w", "v"),
                 parameterTypeNames = emptyList(),
                 returnTypeName = mediaInterface,
                 isStatic = false,
