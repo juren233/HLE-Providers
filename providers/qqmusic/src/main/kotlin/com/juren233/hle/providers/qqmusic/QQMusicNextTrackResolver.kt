@@ -61,6 +61,26 @@ internal object QQMusicNextTrackProfiles {
         songArtistMethodName = "R3",
     )
 
+    // Verified from the original QQ Music 20.7.5.8 APK DEX on 2026-08-18.
+    // Exact descriptors:
+    // Lcom/tencent/qqmusic/common/player/d;->B()Lcom/tencent/qqmusic/common/player/d;
+    // ->O()/G()Lcom/tencent/qqmusicplayerprocess/songinfo/SongInfo;
+    // SongInfo.I2()J, j3()Ljava/lang/String;, W3()Ljava/lang/String;.
+    val V20_7_5_8 = QQMusicNextTrackProfile(
+        packageName = QQMusicRuntimePlan.MOBILE_PACKAGE,
+        versionName = "20.7.5.8",
+        versionCode = 7308L,
+        cacheNamespace = "qqmusic-mobile",
+        managerClassName = "com.tencent.qqmusic.common.player.d",
+        singletonMethodName = "B",
+        currentSongMethodName = "O",
+        nextSongMethodName = "G",
+        songInfoClassName = "com.tencent.qqmusicplayerprocess.songinfo.SongInfo",
+        songIdMethodName = "I2",
+        songTitleMethodName = "j3",
+        songArtistMethodName = "W3",
+    )
+
     // Verified from the original QQ Music HD 6.12.0.5 APK DEX on 2026-08-11.
     // Exact descriptors:
     // Lcom/tencent/qqmusic/qplayer/core/player/MusicPlayerHelper;
@@ -82,7 +102,7 @@ internal object QQMusicNextTrackProfiles {
         songArtistMethodName = "getSingerName",
     )
 
-    private val profiles = listOf(V20_6_5_8, HD_V6_12_0_5)
+    private val profiles = listOf(V20_6_5_8, V20_7_5_8, HD_V6_12_0_5)
 
     fun resolve(
         packageName: String,

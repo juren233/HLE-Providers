@@ -33,6 +33,25 @@ class QQMusicNextTrackProfilesTest {
     }
 
     @Test
+    fun `uses exact original DEX identifiers for QQ Music 20 7 5 8`() {
+        val profile = QQMusicNextTrackProfiles.resolve(
+            QQMusicRuntimePlan.MOBILE_PACKAGE,
+            "20.7.5.8",
+            7308L,
+        )!!
+
+        assertEquals("com.tencent.qqmusic", profile.packageName)
+        assertEquals("com.tencent.qqmusic.common.player.d", profile.managerClassName)
+        assertEquals("B", profile.singletonMethodName)
+        assertEquals("O", profile.currentSongMethodName)
+        assertEquals("G", profile.nextSongMethodName)
+        assertEquals("com.tencent.qqmusicplayerprocess.songinfo.SongInfo", profile.songInfoClassName)
+        assertEquals("I2", profile.songIdMethodName)
+        assertEquals("j3", profile.songTitleMethodName)
+        assertEquals("W3", profile.songArtistMethodName)
+    }
+
+    @Test
     fun `uses exact original DEX identifiers for QQ Music HD 6 12 0 5`() {
         val profile = QQMusicNextTrackProfiles.resolve(
             QQMusicRuntimePlan.HD_PACKAGE,
