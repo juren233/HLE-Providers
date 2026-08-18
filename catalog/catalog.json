@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "providers": [
-    {"id":"netease","displayName":"网易云音乐","targetPackages":["com.netease.cloudmusic","com.hihonor.cloudmusic"],"available":true,"versionName":"1.0.10","versionCode":11,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/netease-v1.0.10/netease-1.0.10.hlp","sha256":"12f7721509e636a5b040852b5e2fea76679088cc503ca7436c4bd19e73911eb8"},
+    {"id":"netease","displayName":"网易云音乐","targetPackages":["com.netease.cloudmusic","com.hihonor.cloudmusic"],"available":true,"versionName":"1.0.11","versionCode":12,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/netease-v1.0.11/netease-1.0.11.hlp","sha256":"f42733cfdc2d06844cd3af27cd475d04a4608b4ab9dbacd56ff282b05a92a59e"},
     {"id":"qqmusic","displayName":"QQ音乐","targetPackages":["com.tencent.qqmusic","com.tencent.qqmusicpad"],"available":true,"versionName":"1.0.9","versionCode":10,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/qqmusic-v1.0.9/qqmusic-1.0.9.hlp","sha256":"7872866067f0a32e3d4bfc5acda8609b86a510dc1107afc9e749423b588a59e8"},
     {"id":"kugou","displayName":"酷狗音乐","targetPackages":["com.kugou.android","com.kugou.android.lite"],"available":true,"versionName":"1.0.8","versionCode":9,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/kugou-v1.0.8/kugou-1.0.8.hlp","sha256":"4b2a3fca1d9070e33ad4f81e61005c60c47c916f0efc2e682c2d7cfdfcff6b34"},
     {"id":"kuwo","displayName":"酷我音乐","targetPackages":["cn.kuwo.player"],"available":true,"versionName":"1.0.6","versionCode":7,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/kuwo-v1.0.6/kuwo-1.0.6.hlp","sha256":"01aacc0ca379a017e7f5aefbbba9634a6dfec8ee9294f593e60b4c93abdb04fd"},
