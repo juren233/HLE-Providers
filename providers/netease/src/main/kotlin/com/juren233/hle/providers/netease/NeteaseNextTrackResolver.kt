@@ -61,9 +61,33 @@ internal object NeteaseNextTrackProfiles {
         durationMethodName = "getDuration",
     )
 
+    // Verified from the original NetEase Cloud Music 9.5.70 APK DEX on 2026-08-18.
+    // Exact descriptors:
+    // MainProcessPlayService.E1()Lvr0/z; -> vr0.z.g()L.../MusicInfo;
+    // MusicInfo.toSimpleMusicInfo()L.../meta/virtual/SimpleMusicInfo;.
+    val V9_5_70 = NeteaseNextTrackProfile(
+        versionName = "9.5.70",
+        versionCode = 9_005_070L,
+        serviceClassName = "com.netease.cloudmusic.service.MainProcessPlayService",
+        playerManagerClassName = "vr0.z",
+        musicInfoClassName = "com.netease.cloudmusic.meta.MusicInfo",
+        simpleMusicInfoClassName = "com.netease.cloudmusic.meta.virtual.SimpleMusicInfo",
+        playerManagerAccessorName = "E1",
+        nextMusicMethodName = "g",
+        toSimpleMusicInfoMethodName = "toSimpleMusicInfo",
+        idMethodName = "getId",
+        titleMethodName = "getMusicName",
+        artistMethodName = "getSingerName",
+        albumMethodName = "getAlbumName",
+        durationMethodName = "getDuration",
+    )
+
     fun resolve(versionName: String, versionCode: Long): NeteaseNextTrackProfile =
-        V9_5_61.takeIf { it.versionName == versionName && it.versionCode == versionCode }
-            ?: V9_5_61
+        when {
+            versionCode >= 9_005_070L || versionName.startsWith("9.5.7") -> V9_5_70
+            versionCode == 9_005_061L || versionName == "9.5.61" -> V9_5_61
+            else -> V9_5_70
+        }
 }
 
 internal class NeteaseNextTrackResolver private constructor(

@@ -34,10 +34,31 @@ class NeteaseNextTrackProfilesTest {
     }
 
     @Test
+    fun `uses exact original DEX identifiers for NetEase 9 5 70`() {
+        val profile = NeteaseNextTrackProfiles.resolve("9.5.70", 9_005_070L)
+
+        assertEquals("com.netease.cloudmusic.service.MainProcessPlayService", profile.serviceClassName)
+        assertEquals("vr0.z", profile.playerManagerClassName)
+        assertEquals("com.netease.cloudmusic.meta.MusicInfo", profile.musicInfoClassName)
+        assertEquals(
+            "com.netease.cloudmusic.meta.virtual.SimpleMusicInfo",
+            profile.simpleMusicInfoClassName,
+        )
+        assertEquals("E1", profile.playerManagerAccessorName)
+        assertEquals("g", profile.nextMusicMethodName)
+        assertEquals("toSimpleMusicInfo", profile.toSimpleMusicInfoMethodName)
+        assertEquals("getId", profile.idMethodName)
+        assertEquals("getMusicName", profile.titleMethodName)
+        assertEquals("getSingerName", profile.artistMethodName)
+        assertEquals("getAlbumName", profile.albumMethodName)
+        assertEquals("getDuration", profile.durationMethodName)
+    }
+
+    @Test
     fun `uses the verified template for an unknown NetEase version`() {
         assertEquals(
-            NeteaseNextTrackProfiles.V9_5_61,
-            NeteaseNextTrackProfiles.resolve("9.5.62", 9_005_062L),
+            NeteaseNextTrackProfiles.V9_5_70,
+            NeteaseNextTrackProfiles.resolve("9.5.80", 9_005_080L),
         )
     }
 
