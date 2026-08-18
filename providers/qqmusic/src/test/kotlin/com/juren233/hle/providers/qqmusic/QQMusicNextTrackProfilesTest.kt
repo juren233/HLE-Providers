@@ -144,4 +144,14 @@ class QQMusicNextTrackProfilesTest {
             )
         )
     }
+
+    @Test
+    fun `parses song metadata from shortMessage fallback format`() {
+        val sample = "1 id = 509076686 name = Die With A Smile singer = Lady Gaga/Bruno Mars tmpPlayKey = O4M0003FFvMu0tMeku.mgg enableTuningEffect = false tuningEffectJson = "
+        val snapshot = QQMusicNextTrackResolver.parseShortMessageText(sample)
+        assertNotNull(snapshot)
+        assertEquals("509076686", snapshot?.id)
+        assertEquals("Die With A Smile", snapshot?.title)
+        assertEquals("Lady Gaga/Bruno Mars", snapshot?.artist)
+    }
 }

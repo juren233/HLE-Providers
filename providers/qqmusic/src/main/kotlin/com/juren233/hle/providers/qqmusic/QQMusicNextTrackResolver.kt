@@ -133,13 +133,58 @@ internal class QQMusicNextTrackResolver private constructor(
     }
 
     private fun toTrack(value: Any): QQMusicTrackSnapshot {
-        val id = (songIdMethod.invoke(value) as Number).toLong().toString()
-        val title = songTitleMethod.invoke(value) as? String ?: ""
-        val artist = songArtistMethod.invoke(value) as? String ?: ""
-        return QQMusicTrackSnapshot(id, title, artist)
+        val directId = runCatching { (songIdMethod.invoke(value) as Number).toLong().toString() }.getOrNull()
+        val directTitle = runCatching { songTitleMethod.invoke(value) as? String }.getOrNull()?.trim()
+        val directArtist = runCatching { songArtistMethod.invoke(value) as? String }.getOrNull()?.trim()
+
+        if (!directId.isNullOrEmpty() && !directTitle.isNullOrEmpty()) {
+            return QQMusicTrackSnapshot(
+                id = directId,
+                title = directTitle,
+                artist = directArtist.orEmpty(),
+            )
+        }
+
+        // Fallback 1: SongInfo.shortMessage() parse
+        val fromShortMessage = runCatching { parseFromShortMessage(value) }.getOrNull()
+        if (fromShortMessage != null && fromShortMessage.id.isNotEmpty() && fromShortMessage.title.isNotEmpty()) {
+            return fromShortMessage
+        }
+
+        // Fallback 2: Direct field reflection (field b: Long)
+        val fieldId = runCatching {
+            val field = value.javaClass.getDeclaredField("b").apply { isAccessible = true }
+            (field.get(value) as? Number)?.toLong()?.toString()
+        }.getOrNull()
+
+        return QQMusicTrackSnapshot(
+            id = directId ?: fieldId ?: "",
+            title = directTitle.orEmpty(),
+            artist = directArtist.orEmpty(),
+        )
     }
 
     companion object {
+        private val SHORT_MESSAGE_REGEX = Regex(
+            """id\s*=\s*(\d+)\s+name\s*=\s*(.*?)\s+singer\s*=\s*(.*?)\s+tmpPlayKey\s*=""",
+            RegexOption.DOT_MATCHES_ALL,
+        )
+
+        internal fun parseFromShortMessage(value: Any): QQMusicTrackSnapshot? {
+            val shortMessageMethod = runCatching {
+                value.javaClass.getMethod("shortMessage").apply { isAccessible = true }
+            }.getOrNull() ?: return null
+            val raw = shortMessageMethod.invoke(value) as? String ?: return null
+            return parseShortMessageText(raw)
+        }
+
+        internal fun parseShortMessageText(raw: String): QQMusicTrackSnapshot? {
+            val match = SHORT_MESSAGE_REGEX.find(raw) ?: return null
+            val id = match.groupValues[1].trim()
+            val title = match.groupValues[2].trim()
+            val artist = match.groupValues[3].trim()
+            return QQMusicTrackSnapshot(id = id, title = title, artist = artist)
+        }
         fun queries(application: Application): List<OfficialProviderDexMethodQuery>? {
             val packageInfo = application.packageManager.getPackageInfo(application.packageName, 0)
             return queries(
