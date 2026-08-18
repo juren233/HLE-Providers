@@ -145,7 +145,6 @@ internal class NeteaseNextTrackResolver private constructor(
                         profile.musicInfoClassName,
                     ),
                     declaringClassReference = managerType,
-                    requiredCallerMethodNames = listOf("switchToNextDataSource"),
                     parameterTypeNames = emptyList(),
                     returnTypeName = profile.musicInfoClassName,
                     isStatic = false,
