@@ -77,6 +77,23 @@ internal object SaltPlayerHookProfiles {
 
     val compatibilityProfile: SaltPlayerHookProfile = V12_1_1
 
+    /**
+     * Salt Player 12.2.0 introduced its native Lyricon Provider. Newer releases
+     * must keep the official Pack out of the lyric/source arbitration path; the
+     * Pack is still useful for the independent next-track control channel.
+     */
+    fun usesNativeLyricon(versionName: String): Boolean {
+        val parts = versionName
+            .substringBefore('-')
+            .split('.')
+            .mapNotNull { it.toIntOrNull() }
+        if (parts.size < 2) return false
+        val major = parts[0]
+        val minor = parts[1]
+        val patch = parts.getOrElse(2) { 0 }
+        return major > 12 || (major == 12 && (minor > 2 || (minor == 2 && patch >= 0)))
+    }
+
     fun resolve(versionName: String, versionCode: Long): SaltPlayerHookProfile =
         exactProfiles.firstOrNull {
             it.versionName == versionName && it.versionCode == versionCode

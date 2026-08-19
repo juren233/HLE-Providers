@@ -57,6 +57,16 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                 packageInfo.versionName.orEmpty(),
                 packageInfo.longVersionCode,
             )
+            val usesNativeLyricon = SaltPlayerHookProfiles.usesNativeLyricon(
+                packageInfo.versionName.orEmpty(),
+            )
+            if (usesNativeLyricon) {
+                Log.i(
+                    TAG,
+                    "椒盐音乐 ${packageInfo.versionName} 已原生适配 Lyricon，跳过旧版歌词 Pack",
+                )
+                return@OfficialProviderApplicationCallback
+            }
             if (!initialized.compareAndSet(false, true)) return@OfficialProviderApplicationCallback
 
             runCatching {
@@ -73,11 +83,11 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
                         provider = it,
                         nextTrackProfile = profile,
                         host = host,
-                    ).apply { startNextTrackCapture() }
+                    )
                 }
             }.onSuccess {
                 val version = "${packageInfo.versionName}(${packageInfo.longVersionCode})"
-                Log.i(TAG, "椒盐音乐 Provider 已注册，本地文件歌词与下一首预览可用: version=$version")
+                Log.i(TAG, "椒盐音乐旧版歌词 Provider 已注册: version=$version")
             }.onFailure { error ->
                 provider = null
                 runtime = null

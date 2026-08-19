@@ -62,4 +62,13 @@ class SaltPlayerHookProfilesTest {
             assertEquals("getDuration", profile.song.durationGetterName)
         }
     }
+
+    @Test
+    fun `uses native Lyricon from Salt Player 12 2 0 onward`() {
+        assertEquals(false, SaltPlayerHookProfiles.usesNativeLyricon("12.1.9"))
+        assertEquals(true, SaltPlayerHookProfiles.usesNativeLyricon("12.2.0"))
+        assertEquals(true, SaltPlayerHookProfiles.usesNativeLyricon("12.2.0-beta02"))
+        assertEquals(true, SaltPlayerHookProfiles.usesNativeLyricon("13.0.0"))
+        assertEquals(false, SaltPlayerHookProfiles.usesNativeLyricon("unknown"))
+    }
 }
