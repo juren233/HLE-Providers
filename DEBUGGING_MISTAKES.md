@@ -85,3 +85,12 @@
 - 已证伪方向：不得再给带首选目标的查询追加 caller/forbidden 约束；不得把闪退归因于 DexKit 加载或开屏扫描。KUWO-STARTUP-001 的懒加载方向保持有效，不能回退为启动期急切解析。
 - 修复边界：`kuwo-current-music-v3` 移除 `requiredCallerMethodNames`，保留已验证的首选目标 `S`。酷我 12.2.0.0 原始 DEX 确认 `L()`、`S()`、`g0()` 三个首选目标均存在，命中后不会触发 DexKit 全量扫描。单测改为断言该查询无 caller 约束。
 - 验收条件：酷我 `12.2.0.0` 打开不闪退；播放后出现 `酷我下一首 Hook 已安装`，下一首控制帧与歌词正常；日志中不再出现上述 IllegalArgumentException。
+
+## KUWO-OBFUSCATION-003: 酷我 12.2.2.0 混淆位移使 L/S/g0 首选目标全部失效且 current-music 查询歧义
+
+- 状态：修复中，等待真机验收。
+- 症状与复现：设备酷我音乐升级到 `12.2.2.0 (12220)` 后，超级岛下一首歌曲信息失效；歌词与进度不受影响。
+- 可靠二进制证据（2026-09-04，设备原装 APK 原始 `classes8.dex` dexdump）：`cn.kuwo.mod.playcontrol.n` 仍在，但混淆映射位移——单例 `L()Lcn/kuwo/mod/playcontrol/n;` 变为 `O()`；当前音乐 `S()Music` 变为 `X()`（返回所有播放入口如 `U0/Y1/a1/b1` 写入的同一 `f` 字段）；下一曲 `g0()IContent` 变为 `k0()`（该类中唯一包含锚点串“随机模式，获取歌曲下一曲,随机索引空，现在生成”的 `()IContent` 方法，同类 `Y/Z` 亦返回 IContent 但无该锚点，`m0` 为上一曲）。旧名字仍在但已被复用为无关签名：`L()I`、`S()I`（当前播放索引）、`g0()MusicList`。`cn.kuwo.base.bean.Music` 的 `rid/name/artist/album/duration` 字段未变。
+- 因果链：三个查询的首选目标按名称+签名精确查找，旧名已解析到无关签名而全部失效；`kuwo-next-content-v3` 靠 requiredStrings 锚点仍可唯一回退命中 `k0`，但 `kuwo-current-music-v3` 的 DexKit 回退按“声明类 + `()Music` 实例方法”命中 `R/X/h0` 三个候选，宿主 `selectDexMethodMatch` 在无跨版本结构基线或基线不唯一时直接抛出“Provider DexKit 查询结果必须唯一”，整批 resolveDexMethods 失败，`KuwoNextTrackResolver` 永不安装，下一首控制帧停发。歌词链走 `KuwoTrackIdResolver`（mediaId rid / API 搜索），不依赖该类，因此歌词正常——这与真实症状完全一致。
+- 修复边界：`KuwoHookProfiles` 新增 `V12_2_2_0` 精确档案（`O/X/k0`），未匹配版本回退到最高已验证版本；不改宿主消歧策略，不给查询追加 caller 约束。若未来酷我再次位移，必须重新从原始 DEX 取证后新增档案，禁止沿用旧名。
+- 验收条件：酷我 `12.2.2.0` 播放后出现 `酷我下一首 Hook 已安装` 与 `酷我下一首 Hook 首次命中`，超级岛下一首预览恢复且随切歌变化；歌词、逐字与开屏启动不回归。编译与单测不能关闭本条。

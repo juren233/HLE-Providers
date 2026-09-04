@@ -30,9 +30,28 @@ class KuwoHookProfilesTest {
     }
 
     @Test
+    fun `uses exact original DEX identifiers for Kuwo 12 2 2 0`() {
+        val profile = KuwoHookProfiles.resolve("12.2.2.0", 12_220L)
+
+        assertEquals("cn.kuwo.mod.playcontrol.n", profile.playback.managerClassName)
+        assertEquals("cn.kuwo.base.bean.IContent", profile.playback.contentClassName)
+        assertEquals("cn.kuwo.base.bean.Music", profile.playback.musicClassName)
+        // 12.2.2.0 obfuscation shift, verified against the original APK DEX:
+        // the old names still exist with unrelated signatures (L()I, S()I, g0()MusicList).
+        assertEquals("O", profile.playback.singletonMethodName)
+        assertEquals("X", profile.playback.currentMusicMethodName)
+        assertEquals("k0", profile.playback.nextContentMethodName)
+        assertEquals("rid", profile.music.ridFieldName)
+        assertEquals("name", profile.music.titleFieldName)
+        assertEquals("artist", profile.music.artistFieldName)
+        assertEquals("album", profile.music.albumFieldName)
+        assertEquals("duration", profile.music.durationSecondsFieldName)
+    }
+
+    @Test
     fun `uses the latest verified template for unknown Kuwo versions`() {
-        assertEquals(KuwoHookProfiles.V12_1_8_2, KuwoHookProfiles.resolve("12.1.8.1", 12_181L))
-        assertEquals(KuwoHookProfiles.V12_1_8_2, KuwoHookProfiles.resolve("12.1.8.3", 12_183L))
+        assertEquals(KuwoHookProfiles.V12_2_2_0, KuwoHookProfiles.resolve("12.2.0.0", 12_200L))
+        assertEquals(KuwoHookProfiles.V12_2_2_0, KuwoHookProfiles.resolve("12.2.3.0", 12_230L))
     }
 
     @Test

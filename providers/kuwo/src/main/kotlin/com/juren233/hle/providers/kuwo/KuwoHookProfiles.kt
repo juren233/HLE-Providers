@@ -59,7 +59,38 @@ internal object KuwoHookProfiles {
         ),
     )
 
-    private val exactProfiles = listOf(V12_1_8_2)
+    // Verified from the original Kuwo Music 12.2.2.0 (12220) APK DEX on 2026-09-04
+    // (classes8.dex). The 12.2.2.0 obfuscation pass shifted every playcontrol name:
+    // Lcn/kuwo/mod/playcontrol/n;->O()Lcn/kuwo/mod/playcontrol/n;   (singleton, was L)
+    // Lcn/kuwo/mod/playcontrol/n;->X()Lcn/kuwo/base/bean/Music;     (current music, was S;
+    //     returns the field written by every playback entry such as U0/Y1/a1/b1)
+    // Lcn/kuwo/mod/playcontrol/n;->k0()Lcn/kuwo/base/bean/IContent; (next content, was g0;
+    //     the only ()IContent method containing the
+    //     "随机模式，获取歌曲下一曲,随机索引空，现在生成" anchor)
+    // The old names are still present but repurposed (L()I, S()I, g0()MusicList), so exact
+    // preferred-target lookup fails safely into the DexKit path; k0/Y/Z ambiguity is avoided
+    // by the next-content requiredStrings anchor. Music bean fields are unchanged.
+    val V12_2_2_0 = KuwoHookProfile(
+        versionName = "12.2.2.0",
+        versionCode = 12_220L,
+        playback = KuwoPlaybackHookProfile(
+            managerClassName = "cn.kuwo.mod.playcontrol.n",
+            contentClassName = "cn.kuwo.base.bean.IContent",
+            musicClassName = "cn.kuwo.base.bean.Music",
+            singletonMethodName = "O",
+            currentMusicMethodName = "X",
+            nextContentMethodName = "k0",
+        ),
+        music = KuwoMusicHookProfile(
+            ridFieldName = "rid",
+            titleFieldName = "name",
+            artistFieldName = "artist",
+            albumFieldName = "album",
+            durationSecondsFieldName = "duration",
+        ),
+    )
+
+    private val exactProfiles = listOf(V12_1_8_2, V12_2_2_0)
 
     fun resolve(versionName: String, versionCode: Long): KuwoHookProfile =
         exactProfiles.firstOrNull {
