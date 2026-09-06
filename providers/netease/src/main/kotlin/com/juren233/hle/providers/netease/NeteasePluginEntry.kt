@@ -132,7 +132,10 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         private var lastSong: Song? = null
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
-        private var lastPositionWriteDiagnosticAtMs = 0L
+        private val diagnosticsEnabled = NeteaseDiagnosticCapability.resolve { host.isDiagnosticEnabled() }
+        private val playbackDiagnostics = if (diagnosticsEnabled) {
+            NeteasePlaybackDiagnosticSampler()
+        } else null
         private var lastMediaCardDiagnosticAtMs = 0L
         private val mainHandler = Handler(Looper.getMainLooper())
         private val nextTrackGeneration = AtomicLong(0L)
@@ -144,11 +147,27 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         @Volatile
         private var latestPlaybackState: PlaybackState? = null
 
+        @Volatile
+        private var manualPositionSyncEnabled = false
+
         private val positionWriter = object : Runnable {
             override fun run() {
-                val state = latestPlaybackState ?: return
-                if (state.state != PlaybackState.STATE_PLAYING) return
-                val player = provider?.player ?: return
+                if (!manualPositionSyncEnabled) {
+                    reportWriterExit("manual_mode_disabled")
+                    return
+                }
+                val state = latestPlaybackState ?: run {
+                    reportWriterExit("no_state")
+                    return
+                }
+                if (state.state != PlaybackState.STATE_PLAYING) {
+                    reportWriterExit("not_playing")
+                    return
+                }
+                val player = provider?.player ?: run {
+                    reportWriterExit("player_unavailable")
+                    return
+                }
                 val now = SystemClock.elapsedRealtime()
                 val position = extrapolatePlaybackPosition(
                     basePosition = state.position,
@@ -158,19 +177,25 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                     playing = true,
                 )
                 val result = runCatching { player.setPosition(position) }.getOrDefault(false)
-                if (BuildConfig.DEBUG &&
-                    now - lastPositionWriteDiagnosticAtMs >= POSITION_DIAGNOSTIC_INTERVAL_MS
-                ) {
-                    val message = "[LyricPositionDiag] stage=provider_manual_position_write, " +
-                            "result=$result, position=$position, state=${state.state}, " +
-                            "anchor=${state.position}, updatedAt=${state.lastPositionUpdateTime}, " +
-                            "speed=${state.playbackSpeed}, currentId=$currentId, " +
-                            "playerActive=${runCatching { player.isActive }.getOrNull()}"
-                    Log.i(TAG, message)
-                    host.reportDiagnostic(TAG, message)
-                    lastPositionWriteDiagnosticAtMs = now
+                if (diagnosticsEnabled) {
+                    val callback = playbackDiagnostics?.currentSequence ?: 0L
+                    playbackDiagnostics?.sampleWrite(now, callback, result)?.let { sampleReason ->
+                        emitPlaybackDiagnostic(
+                            "[LyricPositionDiag] stage=provider_manual_position_write, " +
+                                "callback=$callback, providerBuild=${BuildConfig.VERSION_CODE}, sampleReason=$sampleReason, " +
+                                "result=$result, position=$position, state=${state.state}, " +
+                                "anchor=${state.position}, updatedAt=${state.lastPositionUpdateTime}, " +
+                                "anchorAgeMs=${now - state.lastPositionUpdateTime}, speed=${state.playbackSpeed}, " +
+                                "currentId=$currentId, currentState=${latestPlaybackState === state}, " +
+                                "writerEnabled=$manualPositionSyncEnabled, playerActive=${runCatching { player.isActive }.getOrNull()}",
+                        )
+                    }
                 }
-                mainHandler.postDelayed(this, NETEASE_POSITION_UPDATE_INTERVAL_MS)
+                if (manualPositionSyncEnabled && latestPlaybackState === state) {
+                    mainHandler.postDelayed(this, NETEASE_POSITION_UPDATE_INTERVAL_MS)
+                } else {
+                    reportWriterExit("mode_or_state_changed_during_write")
+                }
             }
         }
 
@@ -187,7 +212,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             private set
 
         fun start() {
-            reportMediaCardDiagnostic(
+            if (diagnosticsEnabled) reportMediaCardDiagnostic(
                 stage = "provider",
                 event = "runtime_start",
                 details = "process=${Application.getProcessName()},playerPackage=$playerPackage,enableNextTrack=$enableNextTrack",
@@ -202,8 +227,9 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 it.register()
             }
             NeteasePluginEntry.runtime = this
-            if (BuildConfig.DEBUG) {
+            if (diagnosticsEnabled) {
                 val message = "[LyricPositionDiag] stage=provider_runtime_ready, " +
+                        "providerBuild=${BuildConfig.VERSION_CODE}, providerVersion=${BuildConfig.VERSION_NAME}, diagnosticsEnabled=true, " +
                         "process=${Application.getProcessName()}, " +
                         "providerAvailable=${provider != null}, " +
                         "playerActive=${runCatching { provider?.player?.isActive }.getOrNull()}"
@@ -216,14 +242,14 @@ object NeteasePluginEntry : OfficialProviderPlugin {
 
         fun onMetadata(value: MediaMetadata?) {
             val id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.toLongOrNull()
-            reportMediaCardDiagnostic(
+            if (diagnosticsEnabled) reportMediaCardDiagnostic(
                 stage = "provider",
                 event = "metadata_callback",
                 details = "incomingId=$id,currentId=$currentId,title=${sanitize(value?.getString(MediaMetadata.METADATA_KEY_TITLE))},artist=${sanitize(value?.getString(MediaMetadata.METADATA_KEY_ARTIST))},duration=${value?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L},playerActive=${runCatching { provider?.player?.isActive }.getOrNull()}",
             )
             if (id == null) {
                 currentTrack = null
-                reportMediaCardDiagnostic(
+                if (diagnosticsEnabled) reportMediaCardDiagnostic(
                     stage = "provider",
                     event = "metadata_cleared",
                     reason = "missing_media_id",
@@ -241,7 +267,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             requestNextTrackCapture()
             metadata[id] = track
             if (currentId == id) {
-                reportMediaCardDiagnostic(
+                if (diagnosticsEnabled) reportMediaCardDiagnostic(
                     stage = "provider",
                     event = "metadata_ignored",
                     reason = "same_track_id",
@@ -251,7 +277,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             }
             val previousId = currentId
             currentId = id
-            reportMediaCardDiagnostic(
+            if (diagnosticsEnabled) reportMediaCardDiagnostic(
                 stage = "provider",
                 event = "track_changed",
                 details = "previousId=$previousId,currentId=$id",
@@ -262,7 +288,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                     .onSuccess { payload ->
                         writeCache(id, payload)
                         val isCurrent = currentId == id
-                        reportMediaCardDiagnostic(
+                        if (diagnosticsEnabled) reportMediaCardDiagnostic(
                             stage = "provider",
                             event = "lyrics_fetch_complete",
                             details = "id=$id,current=$isCurrent,lines=${payload.lrc?.lines()?.size ?: 0},translated=${payload.translated?.lines()?.size ?: 0}",
@@ -274,23 +300,35 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         }
 
         fun onPlaybackState(state: PlaybackState?) {
-            reportMediaCardDiagnostic(
+            val diagnosticSequence = if (diagnosticsEnabled) playbackDiagnostics?.nextSequence() ?: 0L else 0L
+            reportPlaybackInput(state, diagnosticSequence)
+            if (diagnosticsEnabled) reportMediaCardDiagnostic(
                 stage = "provider",
                 event = "playback_callback",
                 details = "state=${state?.state},position=${state?.position},updatedAt=${state?.lastPositionUpdateTime},speed=${state?.playbackSpeed},currentId=$currentId,playerActive=${runCatching { provider?.player?.isActive }.getOrNull()}",
             )
+            manualPositionSyncEnabled = false
             latestPlaybackState = state
             mainHandler.removeCallbacks(positionWriter)
 
             val player = provider?.player
-            val playerActive = runCatching { player?.isActive }.getOrNull()
+            val playerActive = if (diagnosticsEnabled) runCatching { player?.isActive }.getOrNull() else null
             var autoFailure: Throwable? = null
             val autoResult = runCatching { player?.setPlaybackState(state) }
-                .onFailure { autoFailure = it }
+                .onFailure { if (diagnosticsEnabled) autoFailure = it }
                 .getOrNull()
 
-            if (state?.state == PlaybackState.STATE_BUFFERING) {
+            val forwardingMode = neteasePlaybackForwardingMode(
+                hasState = state != null,
+                buffering = state?.state == PlaybackState.STATE_BUFFERING,
+                automaticAccepted = autoResult,
+            )
+            if (forwardingMode != NeteasePlaybackForwardingMode.MANUAL_FALLBACK) {
+                // The legacy boolean overload disables Central's timestamped PlaybackState.
+                // Keep it only as a compatibility fallback when automatic forwarding fails;
+                // otherwise an off-screen track change can reuse the previous shared position.
                 reportPlaybackForward(
+                    diagnosticSequence = diagnosticSequence,
                     state = state,
                     playerAvailable = player != null,
                     playerActive = playerActive,
@@ -299,7 +337,11 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                     intervalResult = null,
                     positionResult = null,
                     autoFailure = autoFailure,
-                    decision = "preserve_manual_anchor",
+                    decision = if (forwardingMode == NeteasePlaybackForwardingMode.AUTOMATIC) {
+                        "automatic_anchor_preserved"
+                    } else {
+                        "preserve_buffering_anchor"
+                    },
                 )
                 return
             }
@@ -307,7 +349,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             val playing = state?.state == PlaybackState.STATE_PLAYING
             var manualFailure: Throwable? = null
             val manualResult = runCatching { player?.setPlaybackState(playing) }
-                .onFailure { manualFailure = it }
+                .onFailure { if (diagnosticsEnabled) manualFailure = it }
                 .getOrNull()
             val intervalResult = runCatching {
                 player?.setPositionUpdateInterval(NETEASE_POSITION_UPDATE_INTERVAL_MS.toInt())
@@ -323,7 +365,12 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             } ?: 0L
             val positionResult = runCatching { player?.setPosition(position) }.getOrNull()
 
+            if (playing) {
+                manualPositionSyncEnabled = true
+                mainHandler.post(positionWriter)
+            }
             reportPlaybackForward(
+                diagnosticSequence = diagnosticSequence,
                 state = state,
                 playerAvailable = player != null,
                 playerActive = playerActive,
@@ -334,15 +381,10 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 autoFailure = autoFailure ?: manualFailure,
                 decision = if (playing) "manual_position_sync_started" else "manual_position_sync_stopped",
             )
-            if (playing) mainHandler.post(positionWriter)
-            reportMediaCardDiagnostic(
-                stage = "provider",
-                event = "playback_forward_complete",
-                details = "playing=$playing,autoResult=$autoResult,manualResult=$manualResult,intervalResult=$intervalResult,positionResult=$positionResult,playerActive=$playerActive,currentId=$currentId",
-            )
         }
 
         private fun reportPlaybackForward(
+            diagnosticSequence: Long,
             state: PlaybackState?,
             playerAvailable: Boolean,
             playerActive: Boolean?,
@@ -353,18 +395,55 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             autoFailure: Throwable?,
             decision: String,
         ) {
-            if (!BuildConfig.DEBUG) return
-            val message = "[LyricPositionDiag] stage=provider_state_forward, " +
-                    "runtimeAvailable=true, providerAvailable=${provider != null}, " +
-                    "playerAvailable=$playerAvailable, playerActive=$playerActive, " +
-                    "autoResult=$autoResult, manualResult=$manualResult, " +
-                    "intervalResult=$intervalResult, positionResult=$positionResult, " +
-                    "intervalMs=$NETEASE_POSITION_UPDATE_INTERVAL_MS, " +
-                    "state=${state?.state}, position=${state?.position}, " +
-                    "updatedAt=${state?.lastPositionUpdateTime}, decision=$decision, " +
-                    "failure=${autoFailure?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"}"
-            Log.i(TAG, message)
-            host.reportDiagnostic(TAG, message)
+            if (!diagnosticsEnabled) return
+            val now = SystemClock.elapsedRealtime()
+            val details = "callback=$diagnosticSequence, providerBuild=${BuildConfig.VERSION_CODE}, " +
+                "currentId=$currentId, currentState=${latestPlaybackState === state}, " +
+                "runtimeAvailable=true, providerAvailable=${provider != null}, " +
+                "playerAvailable=$playerAvailable, playerActive=$playerActive, " +
+                "autoResult=$autoResult, manualResult=$manualResult, " +
+                "intervalResult=$intervalResult, positionResult=$positionResult, " +
+                "intervalMs=$NETEASE_POSITION_UPDATE_INTERVAL_MS, " +
+                "state=${state?.state}, position=${state?.position}, speed=${state?.playbackSpeed}, " +
+                "updatedAt=${state?.lastPositionUpdateTime}, anchorAgeMs=${state?.let { now - it.lastPositionUpdateTime }}, " +
+                "writerEnabled=$manualPositionSyncEnabled, writerQueued=${mainHandler.hasCallbacks(positionWriter)}, " +
+                "decision=$decision, failure=${autoFailure?.let { "${it.javaClass.simpleName}:${it.message}" } ?: "none"}"
+            emitPlaybackDiagnostic("[LyricPositionDiag] stage=provider_state_forward, $details")
+            // Both automatic and fallback paths must expose a completion event in exported logs.
+            if (diagnosticsEnabled) reportMediaCardDiagnostic("provider", "playback_forward_complete", details = details)
+        }
+
+        private fun reportPlaybackInput(state: PlaybackState?, sequence: Long) {
+            if (!diagnosticsEnabled) return
+            val now = SystemClock.elapsedRealtime()
+            emitPlaybackDiagnostic(
+                "[LyricPositionDiag] stage=provider_state_input, callback=$sequence, " +
+                    "providerBuild=${BuildConfig.VERSION_CODE}, process=${Application.getProcessName()}, currentId=$currentId, " +
+                    "state=${state?.state}, position=${state?.position}, updatedAt=${state?.lastPositionUpdateTime}, " +
+                    "speed=${state?.playbackSpeed}, anchorAgeMs=${state?.let { now - it.lastPositionUpdateTime }}, " +
+                    "previousState=${latestPlaybackState?.state}, previousPosition=${latestPlaybackState?.position}, " +
+                    "writerWasEnabled=$manualPositionSyncEnabled, writerWasQueued=${mainHandler.hasCallbacks(positionWriter)}",
+            )
+        }
+
+        private fun reportWriterExit(reason: String) {
+            if (!diagnosticsEnabled) return
+            val sampler = playbackDiagnostics ?: return
+            val callback = sampler.currentSequence
+            if (!sampler.sampleExit(callback, reason)) return
+            emitPlaybackDiagnostic(
+                "[LyricPositionDiag] stage=provider_manual_writer_exit, callback=$callback, " +
+                    "providerBuild=${BuildConfig.VERSION_CODE}, reason=$reason, currentId=$currentId, " +
+                    "writerEnabled=$manualPositionSyncEnabled, state=${latestPlaybackState?.state}",
+            )
+        }
+
+        private fun emitPlaybackDiagnostic(message: String) {
+            if (!diagnosticsEnabled) return
+            runCatching {
+                Log.i(TAG, message)
+                host.reportDiagnostic(TAG, message)
+            }
         }
 
         private fun applyDisplayPreference(provider: LyriconProvider, context: Context) {
@@ -394,7 +473,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
 
         private fun publish(song: Song) {
             if (lastSong == song) {
-                reportMediaCardDiagnostic(
+                if (diagnosticsEnabled) reportMediaCardDiagnostic(
                     stage = "provider",
                     event = "song_publish_skipped",
                     reason = "same_song_object",
@@ -404,12 +483,12 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             }
             lastSong = song
             val player = provider?.player
-            val playerActive = runCatching { player?.isActive }.getOrNull()
+            val playerActive = if (diagnosticsEnabled) runCatching { player?.isActive }.getOrNull() else null
             var failure: Throwable? = null
             val forwarded = runCatching { player?.setSong(song) }
-                .onFailure { failure = it }
+                .onFailure { if (diagnosticsEnabled) failure = it }
                 .getOrNull()
-            if (BuildConfig.DEBUG) {
+            if (diagnosticsEnabled) {
                 val message = "[LyricPositionDiag] stage=provider_song_forward, " +
                         "playerAvailable=${player != null}, playerActive=$playerActive, " +
                         "result=$forwarded, songId=${song.id}, lyrics=${song.lyrics?.size ?: 0}, " +
@@ -417,7 +496,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 Log.i(TAG, message)
                 host.reportDiagnostic(TAG, message)
             }
-            reportMediaCardDiagnostic(
+            if (diagnosticsEnabled) reportMediaCardDiagnostic(
                 stage = "provider",
                 event = "song_publish_complete",
                 details = "songId=${song.id},lines=${song.lyrics?.size ?: 0},playerActive=$playerActive,result=$forwarded",
@@ -430,7 +509,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             reason: String? = null,
             details: String = "",
         ) {
-            if (!BuildConfig.DEBUG) return
+            if (!diagnosticsEnabled) return
             val now = runCatching { SystemClock.elapsedRealtime() }
                 .getOrElse { System.nanoTime() / 1_000_000L }
             if (event == "playback_callback" &&
@@ -539,12 +618,12 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                         detail = "${error::class.java.simpleName}: ${error.message}",
                     )
                     stopNextTrackCapture(generation)
-                    if (BuildConfig.DEBUG) Log.w(TAG, "网易云下一首采集失败", error)
+                    if (diagnosticsEnabled) Log.w(TAG, "网易云下一首采集失败", error)
                 }
         }
 
         private fun reportNextTrackValidation(valid: Boolean, detail: String) {
-            if (valid && !BuildConfig.DEBUG) return
+            if (valid && !diagnosticsEnabled) return
             nextTrackValidationKeys.forEach { key ->
                 host.reportDexMethodValidation(key, valid, detail)
             }
@@ -589,7 +668,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             if (provider?.player?.sendText(frame) == true) {
                 lastNextTrackFrame = frame
                 lastNextTrackFrameSentAtMs = now
-                if (BuildConfig.DEBUG) {
+                if (diagnosticsEnabled) {
                     Log.i(
                         TAG,
                         "网易云下一首控制帧已发送: current=${current?.id}, next=${next?.id}",

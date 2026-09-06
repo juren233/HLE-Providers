@@ -30,3 +30,13 @@ Pack ZIP 条目使用固定时间戳，重复构建会得到相同摘要；目�
 
 首批 Provider 逻辑移植自 Apache-2.0 许可的
 `tomakino/LyricProvider`，修改后的文件保留原作者署名并追加 `juren233`，新文件将只署名为 `juren233`。
+
+### Provider diagnostic logging
+
+网易云 Provider 使用同一个正式 `.hlp`，不要求单独发布 Debug 插件。它在运行时调用核心
+`OfficialProviderHost.isDiagnosticEnabled(): Boolean`；仅 Debug 核心返回 true。
+Release 核心以及缺少该能力的旧核心默认关闭。查询失败也保持关闭，不影响歌词功能。
+门控发生在采样器分配、回调计数、快照读取和日志字符串构建之前，不仅是输出过滤。
+插件能力在每个运行实例初始化时确定；切换核心构建后需由用户重载对应宿主进程。
+旧版插件仍按自身 BuildConfig 工作；需要更新网易云 `.hlp` 才使用新机制。
+其他 Provider 暂未迁移，继续遵循各自原有日志策略。

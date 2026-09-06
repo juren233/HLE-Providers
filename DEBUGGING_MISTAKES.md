@@ -94,3 +94,24 @@
 - 因果链：三个查询的首选目标按名称+签名精确查找，旧名已解析到无关签名而全部失效；`kuwo-next-content-v3` 靠 requiredStrings 锚点仍可唯一回退命中 `k0`，但 `kuwo-current-music-v3` 的 DexKit 回退按“声明类 + `()Music` 实例方法”命中 `R/X/h0` 三个候选，宿主 `selectDexMethodMatch` 在无跨版本结构基线或基线不唯一时直接抛出“Provider DexKit 查询结果必须唯一”，整批 resolveDexMethods 失败，`KuwoNextTrackResolver` 永不安装，下一首控制帧停发。歌词链走 `KuwoTrackIdResolver`（mediaId rid / API 搜索），不依赖该类，因此歌词正常——这与真实症状完全一致。
 - 修复边界：`KuwoHookProfiles` 新增 `V12_2_2_0` 精确档案（`O/X/k0`），未匹配版本回退到最高已验证版本；不改宿主消歧策略，不给查询追加 caller 约束。若未来酷我再次位移，必须重新从原始 DEX 取证后新增档案，禁止沿用旧名。
 - 验收条件：酷我 `12.2.2.0` 播放后出现 `酷我下一首 Hook 已安装` 与 `酷我下一首 Hook 首次命中`，超级岛下一首预览恢复且随切歌变化；歌词、逐字与开屏启动不回归。编译与单测不能关闭本条。
+
+
+## NETEASE-POSITION-002：成功发送自动锚点后又被手动进度覆盖
+
+- 状态：2026-09-06 候选修复，未真机验收。
+- 症状：Issue #22 的 v14 在息屏切歌时新歌词已到达，却沿用上一首旧进度；亮屏后恢复。
+- 已确认：150249 / SystemUI PID 32595 于 2026-09-05 21:11:12.635 收到 PLAYING/position=0/accept_state2，随后立即收到 legacy_boolean/disable_state2；《Chupee》套用旧的 19527ms。同一问题在下一首重复。现有 onPlaybackState 在自动转发后无条件调用布尔重载并启动手动 writer。
+- 历史方向：手动路径是旧版自动状态未进入 Central 的兼容措施；本次已有自动输入成功的新运行证据，不能继续无条件降级。不要误改歌词请求、歌词解析、AOD 或用 SystemUI 另一路位置覆盖数据。
+- 本次方向：成功的非空 PlaybackState 优先，停止手动 writer 且不调用布尔重载；发送失败保留原手动回退；BUFFERING 保持已有冻结行为。
+- 未知与后续证据：需新包实机核对自动锚点跨息屏、切歌、暂停和 seek；不存在“编译即修复”的结论。
+- 验收：自动路径成功后没有紧邻的 disable_state2；当前歌进度不继承上一首，亮屏/息屏切歌及暂停恢复正常，失败回退仍可用。
+
+- 候选结果（2026-09-06）：1.0.14 (15) 实现自动锚点优先及手动 writer 模式门控；21 项单测、Release Kotlin 编译与 assembleRelease 通过；dist/netease-1.0.14-15.hlp 已使用项目密钥签名并通过公钥验签。未发布、未装机，真实播放验收仍待完成。
+
+- 2026-09-06 用户追加诊断要求：补充 Debug 回调序号、锚点年龄、输入/转发完成统一事件及手动 writer 退出/结果变化；稳定写入 5 秒采样，不改 automatic/manual 选择。需 Debug 签名 .hlp 才含内部日志，Release 继续无诊断管线。
+
+- 诊断交付：1.0.15 (16) Debug APK 使用核心项目签名，25 项单测与 Release Kotlin 编译通过；Debug 多 DEX 在 Pack 制作阶段以 D8 --debug 合并为单 DEX，日志标记保留，Ed25519 签名/manifest 哈希验证通过。dist/netease-1.0.15-16-debug.hlp 未发布、未装机。Release 字节码中无新增诊断 sampler 实例化或日志 payload。
+
+- 2026-09-06 用户授权改为单版本诊断能力：网易云不再使用插件 BuildConfig.DEBUG；实例初始化时查询核心 isDiagnosticEnabled，旧核心或异常默认 false。采样器分配、计数与媒体诊断 payload 构建均先门控。正式 Pack 在 Debug 核心可诊断，Release 核心不收集；此项替代此前必须 Debug Pack 的交付限制，不更改自动/手动锚点业务。仍待真实复现验收。
+
+- 单版本候选交付：网易云 1.0.16 (18) Release .hlp 已验签，27 单测通过；17 构建后复核发现两处诊断专用 isActive 读取缺少入口门控，补齐后递增为 18 重新打包。未发布/导入手机，仍待 Debug 核心加载后的运行日志与歌曲进度验收。
