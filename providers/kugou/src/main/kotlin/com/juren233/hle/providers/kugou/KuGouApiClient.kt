@@ -6,6 +6,7 @@
 
 package com.juren233.hle.providers.kugou
 
+import android.util.Log
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URI
@@ -16,6 +17,7 @@ import java.util.Base64
 import java.util.Locale
 
 internal object KuGouApiClient {
+    private const val TAG = "HLEProvider/KuGou"
     private const val SEARCH_URL = "https://lyrics.kugou.com/v2/search"
     private const val DOWNLOAD_URL = "https://lyrics.kugou.com/v2/download"
     private const val APP_ID = "1005"
@@ -23,8 +25,16 @@ internal object KuGouApiClient {
     // Verified from the original KuGou 20.7.5 APK manifest (versionCode 20759).
     private const val CLIENT_VERSION = "20759"
 
-    fun search(track: KuGouTrackMetadata, mid: String): KuGouSearchCandidate? {
-        if (!track.isSearchable) return null
+    fun search(track: KuGouTrackMetadata, mid: String): KuGouSearchCandidate? =
+        KuGouSearchStrategy.search(track) { keyword ->
+            fetchCandidates(track, keyword, mid)
+        }
+
+    private fun fetchCandidates(
+        track: KuGouTrackMetadata,
+        keyword: String,
+        mid: String,
+    ): List<KuGouSearchCandidate> {
         val duration = track.durationMs.coerceAtLeast(0L) / 1_000L * 1_000L
         val parameters = mapOf(
             "album_audio_id" to (track.albumAudioId ?: 0L).toString(),
@@ -32,7 +42,7 @@ internal object KuGouApiClient {
             "clientver" to CLIENT_VERSION,
             "duration" to duration.toString(),
             "hash" to track.directHash.orEmpty(),
-            "keyword" to track.keyword(),
+            "keyword" to keyword,
             "lrctxt" to "1",
             "man" to "yes",
             "query_copyright" to "1",
@@ -42,7 +52,8 @@ internal object KuGouApiClient {
             "酷狗歌词搜索失败: errcode=${json.optInt("errcode", -1)} " +
                 "errmsg=${json.optString("errmsg")}".trim()
         }
-        val array = json.optJSONObject("data")?.optJSONArray("candidates") ?: return null
+        val array = json.optJSONObject("data")?.optJSONArray("candidates")
+            ?: return emptyList()
         val candidates = buildList {
             for (index in 0 until array.length()) {
                 val item = array.optJSONObject(index) ?: continue
@@ -63,7 +74,10 @@ internal object KuGouApiClient {
                 )
             }
         }
-        return KuGouCandidateSelector.choose(track, candidates)
+        if (BuildConfig.DEBUG) {
+            Log.i(TAG, "酷狗歌词搜索: keyword=$keyword, candidates=${candidates.size}")
+        }
+        return candidates
     }
 
     fun download(candidate: KuGouSearchCandidate, mid: String): ByteArray {

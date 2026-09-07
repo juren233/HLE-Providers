@@ -278,7 +278,8 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                     Log.w(
                         TAG,
                         "酷狗歌词未匹配: title=${requestTrack.title}, " +
-                            "artist=${requestTrack.artist}",
+                            "artist=${requestTrack.artist}, " +
+                            "mediaId=${requestTrack.mediaId != null}",
                     )
                 }
                 return
