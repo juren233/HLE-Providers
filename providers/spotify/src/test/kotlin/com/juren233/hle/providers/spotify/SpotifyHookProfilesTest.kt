@@ -8,66 +8,122 @@ package com.juren233.hle.providers.spotify
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SpotifyHookProfilesTest {
     @Test
-    fun `keeps exact v3 and v2 lyrics client constructors from original dex`() {
-        val profiles = SpotifyHookProfiles.lyricsClientConstructors
+    fun `selects the verified profile matching the host version code`() {
+        assertEquals(144716725L, SpotifyHookProfiles.profileFor(144716725L).versionCode)
+        assertEquals(145767611L, SpotifyHookProfiles.profileFor(145767611L).versionCode)
+    }
+
+    @Test
+    fun `unknown host versions fall back to the newest verified profile`() {
+        val fallback = SpotifyHookProfiles.profileFor(999999999L)
+
+        assertEquals(145767611L, fallback.versionCode)
+        assertEquals("9.1.80.2221", fallback.versionName)
+    }
+
+    @Test
+    fun `keeps exact 9172 lyrics targets from original dex`() {
+        val profile = SpotifyHookProfiles.profileFor(144716725L)
 
         assertEquals(
             listOf(
                 SpotifyLyricsEndpoint.V3 to "p.am80",
                 SpotifyLyricsEndpoint.V2 to "p.lg80",
             ),
-            profiles.map { it.endpoint to it.target.className },
+            profile.lyricsClientConstructors.map { it.endpoint to it.target.className },
         )
         assertEquals(
             listOf("p.xl80", "p.q2m", "p.xhe"),
-            profiles.single { it.endpoint == SpotifyLyricsEndpoint.V3 }.target.parameterTypeNames,
+            profile.lyricsClientConstructors
+                .single { it.endpoint == SpotifyLyricsEndpoint.V3 }
+                .target.parameterTypeNames,
         )
         assertEquals(
             listOf("p.g980", "p.q2m", "p.q2m", "p.xhe"),
-            profiles.single { it.endpoint == SpotifyLyricsEndpoint.V2 }.target.parameterTypeNames,
+            profile.lyricsClientConstructors
+                .single { it.endpoint == SpotifyLyricsEndpoint.V2 }
+                .target.parameterTypeNames,
         )
-        assertTrue(profiles.none { it.target.className == "p.cla0" })
-        assertTrue(profiles.none { it.target.className == "p.kf80" })
+
+        val selection = requireNotNull(profile.lyricsEndpointSelection)
+        assertEquals("p.hx3", selection.className)
+        assertEquals("b", selection.methodName)
+        assertEquals(emptyList<String>(), selection.parameterTypeNames)
+        assertEquals("boolean", selection.returnTypeName)
+        assertEquals(false, selection.isStatic)
+
+        assertEquals(
+            listOf(
+                SpotifyLyricsEndpoint.V3 to "p.am80",
+                SpotifyLyricsEndpoint.V2 to "p.lg80",
+            ),
+            profile.lyricsRequests.map { it.endpoint to it.target.className },
+        )
+        assertTrue(profile.lyricsRequests.none { it.target.className == "p.cla0" })
+        assertTrue(profile.lyricsRequests.none { it.target.className == "p.kf80" })
     }
 
     @Test
-    fun `keeps exact endpoint selection method from original dex`() {
-        val target = SpotifyHookProfiles.lyricsEndpointSelection
+    fun `keeps exact 9180 lyrics targets from original dex`() {
+        val profile = SpotifyHookProfiles.profileFor(145767611L)
 
-        assertEquals("p.hx3", target.className)
-        assertEquals("b", target.methodName)
-        assertEquals(emptyList<String>(), target.parameterTypeNames)
-        assertEquals("boolean", target.returnTypeName)
-        assertEquals(false, target.isStatic)
+        assertEquals(
+            listOf(
+                SpotifyLyricsEndpoint.V3 to "p.vja0",
+                SpotifyLyricsEndpoint.V2 to "p.gea0",
+            ),
+            profile.lyricsClientConstructors.map { it.endpoint to it.target.className },
+        )
+        assertEquals(
+            listOf("p.sja0", "p.p4n", "p.qbf"),
+            profile.lyricsClientConstructors
+                .single { it.endpoint == SpotifyLyricsEndpoint.V3 }
+                .target.parameterTypeNames,
+        )
+        assertEquals(
+            listOf("p.h7a0", "p.p4n", "p.p4n", "p.qbf"),
+            profile.lyricsClientConstructors
+                .single { it.endpoint == SpotifyLyricsEndpoint.V2 }
+                .target.parameterTypeNames,
+        )
+
+        assertNull(profile.lyricsEndpointSelection)
+
+        assertEquals(
+            listOf(
+                SpotifyLyricsEndpoint.V3 to "p.vja0",
+                SpotifyLyricsEndpoint.V2 to "p.gea0",
+            ),
+            profile.lyricsRequests.map { it.endpoint to it.target.className },
+        )
+    }
+
+    @Test
+    fun `every profile request keeps the cross-version b descriptor`() {
+        listOf(144716725L, 145767611L).forEach { versionCode ->
+            SpotifyHookProfiles.profileFor(versionCode).lyricsRequests.forEach { request ->
+                assertEquals("b", request.target.methodName)
+                assertEquals(
+                    listOf("java.lang.String", "java.lang.String"),
+                    request.target.parameterTypeNames,
+                )
+                assertEquals("io.reactivex.rxjava3.core.Single", request.target.returnTypeName)
+                assertEquals(false, request.target.isStatic)
+                assertNotEquals("p.v581", request.target.className)
+            }
+        }
     }
 
     @Test
     fun `maps enable v3 flag to the same endpoint as Spotify dependency injection`() {
         assertEquals(SpotifyLyricsEndpoint.V3, SpotifyLyricsEndpoint.fromEnableV3(true))
         assertEquals(SpotifyLyricsEndpoint.V2, SpotifyLyricsEndpoint.fromEnableV3(false))
-    }
-
-    @Test
-    fun `keeps both exact kg80 implementation request descriptors`() {
-        val targets = SpotifyHookProfiles.lyricsRequests
-
-        assertEquals(listOf("p.am80", "p.lg80"), targets.map { it.className })
-        assertEquals(2, targets.size)
-        targets.forEach { target ->
-            assertEquals("b", target.methodName)
-            assertEquals(
-                listOf("java.lang.String", "java.lang.String"),
-                target.parameterTypeNames,
-            )
-            assertEquals("io.reactivex.rxjava3.core.Single", target.returnTypeName)
-            assertEquals(false, target.isStatic)
-            assertNotEquals("p.v581", target.className)
-        }
     }
 
     @Test

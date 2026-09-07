@@ -11,11 +11,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import p.kg80
 
 class SpotifyLyricsClientRequesterTest {
     @Test
-    fun `invokes exact kg80 request and observes success through target RxJava`() {
+    fun `invokes the concrete request method and observes success through target RxJava`() {
         val value = Any()
         val client = FakeClient(Single.just(value))
         val successes = mutableListOf<Any>()
@@ -65,12 +64,14 @@ class SpotifyLyricsClientRequesterTest {
         assertTrue(requireNotNull(response.lastDisposable).isDisposed)
     }
 
-    private class FakeClient(
+    // 9.1.80 起 v2/v3 客户端不再实现公共接口，请求器直接反射具体类的
+    // b(String,String)，因此 fake 必须以具体类成员方法的形式提供。
+    class FakeClient(
         private val response: Single<Any>,
-    ) : kg80 {
+    ) {
         val calls = mutableListOf<Pair<String, String?>>()
 
-        override fun b(trackUri: String, language: String?): Single<Any> {
+        fun b(trackUri: String, language: String?): Single<Any> {
             calls += trackUri to language
             return response
         }

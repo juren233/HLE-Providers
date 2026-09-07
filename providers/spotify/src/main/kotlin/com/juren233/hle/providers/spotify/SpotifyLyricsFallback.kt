@@ -202,12 +202,15 @@ internal data class SpotifySelectedLyricsClient<Client>(
 )
 
 /**
- * 合并两个独立到达的运行时事实：Spotify 已构造的 v2/v3 客户端，以及
- * enable_v3_lyrics_endpoint 的真实选择结果。只有二者对齐后才交给请求状态机。
+ * 合并两路独立到达的运行时事实：Spotify 已构造的 v2/v3 客户端，以及活动
+ * endpoint 的来源。活动 endpoint 有两个观察源——enable_v3 开关的真实选择
+ * 结果（最高优先，部分版本档案不提供），与请求结果 Hook 首次命中的包装类
+ * （开关不可定位版本的兜底观测）。二者对齐后才交给请求状态机。
  */
 internal class SpotifyLyricsClientSelector<Client> {
     private val clients = mutableMapOf<SpotifyLyricsEndpoint, Client>()
-    private var selectedEndpoint: SpotifyLyricsEndpoint? = null
+    private var flagEndpoint: SpotifyLyricsEndpoint? = null
+    private var trafficEndpoint: SpotifyLyricsEndpoint? = null
     private var deliveredEndpoint: SpotifyLyricsEndpoint? = null
     private var deliveredClient: Client? = null
 
@@ -224,12 +227,23 @@ internal class SpotifyLyricsClientSelector<Client> {
     fun onEndpointSelected(
         endpoint: SpotifyLyricsEndpoint,
     ): SpotifySelectedLyricsClient<Client>? {
-        selectedEndpoint = endpoint
+        flagEndpoint = endpoint
+        return selectionIfChanged()
+    }
+
+    @Synchronized
+    fun onEndpointTrafficObserved(
+        endpoint: SpotifyLyricsEndpoint,
+    ): SpotifySelectedLyricsClient<Client>? {
+        if (trafficEndpoint == endpoint) return null
+        trafficEndpoint = endpoint
         return selectionIfChanged()
     }
 
     private fun selectionIfChanged(): SpotifySelectedLyricsClient<Client>? {
-        val endpoint = selectedEndpoint ?: return null
+        // 开关观察是 Spotify 自身远程配置的直读，比包装类命中观测更权威；
+        // 开关不可用的版本才使用命中观测。
+        val endpoint = flagEndpoint ?: trafficEndpoint ?: return null
         val client = clients[endpoint] ?: return null
         if (endpoint == deliveredEndpoint && client === deliveredClient) return null
         deliveredEndpoint = endpoint
@@ -253,7 +267,7 @@ internal class SpotifyHandlerLyricsFallbackScheduler(
     }
 }
 
-/** 使用 Spotify 进程自身的 RxJava 类型主动订阅所选 am80/lg80 的 kg80.b。 */
+/** 使用 Spotify 进程自身的 RxJava 类型主动订阅所捕获客户端的 b(String,String)。 */
 internal object SpotifyLyricsClientRequester {
     private const val SINGLE_CLASS_NAME = "io.reactivex.rxjava3.core.Single"
     private const val CONSUMER_CLASS_NAME = "io.reactivex.rxjava3.functions.Consumer"
@@ -267,24 +281,18 @@ internal object SpotifyLyricsClientRequester {
     ): SpotifyLyricsFallbackCancellation {
         val classLoader = client.javaClass.classLoader
             ?: Thread.currentThread().contextClassLoader
-        val clientInterface = Class.forName(
-            SpotifyHookProfiles.LYRICS_CLIENT_INTERFACE,
-            false,
-            classLoader,
-        )
-        check(clientInterface.isInstance(client)) {
-            "Captured object does not implement ${SpotifyHookProfiles.LYRICS_CLIENT_INTERFACE}"
-        }
-        val requestMethod = clientInterface.getMethod(
+        // 9.1.80 起 v2/v3 客户端不再实现公共接口（旧 p.kg80 抽象被内联删除），
+        // 直接调用具体类的 b(trackUri, language)，请求方法名跨版本未变。
+        val requestMethod = client.javaClass.getMethod(
             "b",
             String::class.java,
             String::class.java,
         )
         check(requestMethod.returnType.name == SINGLE_CLASS_NAME) {
-            "Unexpected kg80.b return type: ${requestMethod.returnType.name}"
+            "Unexpected lyrics request return type: ${requestMethod.returnType.name}"
         }
         val single = requestMethod.invoke(client, trackUri, null)
-            ?: error("kg80.b returned null")
+            ?: error("lyrics request returned null")
         val rxClassLoader = single.javaClass.classLoader ?: classLoader
         val consumerClass = Class.forName(CONSUMER_CLASS_NAME, false, rxClassLoader)
         val disposableClass = Class.forName(DISPOSABLE_CLASS_NAME, false, rxClassLoader)

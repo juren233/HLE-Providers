@@ -55,6 +55,20 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         host.hookApplication { application ->
             if (Application.getProcessName() != host.packageName) return@hookApplication
             if (!runtimeStarted.compareAndSet(false, true)) return@hookApplication
+            val versionCode = runCatching {
+                application.packageManager.getPackageInfo(host.packageName, 0).longVersionCode
+            }.getOrDefault(0L)
+            val profile = SpotifyHookProfiles.profileFor(versionCode)
+            if (profile.versionCode == versionCode) {
+                Log.i(TAG, "Spotify 歌词档案: ${profile.versionName} (${profile.versionCode})")
+            } else {
+                Log.w(
+                    TAG,
+                    "Spotify 版本 $versionCode 无已验证歌词档案，" +
+                        "回退最新档案 ${profile.versionName} (${profile.versionCode})",
+                )
+            }
+            startup.selectProfile(profile)
             val createdRuntime = SpotifyRuntime(application, host).also(SpotifyRuntime::start)
             startup.attach(createdRuntime)
             startup.installLyricsHooks()
@@ -82,6 +96,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private var lyricsEndpointSelectionHookInstalled = false
         private val firstLyricsClientHits = mutableMapOf<SpotifyLyricsEndpoint, AtomicBoolean>()
         private val firstLyricsEndpointSelectionHit = AtomicBoolean(false)
+        private val firstLyricsEndpointTrafficHit = AtomicBoolean(false)
         private val firstLyricsRequestHit = AtomicBoolean(false)
         private val firstLyricsHit = AtomicBoolean(false)
         private val lyricsClientSelector = SpotifyLyricsClientSelector<Any>()
@@ -94,9 +109,19 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private var activeRuntime: SpotifyRuntime? = null
         private var pendingLyricsClient: SpotifySelectedLyricsClient<Any>? = null
 
+        @Volatile
+        private var profile: SpotifyVersionProfile = SpotifyHookProfiles.profileFor(0L)
+
+        fun selectProfile(profile: SpotifyVersionProfile) {
+            this.profile = profile
+        }
+
+        private fun currentProfile(): SpotifyVersionProfile = profile
+
         fun installLyricsHooks() {
             synchronized(lyricsHookInstallLock) {
-                SpotifyHookProfiles.lyricsRequests.forEach { target ->
+                currentProfile().lyricsRequests.forEach { request ->
+                    val target = request.target
                     val targetKey = "${target.className}#${target.methodName}"
                     if (targetKey in installedLyricsTargets) return@forEach
                     runCatching {
@@ -110,6 +135,9 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                                             "target=${receiver?.javaClass?.name ?: target.className}",
                                     )
                                 }
+                                // 请求命中即证明 Spotify 当前实际使用的 endpoint，
+                                // 供开关 Hook 不可用档案（如 9.1.80）选择客户端。
+                                onLyricsEndpointTrafficObserved(request.endpoint)
                                 SpotifySingleSuccessObserver.wrap(
                                     result = result,
                                     trackUri = arguments.getOrNull(0) as? String,
@@ -163,7 +191,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
 
         fun installLyricsClientHooks() {
             synchronized(lyricsClientHookInstallLock) {
-                SpotifyHookProfiles.lyricsClientConstructors.forEach { profile ->
+                currentProfile().lyricsClientConstructors.forEach { profile ->
                     if (profile.endpoint in installedLyricsClientConstructors) return@forEach
                     runCatching {
                         host.hookAfterConstructor(
@@ -189,10 +217,22 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                     }
                 }
 
+                val selectionTarget = currentProfile().lyricsEndpointSelection
+                if (selectionTarget == null) {
+                    if (!lyricsEndpointSelectionHookInstalled) {
+                        lyricsEndpointSelectionHookInstalled = true
+                        Log.i(
+                            TAG,
+                            "当前歌词档案无 endpoint 开关 Hook，" +
+                                "活动 endpoint 由请求结果 Hook 命中观测",
+                        )
+                    }
+                    return
+                }
                 if (!lyricsEndpointSelectionHookInstalled) {
                     runCatching {
                         host.hookMethodResult(
-                            target = SpotifyHookProfiles.lyricsEndpointSelection,
+                            target = selectionTarget,
                             callback = OfficialProviderMethodResultCallback { _, _, result ->
                                 (result as? Boolean)?.let { enableV3 ->
                                     onLyricsEndpointSelected(
@@ -204,7 +244,11 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                         )
                     }.onSuccess {
                         lyricsEndpointSelectionHookInstalled = true
-                        Log.i(TAG, "Spotify 歌词 endpoint 选择 Hook 已安装: p.hx3#b")
+                        Log.i(
+                            TAG,
+                            "Spotify 歌词 endpoint 选择 Hook 已安装: " +
+                                "${selectionTarget.className}#${selectionTarget.methodName}",
+                        )
                     }.onFailure { error ->
                         Log.e(
                             TAG,
@@ -285,6 +329,14 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 Log.i(TAG, "Spotify 歌词 endpoint 选择: $endpoint")
             }
             lyricsClientSelector.onEndpointSelected(endpoint)?.let(::onSelectedLyricsClient)
+        }
+
+        private fun onLyricsEndpointTrafficObserved(endpoint: SpotifyLyricsEndpoint) {
+            if (firstLyricsEndpointTrafficHit.compareAndSet(false, true)) {
+                Log.i(TAG, "Spotify 歌词 endpoint 请求命中观测: $endpoint")
+            }
+            lyricsClientSelector.onEndpointTrafficObserved(endpoint)
+                ?.let(::onSelectedLyricsClient)
         }
 
         private fun onSelectedLyricsClient(selection: SpotifySelectedLyricsClient<Any>) {
