@@ -130,3 +130,18 @@
 - 下一个判别性证据：报告者设备 `adb logcat -s HLEProvider/KuGou` 出现去括号重试后的"酷狗 v2 歌词已发布"；维护者设备（ID 路径）完整关键词一次命中、无额外请求。
 - 验收条件：媒体会话无 mediaId 的播放器播双语标题歌曲能出歌词与翻译；含括号且酷狗有收录的版本（如 Live/Remix）仍按完整标题命中、不误配基础版；正常单语歌曲的请求数与行为不回归。编译与单测不能关闭本条。
 - 候选结果（2026-09-07）：1.0.11 (12) 实现阶梯搜索（`KuGouSearchStrategy`/`KuGouKeywordVariants`，完整关键词优先，仅 0 候选或全部 <70 时按最右括号段累计去括号重试，变体封顶 3，errcode≠200 中断不重试）；27 项单测与 Release Kotlin 编译通过；真机 v2 API 阶梯复核——`晴天 (Live)` 完整关键词第 1 次请求即命中库存 `晴天 (Live)`（不触发回退），报告者双语歌第 1 次 0 候选、去括号第 2 次命中（96 分、时长 205000ms 精确一致），发布歌名仍取 MediaSession 原文。dist/kugou-1.0.11-12.hlp 已签名验签，未发布、未装机。
+
+## SPOTIFY-LYRICS-002：9.1.80.2221 混淆名全面挪用，硬编码歌词 Hook 全部落空
+
+- 状态：定位完成，修复中（2026-09-07）。维护者设备 Spotify 更新到 `9.1.80.2221 (145767611)` 后歌词失效，证明这是版本漂移而非报告者个例；报告者 `9.1.68.1888 (144192416)` 同理。
+- 症状与复现：Spotify 播放正常、进度与下一首正常，只有歌词退化为整曲占位行；更新 Spotify 后在原本正常的维护者设备上复现。
+- 确认事实（9.1.80.2221 原始 APK dexdump/注解解析，APK 留存 /tmp/spotify-9180）：
+  - 旧标识全部失效：`p.am80` 现为无关 FINAL 类（super `p.em80`）；`p.lg80` 现为无关 ABSTRACT 类；`p.kg80` 从歌词客户端接口变为无关 FINAL 类（extends 无关的 `p.lg80`）；`p.hx3` 不再是 endpoint 选择器。
+  - 新歌词链路（结构同旧版，仅名字漂移）：v3 服务=`Lp/sja0;`（classes8，@GET `color-lyrics/v3/track/{trackId}` 方法 `b`，download 方法 `a`）；v2 服务=`Lp/h7a0;`（classes2，`color-lyrics/v2/track/{trackId}` 方法 `a`）。v3 包装类=`Lp/vja0;`（classes8，ctor `(Lp/sja0;Lp/p4n;Lp/qbf;)V`，请求方法 `b(Ljava/lang/String;Ljava/lang/String;)Lio/reactivex/rxjava3/core/Single;`，与旧 am80 三槽同构）；v2 包装类=`Lp/gea0;`（classes2，ctor `(Lp/h7a0;Lp/p4n;Lp/p4n;Lp/qbf;)V`，同 `b(String,String):Single`，与旧 lg80 四槽同构）。vja0/gea0 无共同接口（均直接 extends Object，旧 kg80 抽象被内联删除），请求器不能再用接口反射。endpoint 开关串 `enable_v3_lyrics_endpoint` 仍在（classes2 `p.a74` 的 models() 注册、classes10 前缀串），但 a74 的 `a()Z`/`b()Z` 走接口分发消费，静态无法区分谁是 enable_v3。
+  - `SpotifyLyricsPayloadExtractor` 是结构反射（字段形状+结构探测），proto 类改名（s2e→aq00/fi10）不影响解析。
+- 根因确认：歌词链路三个 Hook（构造捕获、请求结果、endpoint 选择）全部是精确混淆名直连（`hookAfterConstructor`/`hookMethodResult` + 硬编码 target），从未接入 DexKit；DexKit 在 Spotify Provider 只服务下一首队列查询（`spotify-player-state-next-tracks-v1`，带锚点，跨版本仍命中）。"DexKit 没生效"实为"歌词链路没有 DexKit"。
+- 已证伪/排除：不是 payload 解析失效（结构反射不受改名影响）；不是网络/权益变化（维护者更新即失效，与账号无关）；不得在未核对新 DEX 前追加猜测别名。
+- 修复方向（两腿）：(a) 止血——按 DEX 验证结果出 9.1.80.2221 精确 profile（vja0/gea0 构造与 `b` 请求 Hook），请求器去掉 `p.kg80` 接口依赖改调具体类 `b(String,String)`；endpoint 选择在该 profile 下暂缺，需配套"以请求结果 Hook 首次命中的包装类作为活动 endpoint"的观测源，不得猜默认值。(b) 持久化——core 查询 schema 增加注解值匹配能力（现有 `requiredStrings` 走 DexKit `addEqString` 只匹配方法代码常量串，Retrofit 端点串在注解值里匹配不到），provider 端改为注解锚→服务类→包装类链式解析；包装类零字符串、纯胶水，现有查询能力锚不到它。
+- 当前未知：a74 `a()`/`b()` 哪个对应 enable_v3（消费方走接口分发）；注解值匹配能力进 core 后的链式查询唯一性。
+- 验收条件：9.1.80.2221 上冷启动当前曲与切歌均能取得多行官方歌词（主动兜底命中日志 `Spotify color-lyrics 异步成功首次命中`）；9.1.72 profile 不回归；下一首预览与进度不回归。编译与单测不能关闭本条。
+- 候选交付（2026-09-07）：1.0.12 (13) 实现 SpotifyHookProfiles 版本档案（`profileFor(versionCode)`，未知版本回退最新档案）：9.1.72 档案保持原 am80/lg80/hx3 语义不变，9.1.80 档案为 vja0/gea0 构造+`b` 请求 Hook、无开关 Hook；`SpotifyLyricsClientRequester` 去掉 `p.kg80` 接口依赖改调具体类 `b(String,String)`（含返回类型 Single 校验）；`SpotifyLyricsClientSelector` 增加请求命中观测源（`onEndpointTrafficObserved`，开关观察最高优先、开关缺失版本用命中观测），PluginEntry 按 hookApplication 解析的宿主 versionCode 选档案并在请求回调中上报命中 endpoint。46 项单测通过（profiles 版本选择/两档案描述符锁定/selector 优先级/requester 无接口路径），Release Kotlin 编译通过；dist/spotify-1.0.12-13.hlp 已签名验签，未发布、未装机。真机验收要点：9.1.80.2221 播放出现 `Spotify color-lyrics 方法结果 Hook 首次命中`（target=p.vja0 或 p.gea0）、`endpoint 请求命中观测`、主动兜底 `Spotify color-lyrics 异步成功首次命中: lines=N`。
