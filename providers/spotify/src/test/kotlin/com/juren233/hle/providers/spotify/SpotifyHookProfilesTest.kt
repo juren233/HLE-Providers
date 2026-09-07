@@ -6,6 +6,10 @@
 
 package com.juren233.hle.providers.spotify
 
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReference
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodAnnotationConstraint
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -17,14 +21,169 @@ class SpotifyHookProfilesTest {
     fun `selects the verified profile matching the host version code`() {
         assertEquals(144716725L, SpotifyHookProfiles.profileFor(144716725L).versionCode)
         assertEquals(145767611L, SpotifyHookProfiles.profileFor(145767611L).versionCode)
+        assertEquals(
+            144716725L,
+            SpotifyHookProfiles.exactProfileFor(144716725L)?.versionCode,
+        )
     }
 
     @Test
-    fun `unknown host versions fall back to the newest verified profile`() {
-        val fallback = SpotifyHookProfiles.profileFor(999999999L)
+    fun `unknown host versions expose no exact profile and fall back explicitly`() {
+        assertNull(SpotifyHookProfiles.exactProfileFor(144192416L))
+        assertNull(SpotifyHookProfiles.exactProfileFor(999999999L))
+        assertEquals(145767611L, SpotifyHookProfiles.fallbackProfile().versionCode)
+        assertEquals(145767611L, SpotifyHookProfiles.profileFor(999999999L).versionCode)
+    }
 
-        assertEquals(145767611L, fallback.versionCode)
-        assertEquals("9.1.80.2221", fallback.versionName)
+    @Test
+    fun `chains annotation anchor queries before the client queries that reference them`() {
+        val queries = SpotifyHookProfiles.lyricsChainQueries
+        assertEquals(4, queries.size)
+        val keys = queries.map { it.cacheKey }
+        assertEquals(keys.size, keys.distinct().size)
+        val clientIndexes = listOf(
+            keys.indexOf(SpotifyHookProfiles.CHAIN_CLIENT_V2_KEY),
+            keys.indexOf(SpotifyHookProfiles.CHAIN_CLIENT_V3_KEY),
+        )
+        val serviceIndexes = listOf(
+            keys.indexOf(SpotifyHookProfiles.CHAIN_SERVICE_V2_KEY),
+            keys.indexOf(SpotifyHookProfiles.CHAIN_SERVICE_V3_KEY),
+        )
+        clientIndexes.zip(serviceIndexes).forEach { (client, service) ->
+            assertTrue("包装类查询必须晚于其服务查询", client > service)
+        }
+    }
+
+    @Test
+    fun `service queries anchor only the cross-version endpoint annotation values`() {
+        val queries = SpotifyHookProfiles.lyricsChainQueries
+        val keys = queries.map { it.cacheKey }
+        val serviceV2 = queries[keys.indexOf(SpotifyHookProfiles.CHAIN_SERVICE_V2_KEY)]
+        val serviceV3 = queries[keys.indexOf(SpotifyHookProfiles.CHAIN_SERVICE_V3_KEY)]
+
+        // R8 每版都会改名 Retrofit 注解类（9.1.72=p.thy，9.1.80=p.vsz），
+        // 锚点必须只锚注解元素值，不得携带注解类型名或元素名。
+        assertEquals(
+            OfficialProviderMethodAnnotationConstraint(
+                elementValue = "color-lyrics/v2/track/{trackId}",
+            ),
+            serviceV2.requiredMethodAnnotation,
+        )
+        assertEquals(
+            OfficialProviderMethodAnnotationConstraint(
+                elementValue = "color-lyrics/v3/track/{trackId}",
+            ),
+            serviceV3.requiredMethodAnnotation,
+        )
+        assertNull(serviceV2.parameterTypeNames)
+        assertNull(serviceV3.parameterTypeNames)
+    }
+
+    @Test
+    fun `client queries hold the service declaring class and the b descriptor`() {
+        val queries = SpotifyHookProfiles.lyricsChainQueries
+        val keys = queries.map { it.cacheKey }
+        mapOf(
+            SpotifyHookProfiles.CHAIN_CLIENT_V2_KEY to SpotifyHookProfiles.CHAIN_SERVICE_V2_KEY,
+            SpotifyHookProfiles.CHAIN_CLIENT_V3_KEY to SpotifyHookProfiles.CHAIN_SERVICE_V3_KEY,
+        ).forEach { (clientKey, serviceKey) ->
+            val query = queries[keys.indexOf(clientKey)]
+            assertEquals(
+                listOf(
+                    OfficialProviderDexTypeReference(
+                        queryCacheKey = serviceKey,
+                        source = OfficialProviderDexTypeSource.DECLARING_CLASS,
+                    ),
+                ),
+                query.declaringClassFieldReferences,
+            )
+            assertEquals(
+                listOf("java.lang.String", "java.lang.String"),
+                query.parameterTypeNames,
+            )
+            assertEquals("io.reactivex.rxjava3.core.Single", query.returnTypeName)
+            assertEquals(false, query.isStatic)
+        }
+    }
+
+    @Test
+    fun `maps chain resolution targets into a runtime profile`() {
+        val targets = listOf(
+            OfficialProviderMethodTarget(
+                className = "p.g980",
+                methodName = "a",
+                parameterTypeNames = listOf("java.lang.String", "boolean", "java.lang.String", "boolean"),
+                returnTypeName = "io.reactivex.rxjava3.core.Single",
+                isStatic = false,
+            ),
+            OfficialProviderMethodTarget(
+                className = "p.xl80",
+                methodName = "b",
+                parameterTypeNames = listOf("java.lang.String", "boolean", "java.lang.String", "boolean"),
+                returnTypeName = "io.reactivex.rxjava3.core.Single",
+                isStatic = false,
+            ),
+            OfficialProviderMethodTarget(
+                className = "p.lg80",
+                methodName = "b",
+                parameterTypeNames = listOf("java.lang.String", "java.lang.String"),
+                returnTypeName = "io.reactivex.rxjava3.core.Single",
+                isStatic = false,
+            ),
+            OfficialProviderMethodTarget(
+                className = "p.am80",
+                methodName = "b",
+                parameterTypeNames = listOf("java.lang.String", "java.lang.String"),
+                returnTypeName = "io.reactivex.rxjava3.core.Single",
+                isStatic = false,
+            ),
+        )
+        val profile = requireNotNull(
+            SpotifyHookProfiles.chainProfile(versionCode = 144192416L, targets = targets),
+        )
+
+        assertEquals(144192416L, profile.versionCode)
+        assertNull(profile.lyricsEndpointSelection)
+        assertEquals(
+            listOf(
+                SpotifyLyricsEndpoint.V3 to "p.am80",
+                SpotifyLyricsEndpoint.V2 to "p.lg80",
+            ),
+            profile.lyricsRequests.map { it.endpoint to it.target.className },
+        )
+        val v3Constructor = profile.lyricsClientConstructors
+            .single { it.endpoint == SpotifyLyricsEndpoint.V3 }.target
+        assertEquals("p.am80", v3Constructor.className)
+        assertEquals("p.xl80", v3Constructor.firstParameterTypeName)
+        assertEquals(emptyList<String>(), v3Constructor.parameterTypeNames)
+        val v2Constructor = profile.lyricsClientConstructors
+            .single { it.endpoint == SpotifyLyricsEndpoint.V2 }.target
+        assertEquals("p.lg80", v2Constructor.className)
+        assertEquals("p.g980", v2Constructor.firstParameterTypeName)
+        assertEquals(emptyList<String>(), v2Constructor.parameterTypeNames)
+    }
+
+    @Test
+    fun `rejects chain resolution targets with unexpected size`() {
+        assertNull(
+            SpotifyHookProfiles.chainProfile(
+                versionCode = 1L,
+                targets = emptyList(),
+            ),
+        )
+        assertNull(
+            SpotifyHookProfiles.chainProfile(
+                versionCode = 1L,
+                targets = List(SpotifyHookProfiles.lyricsChainQueries.size + 1) {
+                    OfficialProviderMethodTarget(
+                        className = "p.x",
+                        methodName = "b",
+                        returnTypeName = "io.reactivex.rxjava3.core.Single",
+                        isStatic = false,
+                    )
+                },
+            ),
+        )
     }
 
     @Test

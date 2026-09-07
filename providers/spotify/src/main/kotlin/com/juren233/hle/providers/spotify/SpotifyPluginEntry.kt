@@ -58,21 +58,27 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             val versionCode = runCatching {
                 application.packageManager.getPackageInfo(host.packageName, 0).longVersionCode
             }.getOrDefault(0L)
-            val profile = SpotifyHookProfiles.profileFor(versionCode)
-            if (profile.versionCode == versionCode) {
-                Log.i(TAG, "Spotify 歌词档案: ${profile.versionName} (${profile.versionCode})")
-            } else {
-                Log.w(
+            val exactProfile = SpotifyHookProfiles.exactProfileFor(versionCode)
+            if (exactProfile != null) {
+                Log.i(
                     TAG,
-                    "Spotify 版本 $versionCode 无已验证歌词档案，" +
-                        "回退最新档案 ${profile.versionName} (${profile.versionCode})",
+                    "Spotify 歌词档案: ${exactProfile.versionName} (${exactProfile.versionCode})",
                 )
+                startup.selectProfile(exactProfile)
+                startup.installLyricsHooks()
+                startup.installLyricsClientHooks()
+            } else {
+                // 未知版本：install 阶段预装的兜底档案 Hook 若类名对不上已失败，
+                // 这里改用注解锚链式解析（端点值跨版本稳定且全 App 唯一），
+                // 成功后以链式档案安装，与兜底重合的目标按键自动去重。
+                Log.i(
+                    TAG,
+                    "Spotify 版本 $versionCode 无已验证歌词档案，进入注解锚链式解析",
+                )
+                startup.installDynamicLyricsChain(application, versionCode)
             }
-            startup.selectProfile(profile)
             val createdRuntime = SpotifyRuntime(application, host).also(SpotifyRuntime::start)
             startup.attach(createdRuntime)
-            startup.installLyricsHooks()
-            startup.installLyricsClientHooks()
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
@@ -99,6 +105,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private val firstLyricsEndpointTrafficHit = AtomicBoolean(false)
         private val firstLyricsRequestHit = AtomicBoolean(false)
         private val firstLyricsHit = AtomicBoolean(false)
+        private val dynamicChainStarted = AtomicBoolean(false)
         private val lyricsClientSelector = SpotifyLyricsClientSelector<Any>()
         private val pending = SpotifyStartupBuffer<
             MediaMetadata,
@@ -257,6 +264,42 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                         )
                     }
                 }
+            }
+        }
+
+        /**
+         * 未知宿主版本的注解锚链式解析：端点注解值 -> 服务接口 -> 持有该接口
+         * 字段的包装类请求方法。解析与 Hook 安装都在核心的 Provider 线程完成，
+         * 一次注册，核心自带缓存、自修复与看门狗。
+         */
+        fun installDynamicLyricsChain(application: Application, versionCode: Long) {
+            if (!dynamicChainStarted.compareAndSet(false, true)) return
+            runCatching {
+                host.resolveDexMethods(
+                    application = application,
+                    queries = SpotifyHookProfiles.lyricsChainQueries,
+                ) { targets ->
+                    val profile = SpotifyHookProfiles.chainProfile(versionCode, targets)
+                    if (profile == null) {
+                        Log.e(
+                            TAG,
+                            "Spotify 链式解析结果数量异常: " +
+                                "expected=${SpotifyHookProfiles.lyricsChainQueries.size}, " +
+                                "actual=${targets.size}",
+                        )
+                        return@resolveDexMethods
+                    }
+                    val v3 = profile.lyricsRequests
+                        .first { it.endpoint == SpotifyLyricsEndpoint.V3 }.target.className
+                    val v2 = profile.lyricsRequests
+                        .first { it.endpoint == SpotifyLyricsEndpoint.V2 }.target.className
+                    Log.i(TAG, "Spotify 链式解析成功: v3=$v3, v2=$v2")
+                    selectProfile(profile)
+                    installLyricsHooks()
+                    installLyricsClientHooks()
+                }
+            }.onFailure { error ->
+                Log.e(TAG, "Spotify 链式解析注册失败，保持兜底档案 Hook", error)
             }
         }
 

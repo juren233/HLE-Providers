@@ -6,8 +6,12 @@
 
 package com.juren233.hle.providers.spotify
 
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderConstructorTarget
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQueryBuilder
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReference
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodAnnotationConstraint
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 
 internal object SpotifyHookProfiles {
@@ -16,11 +20,16 @@ internal object SpotifyHookProfiles {
     // R8 每个版本都会整体挪用短混淆名（9.1.80 把 p.am80/p.lg80/p.kg80/p.hx3
     // 全部变成了无关类，见 DEBUGGING_MISTAKES.md SPOTIFY-LYRICS-002），
     // 歌词链路的精确名 Hook 必须绑定已验证的宿主版本。
-    // 未知版本回退最新已验证档案：名字对不上时安装失败的表现与旧档案一致，
-    // 而未来版本与新档案结构更接近。
-    fun profileFor(versionCode: Long): SpotifyVersionProfile =
+    // 未知版本不再依赖精确档案兜底，而是进入注解锚链式解析（见下方
+    // lyricsChainQueries）；只有链式不可用时才回退最新已验证档案。
+    fun exactProfileFor(versionCode: Long): SpotifyVersionProfile? =
         VERSION_PROFILES.lastOrNull { it.versionCode == versionCode }
-            ?: VERSION_PROFILES.last()
+
+    fun fallbackProfile(): SpotifyVersionProfile = VERSION_PROFILES.last()
+
+    // 兼容旧调用方：命中精确档案用精确档案，否则回退最新档案。
+    fun profileFor(versionCode: Long): SpotifyVersionProfile =
+        exactProfileFor(versionCode) ?: fallbackProfile()
 
     // Spotify 9.1.72.1891 原始 classes6.dex：
     // Lp/am80;-><init>(Lp/xl80;Lp/q2m;Lp/xhe;)V 封装 v3 Retrofit；
@@ -118,6 +127,104 @@ internal object SpotifyHookProfiles {
     )
 
     private val VERSION_PROFILES = listOf(SPOTIFY_9_1_72_1891, SPOTIFY_9_1_80_2221)
+
+    // ---- 注解锚链式查询（版本无关）----
+    //
+    // 2026-09-07 对 9.1.72.1891 与 9.1.80.2221 原始 DEX 的注解取证确认，歌词
+    // 链路两版结构完全对称：
+    //   服务接口（Retrofit，注解类每版被 R8 改名：9.1.72=p.thy，9.1.80=p.vsz）：
+    //     v2 track 端点  -> 9.1.72 p.g980#a / 9.1.80 p.h7a0#a (String,Z,String,Z)Single
+    //     v3 track 端点  -> 9.1.72 p.xl80#b / 9.1.80 p.sja0#b (String,Z,String,Z)Single
+    //   包装类（持有唯一的服务接口字段 + b(String,String)Single，DI 直接构造）：
+    //     v2 -> 9.1.72 p.lg80 / 9.1.80 p.gea0；v3 -> 9.1.72 p.am80 / 9.1.80 p.vja0
+    // 端点路径常量由 Retrofit 运行期反射读取、R8 必须保留，且每个取值全 App 唯一；
+    // 因此锚点只锚注解元素值，不锚注解类名与元素名。
+    internal const val CHAIN_SERVICE_V2_KEY = "spotify-lyrics-service-v2"
+    internal const val CHAIN_SERVICE_V3_KEY = "spotify-lyrics-service-v3"
+    internal const val CHAIN_CLIENT_V2_KEY = "spotify-lyrics-client-v2"
+    internal const val CHAIN_CLIENT_V3_KEY = "spotify-lyrics-client-v3"
+
+    private const val CHAIN_TRACK_V2_VALUE = "color-lyrics/v2/track/{trackId}"
+    private const val CHAIN_TRACK_V3_VALUE = "color-lyrics/v3/track/{trackId}"
+
+    private fun chainServiceQuery(
+        cacheKey: String,
+        endpointValue: String,
+    ): OfficialProviderDexMethodQuery =
+        OfficialProviderDexMethodQueryBuilder(cacheKey).apply {
+            requiredMethodAnnotation = OfficialProviderMethodAnnotationConstraint(
+                elementValue = endpointValue,
+            )
+        }.build()
+
+    private fun chainClientQuery(
+        cacheKey: String,
+        serviceKey: String,
+    ): OfficialProviderDexMethodQuery =
+        OfficialProviderDexMethodQueryBuilder(cacheKey).apply {
+            declaringClassFieldReferences = listOf(
+                OfficialProviderDexTypeReference(
+                    queryCacheKey = serviceKey,
+                    source = OfficialProviderDexTypeSource.DECLARING_CLASS,
+                ),
+            )
+            parameterTypeNames = listOf("java.lang.String", "java.lang.String")
+            returnTypeName = "io.reactivex.rxjava3.core.Single"
+            isStatic = false
+        }.build()
+
+    /** 顺序即解析顺序：服务接口必须先于引用它们的包装类查询。 */
+    val lyricsChainQueries: List<OfficialProviderDexMethodQuery> = listOf(
+        chainServiceQuery(CHAIN_SERVICE_V2_KEY, CHAIN_TRACK_V2_VALUE),
+        chainServiceQuery(CHAIN_SERVICE_V3_KEY, CHAIN_TRACK_V3_VALUE),
+        chainClientQuery(CHAIN_CLIENT_V2_KEY, CHAIN_SERVICE_V2_KEY),
+        chainClientQuery(CHAIN_CLIENT_V3_KEY, CHAIN_SERVICE_V3_KEY),
+    )
+
+    /**
+     * 把批量解析结果映射为与精确档案同构的运行期档案。
+     *
+     * [targets] 顺序与 [lyricsChainQueries] 一致：v2 服务、v3 服务、v2 包装 b、
+     * v3 包装 b。包装类查询的解析结果就是请求方法 Hook 目标本身；服务接口类名
+     * 作为构造器首参约束交给核心的放宽构造器解析。
+     */
+    fun chainProfile(
+        versionCode: Long,
+        targets: List<OfficialProviderMethodTarget>,
+    ): SpotifyVersionProfile? {
+        if (targets.size != lyricsChainQueries.size) return null
+        val serviceV2 = targets[0].className
+        val serviceV3 = targets[1].className
+        val clientV2 = targets[2]
+        val clientV3 = targets[3]
+        return SpotifyVersionProfile(
+            versionName = "chain",
+            versionCode = versionCode,
+            lyricsClientConstructors = listOf(
+                SpotifyLyricsClientConstructorProfile(
+                    endpoint = SpotifyLyricsEndpoint.V3,
+                    target = OfficialProviderConstructorTarget(
+                        className = clientV3.className,
+                        firstParameterTypeName = serviceV3,
+                    ),
+                ),
+                SpotifyLyricsClientConstructorProfile(
+                    endpoint = SpotifyLyricsEndpoint.V2,
+                    target = OfficialProviderConstructorTarget(
+                        className = clientV2.className,
+                        firstParameterTypeName = serviceV2,
+                    ),
+                ),
+            ),
+            // 静态无法定位 enable_v3 开关的选择器（9.1.80 已确认走接口分发），
+            // 链式档案统一由请求结果 Hook 首次命中的包装类观测活动 endpoint。
+            lyricsEndpointSelection = null,
+            lyricsRequests = listOf(
+                SpotifyLyricsRequestProfile(SpotifyLyricsEndpoint.V3, clientV3),
+                SpotifyLyricsRequestProfile(SpotifyLyricsEndpoint.V2, clientV2),
+            ),
+        )
+    }
 
     // Spotify 9.1.72.1891 原始 classes6.dex：
     // Lcom/spotify/player/model/AutoValue_PlayerState;->nextTracks()Lp/f320;
