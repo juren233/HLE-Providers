@@ -684,8 +684,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
             }
             val lines = SpotifyLyricsTimelineMapper.map(payload, metadata.durationMs)
             if (lines.isEmpty()) return
-            val songKey = "lyrics:${payload.trackUri}:${payload.lines.hashCode()}:" +
-                payload.translations.hashCode()
+            val songKey = "lyrics:${payload.trackUri}:${payload.lines.hashCode()}"
             if (songKey == lastPublishedSongKey) return
             publishSong(Song().apply {
                 id = payload.trackUri
@@ -698,7 +697,6 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                         end = line.end
                         duration = (line.end - line.begin).coerceAtLeast(0L)
                         text = line.text
-                        translation = line.translation
                         words = line.words.map { word ->
                             LyricWord().apply {
                                 begin = word.begin

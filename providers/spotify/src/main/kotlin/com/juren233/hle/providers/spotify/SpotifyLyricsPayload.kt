@@ -43,7 +43,6 @@ internal data class SpotifyTimelineLine(
     val begin: Long,
     val end: Long,
     val text: String,
-    val translation: String?,
     val words: List<SpotifyTimelineWord>,
 )
 
@@ -143,15 +142,12 @@ internal object SpotifyLyricsTimelineMapper {
             durationMs > line.startMs -> durationMs
             else -> line.startMs + DEFAULT_LINE_DURATION_MS
         }
-        val translation = payload.translations.asSequence()
-            .mapNotNull { it.lines.getOrNull(index)?.trim()?.takeIf(String::isNotBlank) }
-            .firstOrNull()
-            ?.takeIf { it != line.text }
+        // Spotify 自带翻译刻意不发布：translation 槽位必须留给模块的三方在线
+        // 翻译源，模块只按行补空槽，Provider 先占位会让在线翻译补不进去。
         SpotifyTimelineLine(
             begin = line.startMs,
             end = end,
             text = line.text,
-            translation = translation,
             words = mapSyllables(line, end),
         )
     }

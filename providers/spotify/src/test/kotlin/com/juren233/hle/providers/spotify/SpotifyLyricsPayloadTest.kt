@@ -57,7 +57,7 @@ class SpotifyLyricsPayloadTest {
     }
 
     @Test
-    fun `maps syllable timing and translation by line index`() {
+    fun `maps syllable timing by line index and ignores native translations`() {
         val payload = SpotifyLyricsPayload(
             trackUri = "spotify:track:1234567890123456789012",
             syncType = 3,
@@ -79,7 +79,6 @@ class SpotifyLyricsPayloadTest {
         assertEquals(listOf("Hello ", "world"), lines[0].words.map { it.text })
         assertEquals(listOf(1_000L, 1_700L), lines[0].words.map { it.begin })
         assertEquals(listOf(1_700L, 3_000L), lines[0].words.map { it.end })
-        assertEquals("你好，世界", lines[0].translation)
         assertEquals(6_000L, lines[1].end)
     }
 
