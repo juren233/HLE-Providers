@@ -26,15 +26,16 @@ class SpotifyLyricsClientSelectorTest {
     }
 
     @Test
-    fun `false endpoint result selects existing v2 client`() {
+    fun `false endpoint result keeps the default v2 selection`() {
         val selector = SpotifyLyricsClientSelector<Any>()
         val v2 = Any()
 
-        assertNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V2, v2))
-        val selected = requireNotNull(selector.onEndpointSelected(SpotifyLyricsEndpoint.V2))
+        val defaulted = requireNotNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V2, v2))
+        assertEquals(SpotifyLyricsEndpoint.V2, defaulted.endpoint)
+        assertSame(v2, defaulted.client)
 
-        assertEquals(SpotifyLyricsEndpoint.V2, selected.endpoint)
-        assertSame(v2, selected.client)
+        // 权威开关结果与默认一致：不重复交付
+        assertNull(selector.onEndpointSelected(SpotifyLyricsEndpoint.V2))
     }
 
     @Test
@@ -71,16 +72,15 @@ class SpotifyLyricsClientSelectorTest {
     }
 
     @Test
-    fun `traffic observation alone selects the captured client`() {
+    fun `traffic observation alone does not re-emit the already defaulted client`() {
         val selector = SpotifyLyricsClientSelector<Any>()
         val v3 = Any()
 
-        assertNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V3, v3))
-        val selected =
-            requireNotNull(selector.onEndpointTrafficObserved(SpotifyLyricsEndpoint.V3))
+        val defaulted = requireNotNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V3, v3))
+        assertEquals(SpotifyLyricsEndpoint.V3, defaulted.endpoint)
+        assertSame(v3, defaulted.client)
 
-        assertEquals(SpotifyLyricsEndpoint.V3, selected.endpoint)
-        assertSame(v3, selected.client)
+        assertNull(selector.onEndpointTrafficObserved(SpotifyLyricsEndpoint.V3))
     }
 
     @Test
@@ -98,11 +98,61 @@ class SpotifyLyricsClientSelectorTest {
     @Test
     fun `repeated identical traffic observations do not re-emit`() {
         val selector = SpotifyLyricsClientSelector<Any>()
+        val v2 = Any()
         val v3 = Any()
+        selector.onClientAvailable(SpotifyLyricsEndpoint.V2, v2)
         selector.onClientAvailable(SpotifyLyricsEndpoint.V3, v3)
         assertNotNull(selector.onEndpointTrafficObserved(SpotifyLyricsEndpoint.V3))
 
         assertNull(selector.onEndpointTrafficObserved(SpotifyLyricsEndpoint.V3))
+    }
+
+    @Test
+    fun `delivers the captured v2 client without any observation`() {
+        val selector = SpotifyLyricsClientSelector<Any>()
+        val v2 = Any()
+
+        val selected = requireNotNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V2, v2))
+
+        assertEquals(SpotifyLyricsEndpoint.V2, selected.endpoint)
+        assertSame(v2, selected.client)
+    }
+
+    @Test
+    fun `delivers v3 by default when only v3 was constructed`() {
+        val selector = SpotifyLyricsClientSelector<Any>()
+        val v3 = Any()
+
+        val selected = requireNotNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V3, v3))
+
+        assertEquals(SpotifyLyricsEndpoint.V3, selected.endpoint)
+        assertSame(v3, selected.client)
+    }
+
+    @Test
+    fun `prefers v2 by default when both clients are captured`() {
+        val selector = SpotifyLyricsClientSelector<Any>()
+        val v2 = Any()
+        val v3 = Any()
+
+        val selected = requireNotNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V2, v2))
+        assertEquals(SpotifyLyricsEndpoint.V2, selected.endpoint)
+
+        assertNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V3, v3))
+    }
+
+    @Test
+    fun `authoritative flag overrides the default selection`() {
+        val selector = SpotifyLyricsClientSelector<Any>()
+        val v2 = Any()
+        val v3 = Any()
+        val defaulted = requireNotNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V2, v2))
+        assertEquals(SpotifyLyricsEndpoint.V2, defaulted.endpoint)
+        assertNull(selector.onClientAvailable(SpotifyLyricsEndpoint.V3, v3))
+
+        val switched = requireNotNull(selector.onEndpointSelected(SpotifyLyricsEndpoint.V3))
+        assertEquals(SpotifyLyricsEndpoint.V3, switched.endpoint)
+        assertSame(v3, switched.client)
     }
 
     @Test

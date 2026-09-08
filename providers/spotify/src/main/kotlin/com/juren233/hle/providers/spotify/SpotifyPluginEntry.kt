@@ -919,5 +919,8 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
     private const val MAX_LYRICS_CACHE_SIZE = 64
     private const val MAX_STARTUP_LYRICS_CACHE_SIZE = 8
     private const val NEXT_TRACK_HEARTBEAT_MS = 5_000L
-    private const val LYRICS_FALLBACK_DELAY_MS = 1_200L
+    // 交付门禁已改为构造捕获即默认交付（v2），主动兜底不再依赖歌词页流量；
+    // 该延迟因此就是后台拿词的最终延迟，取 200ms 跟进切歌。被动结果仍会
+    // 照常接管，发布按 songKey 去重，抢先请求只是多一次拉取。
+    private const val LYRICS_FALLBACK_DELAY_MS = 200L
 }

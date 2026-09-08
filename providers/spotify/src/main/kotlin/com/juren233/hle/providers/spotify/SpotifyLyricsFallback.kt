@@ -37,7 +37,8 @@ internal fun interface SpotifyLyricsFallbackRequestStarter<Client> {
  * 每首歌最多发起一次的 Spotify 官方歌词主动请求兜底。
  *
  * 该状态机不猜测 Spotify 对象图：客户端只能来自已验证的 am80/lg80 构造实例，
- * 并由 Spotify 自己的 enable_v3_lyrics_endpoint 选择结果决定使用哪一个。
+ * endpoint 优先采用 Spotify 自己的 enable_v3_lyrics_endpoint 选择结果或请求
+ * 流量观测；两者都缺席时按线上默认 v2 使用构造捕获的客户端。
  * 所有调用均应在同一调度线程执行；生产环境使用 Spotify 主线程 Handler。
  */
 internal class SpotifyLyricsFallbackCoordinator<Client>(
@@ -205,7 +206,9 @@ internal data class SpotifySelectedLyricsClient<Client>(
  * 合并两路独立到达的运行时事实：Spotify 已构造的 v2/v3 客户端，以及活动
  * endpoint 的来源。活动 endpoint 有两个观察源——enable_v3 开关的真实选择
  * 结果（最高优先，部分版本档案不提供），与请求结果 Hook 首次命中的包装类
- * （开关不可定位版本的兜底观测）。二者对齐后才交给请求状态机。
+ * （开关不可定位版本的兜底观测）。两者都未观测到时按 Spotify 线上默认
+ * （enable_v3=false → v2）交付构造捕获的客户端，保证后台冷启动场景
+ * 不依赖歌词页流量也能发起主动请求；权威观测到达后覆盖默认选择。
  */
 internal class SpotifyLyricsClientSelector<Client> {
     private val clients = mutableMapOf<SpotifyLyricsEndpoint, Client>()
@@ -242,13 +245,24 @@ internal class SpotifyLyricsClientSelector<Client> {
 
     private fun selectionIfChanged(): SpotifySelectedLyricsClient<Client>? {
         // 开关观察是 Spotify 自身远程配置的直读，比包装类命中观测更权威；
-        // 开关不可用的版本才使用命中观测。
-        val endpoint = flagEndpoint ?: trafficEndpoint ?: return null
+        // 开关不可用的版本才使用命中观测。两者都未观测到时不再空等：
+        // 后台冷启动播放可能整个进程周期都看不到歌词页流量与开关读取，
+        // 此时按线上默认 endpoint 交付构造捕获的客户端。
+        val endpoint = flagEndpoint
+            ?: trafficEndpoint
+            ?: defaultEndpoint()
+            ?: return null
         val client = clients[endpoint] ?: return null
         if (endpoint == deliveredEndpoint && client === deliveredClient) return null
         deliveredEndpoint = endpoint
         deliveredClient = client
         return SpotifySelectedLyricsClient(endpoint, client)
+    }
+
+    private fun defaultEndpoint(): SpotifyLyricsEndpoint? = when {
+        clients.containsKey(SpotifyLyricsEndpoint.V2) -> SpotifyLyricsEndpoint.V2
+        clients.containsKey(SpotifyLyricsEndpoint.V3) -> SpotifyLyricsEndpoint.V3
+        else -> null
     }
 }
 
