@@ -20,6 +20,7 @@ import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReferenc
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
@@ -47,6 +48,13 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     private const val PROVIDER_PACKAGE = "com.juren233.hyperlyricsenhanced.provider.kugou"
     private const val NEXT_TRACK_CAPTURE_INTERVAL_MS = 1_000L
     private const val NEXT_TRACK_HEARTBEAT_MS = 10_000L
+
+    // 酷狗 LyricManager 加载本地歌词文件的方法没有稳定混淆名，用方法内部
+    // 的错误文案作 DexKit 锚点（与上游 Lyricon Provider 的酷狗实现同锚点）。
+    private const val LYRIC_MANAGER_CLASS = "com.kugou.framework.lyric.LyricManager"
+    private const val LYRIC_MANAGER_FILE_ANCHOR = "file is not krc or lyc or txt file"
+    private const val LYRIC_FILE_HOOK_REGISTRATION_TIMEOUT_MS = 30_000L
+    private const val MAX_LYRIC_FILE_BYTES = 4L * 1024L * 1024L
 
     private val installed = AtomicBoolean(false)
 
@@ -91,10 +99,11 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                     currentRuntime.installNextTrackResolver(targets)
                 },
             )
+            currentRuntime.scheduleLyricFileHookRegistration()
             Log.i(
                 TAG,
                 "酷狗音乐 Provider 已注册: package=${host.packageName} " +
-                    "process=${host.processName} lyricSource=v2-api",
+                    "process=${host.processName} lyricSource=v2-api+local-file",
             )
         }
         host.hookMediaSession(
@@ -169,6 +178,14 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         )
     }
 
+    internal fun lyricFileQuery(): OfficialProviderDexMethodQuery = OfficialProviderDexMethodQuery(
+        cacheKey = "kugou-lyric-file-load-v1",
+        declaringClassName = LYRIC_MANAGER_CLASS,
+        requiredStrings = listOf(LYRIC_MANAGER_FILE_ANCHOR),
+        parameterTypeNames = listOf("java.lang.String", "boolean"),
+        isStatic = false,
+    )
+
     private class KuGouRuntime(
         private val application: Application,
         val provider: LyriconProvider,
@@ -219,9 +236,28 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
 
+        private val lyricHookRegistered = AtomicBoolean(false)
+        private val firstLyricFileHit = AtomicBoolean(false)
+        private val lyricHookTimeoutRegistration = Runnable { registerLyricFileHook() }
+
+        // 本地歌词文件源（酷狗自读的精确匹配）最近一次发布结果；本地文件源
+        // 优先于 v2 搜索源，命中后同曲不再发起搜索、也不再被搜索结果覆盖。
+        @Volatile
+        private var fileSourceIdentity: String? = null
+
+        @Volatile
+        private var fileSourceSong: Song? = null
+
         fun start() {
             cacheDir.mkdirs()
             publish(placeholder(track))
+        }
+
+        fun scheduleLyricFileHookRegistration() {
+            mainHandler.postDelayed(
+                lyricHookTimeoutRegistration,
+                LYRIC_FILE_HOOK_REGISTRATION_TIMEOUT_MS,
+            )
         }
 
         fun onMetadata(value: MediaMetadata?) {
@@ -249,8 +285,10 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             val requestGeneration = generation.incrementAndGet()
             pendingLyricsTask?.cancel(true)
             pendingLyricsTask = null
-            publish(placeholder(next))
-            if (next.isSearchable) {
+            val localFileSong = fileSourceSong
+                ?.takeIf { KuGouLyricFilePolicy.ownsTrack(fileSourceIdentity, next.identity) }
+            publish(localFileSong ?: placeholder(next))
+            if (localFileSong == null && next.isSearchable) {
                 pendingLyricsTask = executor.submit {
                     loadLyrics(requestGeneration, next)
                 }
@@ -290,6 +328,9 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 val parsed = decodeLyrics(cached, requestTrack.durationMs)
                 if (parsed.isNotEmpty()) {
                     if (!isCurrent(requestGeneration, requestTrack)) return
+                    if (KuGouLyricFilePolicy.ownsTrack(fileSourceIdentity, requestTrack.identity)) {
+                        return
+                    }
                     publish(toSong(requestTrack, parsed))
                     if (BuildConfig.DEBUG) {
                         val translationCount = parsed.count { !it.translation.isNullOrBlank() }
@@ -319,6 +360,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             }
             writeCache(candidate.downloadId, raw)
             if (!isCurrent(requestGeneration, requestTrack)) return
+            if (KuGouLyricFilePolicy.ownsTrack(fileSourceIdentity, requestTrack.identity)) return
             publish(toSong(requestTrack, parsed))
             if (BuildConfig.DEBUG) {
                 val wordCount = parsed.sumOf { it.words.size }
@@ -334,6 +376,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
         fun installNextTrackResolver(targets: List<OfficialProviderMethodTarget>) {
             mainHandler.post {
+                onDexBatchResolved()
                 mainHandler.removeCallbacks(periodicNextTrackCapture)
                 nextTrackResolver = null
                 nextTrackValidation.reset()
@@ -351,6 +394,88 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 nextTrackResolver = resolver
                 mainHandler.post(periodicNextTrackCapture)
                 Log.i(TAG, "酷狗下一首解析器已启用")
+            }
+        }
+
+        /**
+         * 歌词文件拦截与下一首批量解析共享本进程唯一的 DexKit 吞吐；批量完成
+         * 后再注册，避免酷狗刚更新后的首次冷启动出现两份全量 DEX 扫描并发
+         * （参见 KUWO-STARTUP-001）。批量始终不完成时由超时兜底注册。
+         */
+        private fun onDexBatchResolved() {
+            registerLyricFileHook()
+        }
+
+        private fun registerLyricFileHook() {
+            if (!lyricHookRegistered.compareAndSet(false, true)) return
+            mainHandler.removeCallbacks(lyricHookTimeoutRegistration)
+            host.hookAfterDexMethod(
+                application = application,
+                query = KuGouPluginEntry.lyricFileQuery(),
+                callback = OfficialProviderMethodCallback { _, arguments ->
+                    onLyricFileLoaded(arguments)
+                },
+            )
+            Log.i(
+                TAG,
+                "酷狗歌词文件拦截已提交解析注册: class=$LYRIC_MANAGER_CLASS",
+            )
+        }
+
+        private fun onLyricFileLoaded(arguments: Array<Any?>?) {
+            val path = arguments?.firstOrNull() as? String
+            if (path.isNullOrBlank()) return
+            val boundTrack = track
+            if (!KuGouLyricFilePolicy.isBindableTrack(boundTrack)) {
+                // 酷狗可能在 MediaSession 元数据广播前就加载歌词文件；此时无法
+                // 可靠归属，放弃文件源（网络搜索兜底）也不冒错绑风险。
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "酷狗歌词文件命中但当前轨道身份为空，放弃绑定: $path")
+                }
+                return
+            }
+            if (firstLyricFileHit.compareAndSet(false, true)) {
+                Log.i(TAG, "酷狗歌词文件拦截首次命中: $path")
+            } else if (BuildConfig.DEBUG) {
+                Log.d(TAG, "酷狗歌词文件命中: $path")
+            }
+            executor.submit { loadLyricsFromFile(boundTrack, path) }
+        }
+
+        private fun loadLyricsFromFile(boundTrack: KuGouTrackMetadata, path: String) {
+            val raw = try {
+                val file = File(path)
+                if (!file.isFile) return
+                val length = file.length()
+                if (length <= 0L || length > MAX_LYRIC_FILE_BYTES) return
+                file.readBytes()
+            } catch (error: Exception) {
+                if (BuildConfig.DEBUG) {
+                    Log.w(TAG, "酷狗歌词文件读取失败: $path", error)
+                }
+                return
+            }
+
+            val parsed = decodeLyrics(raw, boundTrack.durationMs)
+            if (parsed.isEmpty()) {
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "酷狗歌词文件无可解析时间轴: $path")
+                }
+                return
+            }
+            val song = toSong(boundTrack, parsed)
+            if (!KuGouLyricFilePolicy.isStillCurrent(boundTrack.identity, track.identity)) return
+            fileSourceSong = song
+            fileSourceIdentity = boundTrack.identity
+            publish(song)
+            if (BuildConfig.DEBUG) {
+                val wordCount = parsed.sumOf { it.words.size }
+                val translationCount = parsed.count { !it.translation.isNullOrBlank() }
+                Log.i(
+                    TAG,
+                    "酷狗本地歌词文件已发布: lines=${parsed.size}, words=$wordCount, " +
+                        "translations=$translationCount",
+                )
             }
         }
 
@@ -485,7 +610,10 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             val text = if (raw.hasKrcHeader()) {
                 KrcDecryptor.decrypt(raw) ?: return emptyList()
             } else {
-                raw.toString(Charsets.UTF_8).removePrefix("\uFEFF")
+                // 酷狗本地歌词缓存存在没有 "krc1" 魔数的形态，先按 KRC 解密，
+                // 失败再按纯文本处理
+                KrcDecryptor.decrypt(raw)
+                    ?: raw.toString(Charsets.UTF_8).removePrefix("\uFEFF")
             }
             val lines = KrcLyricsParser.parse(text).takeIf(List<ParsedLine>::isNotEmpty)
                 ?: LrcLyricsParser.parse(text, durationMs)
@@ -621,19 +749,26 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         val translation: String? = null,
     )
 
-    private object KrcDecryptor {
+    internal object KrcDecryptor {
         private val key = byteArrayOf(
             64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45,
             206.toByte(), 210.toByte(), 110, 105,
         )
+        private val magic = "krc1".toByteArray()
 
         fun decrypt(input: ByteArray): String? = runCatching {
-            require(input.size > 4)
-            val decoded = ByteArray(input.size - 4) { index ->
-                (input[index + 4].toInt() xor key[index % key.size].toInt()).toByte()
+            // 网络下载的 KRC 带 "krc1" 魔数；本地缓存文件两种形态都存在，
+            // 按魔数自动选择解密偏移
+            val offset = if (input.hasKrcMagic()) magic.size else 0
+            require(input.size > offset)
+            val decoded = ByteArray(input.size - offset) { index ->
+                (input[index + offset].toInt() xor key[index % key.size].toInt()).toByte()
             }
             java.util.zip.InflaterInputStream(decoded.inputStream()).bufferedReader().use { it.readText() }
         }.getOrNull()
+
+        private fun ByteArray.hasKrcMagic(): Boolean = size >= magic.size &&
+            magic.indices.all { this[it] == magic[it] }
     }
 
     private object KrcLyricsParser {
@@ -702,6 +837,25 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
     }
 
+}
+
+/**
+ * 本地歌词文件源（酷狗自读的精确匹配）与 v2 搜索源（模糊匹配）之间的
+ * 优先级与归属规则。文件源命中同曲后拥有更高优先级，但不回收已发布的
+ * 搜索结果以外的任何内容；归属以钩子命中时刻的轨道身份为准。
+ */
+internal object KuGouLyricFilePolicy {
+    /** 元数据尚未到达（mediaId 与标题都为空）时文件命中无法可靠归属。 */
+    fun isBindableTrack(track: KuGouTrackMetadata): Boolean =
+        !track.mediaId.isNullOrBlank() || !track.title.isNullOrBlank()
+
+    /** 归属身份与当前轨道不一致（命中后已切歌）时丢弃解析结果，防止错绑。 */
+    fun isStillCurrent(boundIdentity: String, currentIdentity: String): Boolean =
+        boundIdentity == currentIdentity
+
+    /** 本地文件源已发布该轨道时，搜索不再启动、已完成的搜索结果也不覆盖。 */
+    fun ownsTrack(fileSourceIdentity: String?, identity: String): Boolean =
+        fileSourceIdentity == identity
 }
 
 internal object KuGouNextTrackCandidatePolicy {
