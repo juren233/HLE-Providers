@@ -56,6 +56,9 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     private const val LYRIC_FILE_HOOK_REGISTRATION_TIMEOUT_MS = 30_000L
     private const val MAX_LYRIC_FILE_BYTES = 4L * 1024L * 1024L
 
+    // 单曲最多尝试的搜索候选数：主候选 + 顺位兜底上限，请求封顶。
+    private const val MAX_SEARCH_CANDIDATES = 3
+
     private val installed = AtomicBoolean(false)
 
     @Volatile
@@ -300,7 +303,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             requestGeneration: Long,
             requestTrack: KuGouTrackMetadata,
         ) {
-            val candidate = runCatching { KuGouApiClient.search(requestTrack, clientMid) }
+            val candidates = runCatching { KuGouApiClient.searchCandidates(requestTrack, clientMid) }
                 .onFailure { error ->
                     if (!Thread.currentThread().isInterrupted) {
                         Log.w(
@@ -311,7 +314,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                     }
                 }
                 .getOrNull()
-            if (candidate == null) {
+            if (candidates.isNullOrEmpty()) {
                 if (!Thread.currentThread().isInterrupted) {
                     Log.w(
                         TAG,
@@ -323,53 +326,92 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 return
             }
             if (!isCurrent(requestGeneration, requestTrack)) return
+            if (KuGouLyricFilePolicy.ownsTrack(fileSourceIdentity, requestTrack.identity)) return
 
-            loadCached(candidate.downloadId)?.let { cached ->
-                val parsed = decodeLyrics(cached, requestTrack.durationMs)
-                if (parsed.isNotEmpty()) {
-                    if (!isCurrent(requestGeneration, requestTrack)) return
-                    if (KuGouLyricFilePolicy.ownsTrack(fileSourceIdentity, requestTrack.identity)) {
-                        return
-                    }
-                    publish(toSong(requestTrack, parsed))
-                    if (BuildConfig.DEBUG) {
-                        val translationCount = parsed.count { !it.translation.isNullOrBlank() }
-                        Log.i(
-                            TAG,
-                            "酷狗歌词已从缓存发布: id=${candidate.downloadId}, " +
-                                "lines=${parsed.size}, translations=$translationCount",
-                        )
-                    }
+            // 主候选优先发布；只有主候选内容不带翻译段时，才在同样通过严格
+            // 评分门槛的顺位候选里找带翻译的版本，打分与匹配标准保持不变。
+            var primaryCandidate: KuGouSearchCandidate? = null
+            var primaryParsed: List<ParsedLine>? = null
+            for (candidate in candidates.take(MAX_SEARCH_CANDIDATES)) {
+                if (!isCurrent(requestGeneration, requestTrack)) return
+                val parsed = resolveLyrics(requestGeneration, candidate, requestTrack) ?: return
+                if (parsed.isEmpty()) continue
+                if (hasTranslation(parsed)) {
+                    publishSearchLyrics(candidate, parsed, requestTrack, requestGeneration)
                     return
                 }
+                if (primaryParsed == null) {
+                    primaryCandidate = candidate
+                    primaryParsed = parsed
+                    if (BuildConfig.DEBUG) {
+                        Log.i(
+                            TAG,
+                            "酷狗主候选无翻译段，尝试顺位候选: id=${candidate.downloadId}, " +
+                                "lines=${parsed.size}",
+                        )
+                    }
+                }
             }
+            val fallbackCandidate = primaryCandidate
+            val fallbackParsed = primaryParsed
+            if (fallbackCandidate == null || fallbackParsed == null) {
+                if (!Thread.currentThread().isInterrupted) {
+                    Log.w(
+                        TAG,
+                        "酷狗歌词无可解析时间轴: ids=" +
+                            candidates.take(MAX_SEARCH_CANDIDATES)
+                                .joinToString { it.downloadId },
+                    )
+                }
+                return
+            }
+            publishSearchLyrics(fallbackCandidate, fallbackParsed, requestTrack, requestGeneration)
+        }
 
+        private fun hasTranslation(parsed: List<ParsedLine>): Boolean =
+            // 个别元数据行（词/曲署名）缺翻译是正常形态；全都没有才视为无翻译
+            parsed.any { !it.translation.isNullOrBlank() }
+
+        /** 返回 null 表示任务已取消或被新曲取代；空列表表示该候选不可解析。 */
+        private fun resolveLyrics(
+            requestGeneration: Long,
+            candidate: KuGouSearchCandidate,
+            requestTrack: KuGouTrackMetadata,
+        ): List<ParsedLine>? {
+            loadCached(candidate.downloadId)?.let { cached ->
+                val parsed = decodeLyrics(cached, requestTrack.durationMs)
+                if (parsed.isNotEmpty()) return parsed
+            }
             val raw = runCatching { KuGouApiClient.download(candidate, clientMid) }
                 .onFailure { error ->
                     if (!Thread.currentThread().isInterrupted) {
                         Log.w(TAG, "酷狗歌词下载失败: id=${candidate.downloadId}", error)
                     }
                 }
-                .getOrNull() ?: return
-            if (!isCurrent(requestGeneration, requestTrack)) return
-
+                .getOrNull() ?: return emptyList()
+            if (!isCurrent(requestGeneration, requestTrack)) return null
             val parsed = decodeLyrics(raw, requestTrack.durationMs)
-            if (parsed.isEmpty()) {
-                Log.w(TAG, "酷狗歌词无可解析时间轴: id=${candidate.downloadId}")
-                return
-            }
+            if (parsed.isEmpty()) return emptyList()
             writeCache(candidate.downloadId, raw)
+            return parsed
+        }
+
+        private fun publishSearchLyrics(
+            candidate: KuGouSearchCandidate,
+            parsed: List<ParsedLine>,
+            requestTrack: KuGouTrackMetadata,
+            requestGeneration: Long,
+        ) {
             if (!isCurrent(requestGeneration, requestTrack)) return
             if (KuGouLyricFilePolicy.ownsTrack(fileSourceIdentity, requestTrack.identity)) return
             publish(toSong(requestTrack, parsed))
             if (BuildConfig.DEBUG) {
-                val wordCount = parsed.sumOf { it.words.size }
                 val translationCount = parsed.count { !it.translation.isNullOrBlank() }
                 Log.i(
                     TAG,
                     "酷狗 v2 歌词已发布: id=${candidate.downloadId}, " +
                         "contentType=${candidate.contentType}, lines=${parsed.size}, " +
-                        "words=$wordCount, translations=$translationCount",
+                        "words=${parsed.sumOf { it.words.size }}, translations=$translationCount",
                 )
             }
         }

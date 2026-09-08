@@ -32,7 +32,7 @@ class KuGouCandidateSelectorTest {
     @Test
     fun `prefers matching title artist and duration`() {
         val track = KuGouTrackMetadata(null, "晴天", "周杰伦", "叶惠美", 269_000L)
-        val selected = KuGouCandidateSelector.choose(
+        val selected = KuGouCandidateSelector.rank(
             track,
             listOf(
                 candidate("1", "晴天", "其他歌手", 269_000L),
@@ -40,18 +40,18 @@ class KuGouCandidateSelectorTest {
             ),
         )
 
-        assertEquals("34988004", selected?.downloadId)
+        assertEquals("34988004", selected.firstOrNull()?.downloadId)
     }
 
     @Test
     fun `rejects exact title from a different artist`() {
         val track = KuGouTrackMetadata(null, "Without You", "Avicii", null, 181_000L)
-        val selected = KuGouCandidateSelector.choose(
+        val selected = KuGouCandidateSelector.rank(
             track,
             listOf(candidate("7", "Without You", "Other Artist", 181_000L)),
         )
 
-        assertNull(selected)
+        assertTrue(selected.isEmpty())
     }
 
     @Test
@@ -63,12 +63,56 @@ class KuGouCandidateSelectorTest {
             null,
             0L,
         )
-        val selected = KuGouCandidateSelector.choose(
+        val selected = KuGouCandidateSelector.rank(
             track,
             listOf(candidate("11", null, null, 0L)),
         )
 
-        assertEquals("11", selected?.downloadId)
+        assertEquals("11", selected.firstOrNull()?.downloadId)
+    }
+
+    @Test
+    fun `ranks every qualifying candidate best score first`() {
+        val track = KuGouTrackMetadata(null, "晴天", "周杰伦", null, 269_000L)
+        val ranked = KuGouCandidateSelector.rank(
+            track,
+            listOf(
+                candidate("a", "晴天", "周杰伦", 269_000L),
+                candidate("b", "晴天", "周杰伦", 272_000L),
+                candidate("c", "晴天", "周杰伦", 278_000L),
+            ),
+        )
+
+        // 同为完整标题+歌手：时长越近加分越高
+        assertEquals(listOf("a", "b", "c"), ranked.map { it.downloadId })
+    }
+
+    @Test
+    fun `keeps server order for equal scores`() {
+        val track = KuGouTrackMetadata(null, "晴天", "周杰伦", null, 269_000L)
+        val ranked = KuGouCandidateSelector.rank(
+            track,
+            listOf(
+                candidate("first", "晴天", "周杰伦", 269_000L),
+                candidate("second", "晴天", "周杰伦", 269_000L),
+            ),
+        )
+
+        assertEquals(listOf("first", "second"), ranked.map { it.downloadId })
+    }
+
+    @Test
+    fun `drops non qualifying candidates from the ranked list`() {
+        val track = KuGouTrackMetadata(null, "晴天", "周杰伦", null, 269_000L)
+        val ranked = KuGouCandidateSelector.rank(
+            track,
+            listOf(
+                candidate("match", "晴天", "周杰伦", 269_000L),
+                candidate("mismatch", "完全不同", "别的歌手", 120_000L),
+            ),
+        )
+
+        assertEquals(listOf("match"), ranked.map { it.downloadId })
     }
 
     private fun candidate(

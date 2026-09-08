@@ -18,18 +18,25 @@ package com.juren233.hle.providers.kugou
  * [KuGouCandidateSelector] 仍按完整原始标题、歌手与时长打分（≥70 分），
  * 完整标题能命中的歌曲永远走不到变体；发布的歌名/歌手也永远来自
  * MediaSession 元数据（见 [KuGouPluginEntry] 的 `placeholder`/`toSong`）。
+ *
+ * 返回的是首个有关格候选关键词下的完整降序序列：首选之外仍是同一门槛
+ * 筛出的顺位候选，仅供主候选缺翻译段时的同门槛顺位兜底，绝不放宽匹配。
  */
 internal object KuGouSearchStrategy {
-    fun search(
+    fun rank(
         track: KuGouTrackMetadata,
         fetch: (keyword: String) -> List<KuGouSearchCandidate>,
-    ): KuGouSearchCandidate? {
-        if (!track.isSearchable) return null
-        KuGouCandidateSelector.choose(track, fetch(track.keyword()))?.let { return it }
+    ): List<KuGouSearchCandidate> {
+        if (!track.isSearchable) return emptyList()
+        KuGouCandidateSelector.rank(track, fetch(track.keyword()))
+            .takeIf(List<KuGouSearchCandidate>::isNotEmpty)
+            ?.let { return it }
         for (keyword in KuGouKeywordVariants.fallbackKeywords(track)) {
-            KuGouCandidateSelector.choose(track, fetch(keyword))?.let { return it }
+            KuGouCandidateSelector.rank(track, fetch(keyword))
+                .takeIf(List<KuGouSearchCandidate>::isNotEmpty)
+                ?.let { return it }
         }
-        return null
+        return emptyList()
     }
 }
 

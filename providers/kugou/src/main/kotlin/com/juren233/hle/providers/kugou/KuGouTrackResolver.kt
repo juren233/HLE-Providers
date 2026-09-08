@@ -65,20 +65,25 @@ internal data class KuGouSearchCandidate(
 )
 
 internal object KuGouCandidateSelector {
-    fun choose(
+    /**
+     * 全部通过严格评分门槛的候选，按得分降序、同分保持服务器顺序。
+     * 首个元素与旧单候选选择（首个最高分且 ≥ [MINIMUM_SCORE]）完全一致；
+     * 无标题、仅凭哈希/专辑音频 ID 直连时保持服务器权威顺序不重排。
+     */
+    fun rank(
         track: KuGouTrackMetadata,
         candidates: List<KuGouSearchCandidate>,
-    ): KuGouSearchCandidate? {
+    ): List<KuGouSearchCandidate> {
         if (track.title.isNullOrBlank() &&
             (track.directHash != null || track.albumAudioId != null)
         ) {
-            return candidates.firstOrNull()
+            return candidates
         }
         return candidates
             .map { it to score(track, it) }
-            .maxByOrNull { it.second }
-            ?.takeIf { it.second >= MINIMUM_SCORE }
-            ?.first
+            .filter { it.second >= MINIMUM_SCORE }
+            .sortedByDescending { it.second }
+            .map { it.first }
     }
 
     internal fun score(track: KuGouTrackMetadata, candidate: KuGouSearchCandidate): Int {

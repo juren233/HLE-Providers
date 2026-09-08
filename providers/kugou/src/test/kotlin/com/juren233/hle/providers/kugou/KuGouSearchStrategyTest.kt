@@ -7,7 +7,6 @@
 package com.juren233.hle.providers.kugou
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,12 +71,28 @@ class KuGouSearchStrategyTest {
     fun `full keyword hit does not issue fallback requests`() {
         val track = KuGouTrackMetadata(null, "歌曲 (翻译)", "歌手", null, 240_000L)
         val requested = mutableListOf<String>()
-        val selected = KuGouSearchStrategy.search(track) { keyword ->
+        val selected = KuGouSearchStrategy.rank(track) { keyword ->
             requested += keyword
             listOf(candidate("1", "歌曲 (翻译)", "歌手", 240_000L))
         }
 
-        assertEquals("1", selected?.downloadId)
+        assertEquals("1", selected.firstOrNull()?.downloadId)
+        assertEquals(listOf("歌手 - 歌曲 (翻译)"), requested)
+    }
+
+    @Test
+    fun `returns the full ranked list from the first qualifying keyword`() {
+        val track = KuGouTrackMetadata(null, "歌曲 (翻译)", "歌手", null, 240_000L)
+        val requested = mutableListOf<String>()
+        val ranked = KuGouSearchStrategy.rank(track) { keyword ->
+            requested += keyword
+            listOf(
+                candidate("2", "歌曲", "歌手", 240_000L),
+                candidate("1", "歌曲 (翻译)", "歌手", 240_000L),
+            )
+        }
+
+        assertEquals(listOf("1", "2"), ranked.map { it.downloadId })
         assertEquals(listOf("歌手 - 歌曲 (翻译)"), requested)
     }
 
@@ -85,7 +100,7 @@ class KuGouSearchStrategyTest {
     fun `falls back to the bracket-stripped keyword when full keyword has no candidates`() {
         val track = KuGouTrackMetadata(null, "歌曲 (翻译)", "歌手", null, 240_000L)
         val requested = mutableListOf<String>()
-        val selected = KuGouSearchStrategy.search(track) { keyword ->
+        val selected = KuGouSearchStrategy.rank(track) { keyword ->
             requested += keyword
             if (keyword == "歌手 - 歌曲") {
                 listOf(candidate("7", "歌曲 (翻译)", "歌手", 240_000L))
@@ -94,7 +109,7 @@ class KuGouSearchStrategyTest {
             }
         }
 
-        assertEquals("7", selected?.downloadId)
+        assertEquals("7", selected.firstOrNull()?.downloadId)
         assertEquals(listOf("歌手 - 歌曲 (翻译)", "歌手 - 歌曲"), requested)
     }
 
@@ -102,25 +117,25 @@ class KuGouSearchStrategyTest {
     fun `rejects candidates that do not match the full original metadata`() {
         val track = KuGouTrackMetadata(null, "歌曲 (翻译)", "歌手", null, 240_000L)
         val requested = mutableListOf<String>()
-        val selected = KuGouSearchStrategy.search(track) { keyword ->
+        val selected = KuGouSearchStrategy.rank(track) { keyword ->
             requested += keyword
             listOf(candidate("9", "完全不同的歌", "别的歌手", 120_000L))
         }
 
-        assertNull(selected)
+        assertTrue(selected.isEmpty())
         assertEquals(2, requested.size)
     }
 
     @Test
-    fun `returns null after every variant misses`() {
+    fun `returns empty after every variant misses`() {
         val track = KuGouTrackMetadata(null, "歌曲 (翻译)", "歌手", null, 240_000L)
         val requested = mutableListOf<String>()
 
-        assertNull(
-            KuGouSearchStrategy.search(track) { keyword ->
+        assertTrue(
+            KuGouSearchStrategy.rank(track) { keyword ->
                 requested += keyword
                 emptyList()
-            },
+            }.isEmpty(),
         )
         assertEquals(listOf("歌手 - 歌曲 (翻译)", "歌手 - 歌曲"), requested)
     }
@@ -131,7 +146,7 @@ class KuGouSearchStrategyTest {
         val requested = mutableListOf<String>()
 
         assertThrows(IllegalStateException::class.java) {
-            KuGouSearchStrategy.search(track) { keyword ->
+            KuGouSearchStrategy.rank(track) { keyword ->
                 requested += keyword
                 if (requested.size == 1) {
                     emptyList()

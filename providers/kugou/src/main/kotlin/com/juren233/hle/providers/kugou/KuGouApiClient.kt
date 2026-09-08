@@ -25,8 +25,8 @@ internal object KuGouApiClient {
     // Verified from the original KuGou 20.7.5 APK manifest (versionCode 20759).
     private const val CLIENT_VERSION = "20759"
 
-    fun search(track: KuGouTrackMetadata, mid: String): KuGouSearchCandidate? =
-        KuGouSearchStrategy.search(track) { keyword ->
+    fun searchCandidates(track: KuGouTrackMetadata, mid: String): List<KuGouSearchCandidate> =
+        KuGouSearchStrategy.rank(track) { keyword ->
             fetchCandidates(track, keyword, mid)
         }
 
