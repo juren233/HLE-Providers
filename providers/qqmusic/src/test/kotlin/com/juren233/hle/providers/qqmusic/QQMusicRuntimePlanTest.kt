@@ -46,14 +46,43 @@ class QQMusicRuntimePlanTest {
     }
 
     @Test
+    fun `routes miui main process to next track only`() {
+        assertEquals(
+            setOf(QQMusicRuntimeFeature.NEXT_TRACK),
+            QQMusicRuntimePlan.resolve(
+                QQMusicRuntimePlan.MIUI_PACKAGE,
+                QQMusicRuntimePlan.MIUI_PACKAGE,
+            ),
+        )
+    }
+
+    @Test
+    fun `routes miui remote process to lyrics only`() {
+        assertEquals(
+            setOf(QQMusicRuntimeFeature.LYRICS),
+            QQMusicRuntimePlan.resolve(
+                QQMusicRuntimePlan.MIUI_PACKAGE,
+                "${QQMusicRuntimePlan.MIUI_PACKAGE}:remote",
+            ),
+        )
+    }
+
+    @Test
     fun `rejects unsupported packages and undeclared processes`() {
         assertTrue(QQMusicRuntimePlan.supports(QQMusicRuntimePlan.MOBILE_PACKAGE))
         assertTrue(QQMusicRuntimePlan.supports(QQMusicRuntimePlan.HD_PACKAGE))
+        assertTrue(QQMusicRuntimePlan.supports(QQMusicRuntimePlan.MIUI_PACKAGE))
         assertFalse(QQMusicRuntimePlan.supports("com.example.music"))
         assertTrue(
             QQMusicRuntimePlan.resolve(
                 QQMusicRuntimePlan.HD_PACKAGE,
                 "${QQMusicRuntimePlan.HD_PACKAGE}:push",
+            ).isEmpty(),
+        )
+        assertTrue(
+            QQMusicRuntimePlan.resolve(
+                QQMusicRuntimePlan.MIUI_PACKAGE,
+                "${QQMusicRuntimePlan.MIUI_PACKAGE}:pushservice",
             ).isEmpty(),
         )
     }

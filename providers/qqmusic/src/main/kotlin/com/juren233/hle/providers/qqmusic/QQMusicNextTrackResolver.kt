@@ -102,7 +102,29 @@ internal object QQMusicNextTrackProfiles {
         songArtistMethodName = "getSingerName",
     )
 
-    private val profiles = listOf(V20_6_5_8, V20_7_5_8, HD_V6_12_0_5)
+    // Verified from the original Xiaomi Music (com.miui.player) 4.44.0.9 APK DEX on 2026-09-12.
+    // Exact descriptors:
+    // Lcom/tencent/qqmusicsdk/protocol/MusicPlayer;->getInstance()Lcom/tencent/qqmusicsdk/protocol/MusicPlayer;
+    // ->getCurSong()/getNextSong()Lcom/tencent/qqmusicsdk/protocol/SongInfomation;
+    // SongInfomation.getId()J, getName()/getSingerName()Ljava/lang/String;.
+    // Unobfuscated QQ Music Lite SDK identifiers; each name verified against the
+    // classes9.dex string pool (single occurrence per symbol).
+    val MIUI_V4_44_0_9 = QQMusicNextTrackProfile(
+        packageName = QQMusicRuntimePlan.MIUI_PACKAGE,
+        versionName = "4.44.0.9",
+        versionCode = 4_440_009L,
+        cacheNamespace = "qqmusic-miui",
+        managerClassName = "com.tencent.qqmusicsdk.protocol.MusicPlayer",
+        singletonMethodName = "getInstance",
+        currentSongMethodName = "getCurSong",
+        nextSongMethodName = "getNextSong",
+        songInfoClassName = "com.tencent.qqmusicsdk.protocol.SongInfomation",
+        songIdMethodName = "getId",
+        songTitleMethodName = "getName",
+        songArtistMethodName = "getSingerName",
+    )
+
+    private val profiles = listOf(V20_6_5_8, V20_7_5_8, HD_V6_12_0_5, MIUI_V4_44_0_9)
 
     fun resolve(
         packageName: String,
@@ -226,6 +248,7 @@ internal class QQMusicNextTrackResolver private constructor(
             )
             val songInfo = profile.songInfoClassName
             val isHd = profile.packageName == QQMusicRuntimePlan.HD_PACKAGE
+            val isMiui = profile.packageName == QQMusicRuntimePlan.MIUI_PACKAGE
             return listOf(
                 OfficialProviderDexMethodQuery(
                     cacheKey = managerType.queryCacheKey,
@@ -235,10 +258,10 @@ internal class QQMusicNextTrackResolver private constructor(
                         profile.managerClassName,
                         isStatic = true,
                     ),
-                    declaringClassName = profile.managerClassName.takeIf { isHd },
+                    declaringClassName = profile.managerClassName.takeIf { isHd || isMiui },
                     declaringClassNamePrefix = "com.tencent.qqmusic.common.player."
-                        .takeUnless { isHd },
-                    requiredStrings = if (isHd) {
+                        .takeUnless { isHd || isMiui },
+                    requiredStrings = if (isHd || isMiui) {
                         emptyList()
                     } else {
                         listOf("MusicPlayerHelper CAN'T use in Play Process")
@@ -255,7 +278,11 @@ internal class QQMusicNextTrackResolver private constructor(
                         songInfo,
                     ).takeUnless { isHd },
                     declaringClassReference = managerType,
-                    requiredInvokedMethodNames = if (isHd) emptyList() else listOf("getPlaySong"),
+                    requiredInvokedMethodNames = if (isHd || isMiui) {
+                        emptyList()
+                    } else {
+                        listOf("getPlaySong")
+                    },
                     requiredCallerMethodNames = if (isHd) {
                         listOf("getCurrentSongInfo")
                     } else {
@@ -278,7 +305,11 @@ internal class QQMusicNextTrackResolver private constructor(
                         songInfo,
                     ).takeUnless { isHd },
                     declaringClassReference = managerType,
-                    requiredInvokedMethodNames = if (isHd) emptyList() else listOf("getNextSong"),
+                    requiredInvokedMethodNames = if (isHd || isMiui) {
+                        emptyList()
+                    } else {
+                        listOf("getNextSong")
+                    },
                     requiredCallerMethodNames = if (isHd) {
                         listOf("getNextSongInfo")
                     } else {

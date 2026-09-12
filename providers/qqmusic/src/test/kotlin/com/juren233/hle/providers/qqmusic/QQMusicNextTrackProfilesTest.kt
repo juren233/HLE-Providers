@@ -74,6 +74,31 @@ class QQMusicNextTrackProfilesTest {
     }
 
     @Test
+    fun `uses exact original DEX identifiers for Xiaomi Music 4 44 0 9`() {
+        val profile = QQMusicNextTrackProfiles.resolve(
+            QQMusicRuntimePlan.MIUI_PACKAGE,
+            "4.44.0.9",
+            4_440_009L,
+        )!!
+
+        assertEquals("com.miui.player", profile.packageName)
+        assertEquals(
+            "com.tencent.qqmusicsdk.protocol.MusicPlayer",
+            profile.managerClassName,
+        )
+        assertEquals("getInstance", profile.singletonMethodName)
+        assertEquals("getCurSong", profile.currentSongMethodName)
+        assertEquals("getNextSong", profile.nextSongMethodName)
+        assertEquals(
+            "com.tencent.qqmusicsdk.protocol.SongInfomation",
+            profile.songInfoClassName,
+        )
+        assertEquals("getId", profile.songIdMethodName)
+        assertEquals("getName", profile.songTitleMethodName)
+        assertEquals("getSingerName", profile.songArtistMethodName)
+    }
+
+    @Test
     fun `builds package specific query keys and HD caller semantics`() {
         val mobile = QQMusicNextTrackResolver.queries(
             QQMusicRuntimePlan.MOBILE_PACKAGE,
@@ -115,6 +140,11 @@ class QQMusicNextTrackProfilesTest {
             "6.13.0.0",
             6_130_000L,
         )
+        val miui = QQMusicNextTrackResolver.queries(
+            QQMusicRuntimePlan.MIUI_PACKAGE,
+            "4.45.0.0",
+            4_450_000L,
+        )
 
         assertNotNull(mobile)
         assertEquals(QQMusicRuntimePlan.MOBILE_PACKAGE, mobile?.packageName)
@@ -124,6 +154,17 @@ class QQMusicNextTrackProfilesTest {
             listOf("Lcom/tencent/qqmusic/openapisdk/model/SongInfo;->getSongId()J"),
             hd[1].forbiddenInvokedMethodDescriptors,
         )
+        assertNotNull(miui)
+        assertTrue(miui!!.all { it.cacheKey.startsWith("qqmusic-miui-") })
+        assertNull(miui[0].declaringClassNamePrefix)
+        assertEquals(
+            "com.tencent.qqmusicsdk.protocol.MusicPlayer",
+            miui[0].declaringClassName,
+        )
+        assertTrue(miui[1].requiredInvokedMethodNames.isEmpty())
+        assertTrue(miui[2].requiredInvokedMethodNames.isEmpty())
+        assertNotNull(miui[1].preferredTarget)
+        assertNotNull(miui[2].preferredTarget)
     }
 
     @Test

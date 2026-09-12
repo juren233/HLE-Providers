@@ -253,7 +253,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             activeLoadKey = loadKey
             publish(loadCached(track) ?: placeholder(track))
             executor.execute {
-                runCatching { QQClient.fetch(track.id) }
+                val songId = runCatching { QQMusicSongMidResolver.resolveNumericSongId(track.id) }
+                    .onFailure { error ->
+                        Log.w(TAG, "QQ 歌曲 ID 换算失败: id=${track.id}", error)
+                    }
+                    .getOrNull()
+                    ?: return@execute
+                runCatching { QQClient.fetch(songId) }
                     .onSuccess { payload ->
                         writeCache(track.id, payload)
                         synchronized(this@QQRuntime) {
@@ -261,7 +267,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         }
                     }
                     .onFailure { error ->
-                        Log.w(TAG, "QQ 歌词下载失败: id=${track.id}", error)
+                        Log.w(TAG, "QQ 歌词下载失败: id=${track.id} songId=$songId", error)
                     }
             }
         }
@@ -649,10 +655,12 @@ internal enum class QQMusicRuntimeFeature {
 internal object QQMusicRuntimePlan {
     const val MOBILE_PACKAGE = "com.tencent.qqmusic"
     const val HD_PACKAGE = "com.tencent.qqmusicpad"
+    const val MIUI_PACKAGE = "com.miui.player"
     private const val MOBILE_PLAYER_PROCESS = "$MOBILE_PACKAGE:QQPlayerService"
+    private const val MIUI_REMOTE_PROCESS = "$MIUI_PACKAGE:remote"
 
     fun supports(packageName: String): Boolean =
-        packageName == MOBILE_PACKAGE || packageName == HD_PACKAGE
+        packageName == MOBILE_PACKAGE || packageName == HD_PACKAGE || packageName == MIUI_PACKAGE
 
     fun resolve(packageName: String, processName: String): Set<QQMusicRuntimeFeature> = when {
         packageName == MOBILE_PACKAGE && processName == MOBILE_PACKAGE ->
@@ -661,6 +669,10 @@ internal object QQMusicRuntimePlan {
             setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.BUFFERING_STATE)
         packageName == HD_PACKAGE && processName == HD_PACKAGE ->
             setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK)
+        packageName == MIUI_PACKAGE && processName == MIUI_PACKAGE ->
+            setOf(QQMusicRuntimeFeature.NEXT_TRACK)
+        packageName == MIUI_PACKAGE && processName == MIUI_REMOTE_PROCESS ->
+            setOf(QQMusicRuntimeFeature.LYRICS)
         else -> emptySet()
     }
 }
