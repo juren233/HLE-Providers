@@ -11,6 +11,7 @@ import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderSystemMediaCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderSystemMediaHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderSystemMediaPlugin
@@ -38,6 +39,7 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
     private var runtime: QishuiRuntime? = null
 
     override fun installSystemMedia(host: OfficialProviderSystemMediaHost) {
+        if (OfficialCoreHostGuard.isForeignCoreHost(host)) return
         require(host.playerPackageName == TARGET_PACKAGE) {
             "Unexpected target package: ${host.playerPackageName}"
         }
@@ -95,6 +97,10 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
             }
             subscription = host.subscribe(
                 OfficialProviderSystemMediaCallback { metadata, state ->
+                    OfficialCoreHostGuard.onPlaybackStateChanged(state)
+                    if (OfficialCoreHostGuard.isDeactivated()) {
+                        return@OfficialProviderSystemMediaCallback
+                    }
                     onMediaChanged(metadata, state)
                 },
             )

@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderConstructorCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
@@ -39,6 +40,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
     private val installed = AtomicBoolean(false)
 
     override fun install(host: OfficialProviderHost) {
+        if (OfficialCoreHostGuard.isForeignCoreHost(host)) return
         require(host.packageName == TARGET_PACKAGE) {
             "Unexpected target package: ${host.packageName}"
         }
@@ -82,9 +84,12 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
+                OfficialCoreHostGuard.onPlaybackStateChanged(state)
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderPlaybackStateCallback
                 startup.onPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderMetadataCallback
                 startup.onMetadata(metadata)
             },
         )

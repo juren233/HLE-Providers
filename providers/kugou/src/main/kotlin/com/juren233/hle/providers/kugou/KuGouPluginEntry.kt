@@ -13,6 +13,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
@@ -65,6 +66,7 @@ object KuGouPluginEntry : OfficialProviderPlugin {
     private var runtime: KuGouRuntime? = null
 
     override fun install(host: OfficialProviderHost) {
+        if (OfficialCoreHostGuard.isForeignCoreHost(host)) return
         require(host.packageName == FULL_PACKAGE || host.packageName == LITE_PACKAGE) {
             "Unsupported KuGou package: ${host.packageName}"
         }
@@ -111,9 +113,12 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
+                OfficialCoreHostGuard.onPlaybackStateChanged(state)
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderPlaybackStateCallback
                 runtime?.provider?.player?.setPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderMetadataCallback
                 runtime?.onMetadata(metadata)
             },
         )

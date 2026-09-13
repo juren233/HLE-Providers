@@ -19,6 +19,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hle.providers.netease.BuildConfig
+import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
@@ -93,6 +94,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
     }
 
     override fun install(host: OfficialProviderHost) {
+        if (OfficialCoreHostGuard.isForeignCoreHost(host)) return
         require(host.packageName == "com.netease.cloudmusic" ||
             host.packageName == "com.hihonor.cloudmusic") {
             "Unsupported Netease package: ${host.packageName}"
@@ -104,9 +106,12 @@ object NeteasePluginEntry : OfficialProviderPlugin {
 
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
+                OfficialCoreHostGuard.onPlaybackStateChanged(state)
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderPlaybackStateCallback
                 ensureRuntime(host)?.onPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderMetadataCallback
                 ensureRuntime(host)?.onMetadata(metadata)
             },
         )

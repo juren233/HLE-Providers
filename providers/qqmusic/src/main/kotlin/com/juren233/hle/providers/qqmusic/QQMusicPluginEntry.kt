@@ -19,6 +19,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hle.providers.qqmusic.BuildConfig
+import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
@@ -62,6 +63,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
     private var bufferRuntime: QQBufferRuntime? = null
 
     override fun install(host: OfficialProviderHost) {
+        if (OfficialCoreHostGuard.isForeignCoreHost(host)) return
         require(QQMusicRuntimePlan.supports(host.packageName)) {
             "Unsupported QQ Music package: ${host.packageName}"
         }
@@ -86,9 +88,12 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
+                OfficialCoreHostGuard.onPlaybackStateChanged(state)
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderPlaybackStateCallback
                 runtime?.onPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderMetadataCallback
                 runtime?.onMetadata(metadata)
             },
         )

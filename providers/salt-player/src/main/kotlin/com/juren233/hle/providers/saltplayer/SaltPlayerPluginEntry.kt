@@ -13,6 +13,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.juren233.hle.providers.saltplayer.BuildConfig
+import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderApplicationCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
@@ -47,6 +48,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
     private var runtime: SaltPlayerRuntime? = null
 
     override fun install(host: OfficialProviderHost) {
+        if (OfficialCoreHostGuard.isForeignCoreHost(host)) return
         require(host.packageName == TARGET_PACKAGE) {
             "Unexpected target package: ${host.packageName}"
         }
@@ -97,9 +99,12 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         })
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
+                OfficialCoreHostGuard.onPlaybackStateChanged(state)
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderPlaybackStateCallback
                 provider?.player?.setPlaybackState(state)
             },
             metadataCallback = OfficialProviderMetadataCallback { metadata ->
+                if (OfficialCoreHostGuard.isDeactivated()) return@OfficialProviderMetadataCallback
                 runtime?.onMetadata(metadata)
             },
         )
