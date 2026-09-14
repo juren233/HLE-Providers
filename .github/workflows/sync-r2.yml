@@ -1,0 +1,93 @@
+# 手动同步官方目录到 Cloudflare R2（App 端回退源）。
+# 桶内只保留目录引用的最新插件包，历史版本以 GitHub Releases 为准；
+# 勾选补齐输入时会从 GitHub Releases 下载目录引用的最新包上传，随后删除桶内未被目录引用的 tag 目录。
+#
+# 前置配置（仓库 Settings → Secrets and variables → Actions）：
+# - Secrets: R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
+#   （Cloudflare 控制台 → R2 → Manage API Tokens，创建 Object Read & Write 令牌）
+# - Variable（可选）: R2_BUCKET，未配置时默认 hle-plugins
+# - 桶 hle-plugins 已绑定自定义域名 hleplugins.juren233.top 并开启公开访问；
+#   建议为 /catalog/* 配置短 TTL 的缓存规则，避免发布后边缘节点短暂返回旧目录。
+#
+# App 端按对象键推导地址：
+# - 目录:   https://hleplugins.juren233.top/catalog/catalog.json(.sig)
+# - 插件包: https://hleplugins.juren233.top/releases/download/<tag>/<file>
+
+name: Sync catalog and releases to R2
+
+on:
+  workflow_dispatch:
+    inputs:
+      sync_referenced_packs:
+        description: 从 GitHub Releases 补齐目录引用的最新插件包
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check R2 credentials
+        run: |
+          : "${R2_ACCOUNT_ID:?missing secret R2_ACCOUNT_ID}"
+          : "${R2_ACCESS_KEY_ID:?missing secret R2_ACCESS_KEY_ID}"
+          : "${R2_SECRET_ACCESS_KEY:?missing secret R2_SECRET_ACCESS_KEY}"
+      - name: Resolve bucket name
+        id: bucket
+        run: echo "name=${{ vars.R2_BUCKET || 'hle-plugins' }}" >> "$GITHUB_OUTPUT"
+      - name: Sync catalog
+        env:
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          rclone copy catalog "R2:${{ steps.bucket.outputs.name }}/catalog"
+          echo "Synced catalog/ to R2 bucket: ${{ steps.bucket.outputs.name }}"
+      - name: Sync latest packs and prune stale
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          bucket="${{ steps.bucket.outputs.name }}"
+          python3 - <<'PY' > /tmp/referenced_tags.txt
+          import json
+
+          catalog = json.load(open("catalog/catalog.json", encoding="utf-8"))
+          for item in catalog["providers"]:
+              parts = (item.get("assetUrl") or "").rstrip("/").split("/")
+              if len(parts) >= 3 and parts[-3] == "download":
+                  print(parts[-2])
+          PY
+          if [ '${{ inputs.sync_referenced_packs }}' = 'true' ]; then
+            mkdir -p staging/releases/download
+            while IFS= read -r tag; do
+              [ -n "$tag" ] || continue
+              echo "Downloading release $tag"
+              gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+                --dir "staging/releases/download/$tag" --clobber
+            done < /tmp/referenced_tags.txt
+            rclone copy staging/releases/download "R2:${bucket}/releases/download"
+          fi
+          rclone lsf "R2:${bucket}/releases/download" --dirs-only \
+            | sed 's:/*$::' | sort -u > /tmp/remote_tags.txt
+          comm -23 /tmp/remote_tags.txt <(sort -u /tmp/referenced_tags.txt) \
+            | while IFS= read -r stale; do
+                [ -n "$stale" ] || continue
+                echo "Pruning stale pack: $stale"
+                rclone purge "R2:${bucket}/releases/download/$stale"
+              done
+          echo "R2 bucket ${bucket} now holds only catalog-referenced latest packs."

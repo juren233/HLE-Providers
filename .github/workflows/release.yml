@@ -196,3 +196,46 @@ jobs:
             -m "- 同步 $version_name 版本与 CI 生成的 Pack 摘要。" \
             -m "- 使用项目 Ed25519 私钥重新签名官方目录。"
           git push origin main
+      # 同步到 Cloudflare R2（App 端回退源）。桶内只保留目录引用的最新插件包，
+      # 历史版本以 GitHub Releases 为准；上传后按 catalog 反查引用的 tag，删除其余目录。
+      # 需在仓库 Secrets 配置 R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY，
+      # 可选 Variable R2_BUCKET（默认 hle-plugins）。对象键复刻仓库相对路径：
+      # catalog/catalog.json(.sig) 与 releases/download/<tag>/<file>。
+      - name: Sync catalog and latest packs to Cloudflare R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          : "${R2_ACCOUNT_ID:?missing secret R2_ACCOUNT_ID}"
+          : "${R2_ACCESS_KEY_ID:?missing secret R2_ACCESS_KEY_ID}"
+          : "${R2_SECRET_ACCESS_KEY:?missing secret R2_SECRET_ACCESS_KEY}"
+          bucket="${{ vars.R2_BUCKET }}"
+          : "${bucket:=hle-plugins}"
+          export RCLONE_CONFIG_R2_TYPE=s3
+          export RCLONE_CONFIG_R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          release_path="releases/download/${{ steps.pack.outputs.release_tag }}"
+          mkdir -p "$release_path"
+          cp '${{ steps.pack.outputs.asset }}' "$release_path/"
+          rclone copy catalog "R2:${bucket}/catalog"
+          rclone copy "$release_path" "R2:${bucket}/${release_path}"
+          python3 - <<'PY' > /tmp/referenced_tags.txt
+          import json
+
+          catalog = json.load(open("catalog/catalog.json", encoding="utf-8"))
+          for item in catalog["providers"]:
+              parts = (item.get("assetUrl") or "").rstrip("/").split("/")
+              if len(parts) >= 3 and parts[-3] == "download":
+                  print(parts[-2])
+          PY
+          rclone lsf "R2:${bucket}/releases/download" --dirs-only \
+            | sed 's:/*$::' | sort -u > /tmp/remote_tags.txt
+          comm -23 /tmp/remote_tags.txt <(sort -u /tmp/referenced_tags.txt) \
+            | while IFS= read -r stale; do
+                [ -n "$stale" ] || continue
+                echo "Pruning stale pack: $stale"
+                rclone purge "R2:${bucket}/releases/download/$stale"
+              done
+          echo "Synced catalog/ and ${release_path}/ to R2 bucket: ${bucket} (latest-only)"
