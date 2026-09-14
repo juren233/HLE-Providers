@@ -44,6 +44,12 @@ jobs:
       - name: Resolve bucket name
         id: bucket
         run: echo "name=${{ vars.R2_BUCKET || 'hle-plugins' }}" >> "$GITHUB_OUTPUT"
+      - name: Install rclone
+        run: |
+          curl -fsSL --retry 3 -o /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-amd64.zip
+          unzip -oq /tmp/rclone.zip -d /tmp/rclone-install
+          sudo install /tmp/rclone-install/rclone-*/rclone /usr/local/bin/rclone
+          rclone version
       - name: Sync catalog
         env:
           RCLONE_CONFIG_R2_TYPE: s3

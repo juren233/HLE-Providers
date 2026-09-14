@@ -201,6 +201,13 @@ jobs:
       # 需在仓库 Secrets 配置 R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY，
       # 可选 Variable R2_BUCKET（默认 hle-plugins）。对象键复刻仓库相对路径：
       # catalog/catalog.json(.sig) 与 releases/download/<tag>/<file>。
+      # runner 镜像不预装 rclone，先安装
+      - name: Install rclone
+        run: |
+          curl -fsSL --retry 3 -o /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-amd64.zip
+          unzip -oq /tmp/rclone.zip -d /tmp/rclone-install
+          sudo install /tmp/rclone-install/rclone-*/rclone /usr/local/bin/rclone
+          rclone version
       - name: Sync catalog and latest packs to Cloudflare R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
