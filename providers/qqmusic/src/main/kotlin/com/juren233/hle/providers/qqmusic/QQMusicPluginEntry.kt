@@ -674,8 +674,13 @@ internal object QQMusicRuntimePlan {
             setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.BUFFERING_STATE)
         packageName == HD_PACKAGE && processName == HD_PACKAGE ->
             setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK)
+        // 小米音乐跨版本会把 QQ 播放管线在主进程与 :remote 之间搬动：
+        // 4440009 实测 QQPlayerServiceNew + MediaSession 全在主进程，早期版本曾按 :remote 设计。
+        // 两个进程都启用 LYRICS，谁真正承载播放谁产出事件；
+        // 每进程各持独立 JVM 单例，MediaSession 回调只在持有会话的进程派发，
+        // 空闲侧不会产生事件，中央 ActivePlayerCoordinator 按“有事件者活跃”仲裁，双注册无冲突。
         packageName == MIUI_PACKAGE && processName == MIUI_PACKAGE ->
-            setOf(QQMusicRuntimeFeature.NEXT_TRACK)
+            setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK)
         packageName == MIUI_PACKAGE && processName == MIUI_REMOTE_PROCESS ->
             setOf(QQMusicRuntimeFeature.LYRICS)
         else -> emptySet()

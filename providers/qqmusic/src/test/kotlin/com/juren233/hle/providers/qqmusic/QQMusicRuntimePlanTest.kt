@@ -46,9 +46,9 @@ class QQMusicRuntimePlanTest {
     }
 
     @Test
-    fun `routes miui main process to next track only`() {
+    fun `routes miui main process to lyrics and next track`() {
         assertEquals(
-            setOf(QQMusicRuntimeFeature.NEXT_TRACK),
+            setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK),
             QQMusicRuntimePlan.resolve(
                 QQMusicRuntimePlan.MIUI_PACKAGE,
                 QQMusicRuntimePlan.MIUI_PACKAGE,
@@ -65,6 +65,22 @@ class QQMusicRuntimePlanTest {
                 "${QQMusicRuntimePlan.MIUI_PACKAGE}:remote",
             ),
         )
+    }
+
+    @Test
+    fun `miui lyrics survive playback process moving between main and remote`() {
+        // 4440009 把 QQPlayerServiceNew + MediaSession 放在主进程，早期版本在 :remote。
+        // 无论拓扑怎么跳，承载播放的进程都必须带 LYRICS。
+        for (processName in listOf(
+            QQMusicRuntimePlan.MIUI_PACKAGE,
+            "${QQMusicRuntimePlan.MIUI_PACKAGE}:remote",
+        )) {
+            val features = QQMusicRuntimePlan.resolve(QQMusicRuntimePlan.MIUI_PACKAGE, processName)
+            assertTrue(
+                "miui process $processName lost LYRICS",
+                QQMusicRuntimeFeature.LYRICS in features,
+            )
+        }
     }
 
     @Test
