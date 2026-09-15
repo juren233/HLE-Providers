@@ -266,7 +266,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             activeLoadKey = loadKey
             publish(loadCached(track) ?: placeholder(track))
             executor.execute {
-                val resolution = runCatching { QQMusicSongMidResolver.resolve(track.id) }
+                val resolution = runCatching { QQMusicSongMidResolver.resolve(track.id, track.title, track.artist) }
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌曲 ID 换算失败: id=${track.id}", error)
                     }

@@ -55,9 +55,57 @@ class QQMusicSongMidResolverTest {
 
     @Test
     fun `numeric passthrough keeps song id without names`() {
-        val resolution = QQMusicSongMidResolver.resolve("97773")
+        val resolution = QQMusicSongMidResolver.resolve("97773", null, null)
         assertEquals("97773", resolution.numericSongId)
         assertNull(resolution.songName)
         assertNull(resolution.singerName)
+    }
+
+    private val searchRaw = """
+        {"code":0,"data":{"song":{"list":[
+          {"songid":390478855,"songmid":"004c8nzy40CLsL","songname":"菲律宾没有雪",
+           "singer":[{"name":"一个小孩"}]},
+          {"songid":717479938,"songmid":"004BO87l2BofMf","songname":"菲律宾没有雪(我想要的)",
+           "singer":[{"name":"一个小孩"},{"name":"听风叙晚"}]}
+        ]}}}
+    """.trimIndent()
+
+    @Test
+    fun `search fallback accepts candidate with exact title and singer`() {
+        val resolution = QQMusicSongMidResolver.parseSearchResponse(
+            searchRaw, "菲律宾没有雪", "一个小孩",
+        )!!
+        assertEquals("390478855", resolution.numericSongId)
+        assertEquals("菲律宾没有雪", resolution.songName)
+        assertEquals("一个小孩", resolution.singerName)
+    }
+
+    @Test
+    fun `search fallback rejects mismatched singer or title`() {
+        // 标题相等但歌手不相等：拒绝
+        assertNull(QQMusicSongMidResolver.parseSearchResponse(searchRaw, "菲律宾没有雪", "听风叙晚"))
+        // 标题不相等（即使歌手相等）：拒绝
+        assertNull(QQMusicSongMidResolver.parseSearchResponse(searchRaw, "不存在的歌曲名", "一个小孩"))
+        assertNull(QQMusicSongMidResolver.parseSearchResponse("""{"code":0}""", "x", "y"))
+    }
+
+    @Test
+    fun `search fallback accepts exact title when singer list has extra members`() {
+        // 候选歌手列表含额外成员（合作版），但标题精确相等且目标歌手在列表内：采纳
+        val resolution = QQMusicSongMidResolver.parseSearchResponse(
+            searchRaw, "菲律宾没有雪(我想要的)", "一个小孩",
+        )!!
+        assertEquals("717479938", resolution.numericSongId)
+    }
+
+    @Test
+    fun `match normalization ignores case and whitespace`() {
+        val raw = """
+            {"code":0,"data":{"song":{"list":[
+              {"songid":42,"songmid":"m","songname":"Love  Somebody","singer":[{"name":"lauv"}]}
+            ]}}}
+        """.trimIndent()
+        val resolution = QQMusicSongMidResolver.parseSearchResponse(raw, "love somebody", "LAUV")!!
+        assertEquals("42", resolution.numericSongId)
     }
 }
