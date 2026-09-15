@@ -6,7 +6,9 @@
 
 package com.juren233.hle.providers.qqmusic
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -26,5 +28,36 @@ class QQMusicSongMidResolverTest {
         assertFalse(QQMusicSongMidResolver.isNumericSongId("97773abc"))
         assertFalse(QQMusicSongMidResolver.isNumericSongId(" 97773"))
         assertFalse(QQMusicSongMidResolver.isNumericSongId("-1"))
+    }
+
+    @Test
+    fun `parses authoritative song name and singer from single song response`() {
+        val raw = """
+            {"code":0,"data":[{"id":268716958,"name":"Love Somebody",
+              "singer":[{"name":"LAUV","mid":"002MDGgE0VbTcV"}],"album":{"id":123}}]}
+        """.trimIndent()
+        val resolution = QQMusicSongMidResolver.parseSingleSongResponse(raw)!!
+        assertEquals("268716958", resolution.numericSongId)
+        assertEquals("Love Somebody", resolution.songName)
+        assertEquals("LAUV", resolution.singerName)
+    }
+
+    @Test
+    fun `gray songs return empty data and parse to null`() {
+        // 无版权/灰色歌曲实测返回 code=0 且 data 为空数组
+        val raw = """{"code":0,"data":[],"url":null,"url1":{},"extra_data":[]}"""
+        assertNull(QQMusicSongMidResolver.parseSingleSongResponse(raw))
+        assertNull(QQMusicSongMidResolver.parseSingleSongResponse("""{"code":0}"""))
+        assertNull(QQMusicSongMidResolver.parseSingleSongResponse("""{"code":2000}"""))
+        // 裸端点返回的 HTML 页必须解析为 null 而不是抛异常
+        assertNull(QQMusicSongMidResolver.parseSingleSongResponse("<!DOCTYPE html><html></html>"))
+    }
+
+    @Test
+    fun `numeric passthrough keeps song id without names`() {
+        val resolution = QQMusicSongMidResolver.resolve("97773")
+        assertEquals("97773", resolution.numericSongId)
+        assertNull(resolution.songName)
+        assertNull(resolution.singerName)
     }
 }

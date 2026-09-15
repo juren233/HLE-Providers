@@ -109,6 +109,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
         private val trackCoordinator = QQMusicLyricTrackCoordinator(playerPackage)
         private val bufferCoordinator = QQMusicBufferStateCoordinator()
+        private val miuiMetadataPolicy = QQMusicMiuiMetadataPolicy()
         private val cacheDir = File(application.filesDir, "hle-provider/qqmusic")
         private var activeLoadKey: String? = null
         private var lastSong: Song? = null
@@ -142,12 +143,19 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 bufferCoordinator.reset()
             }
             refreshDisplayPreference(provider)
+            val rawTitle = value.getString(MediaMetadata.METADATA_KEY_TITLE)
+            val rawArtist = value.getString(MediaMetadata.METADATA_KEY_ARTIST)
+            val normalized = if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
+                miuiMetadataPolicy.normalize(id, rawTitle, rawArtist)
+            } else {
+                QQMusicMiuiMetadataPolicy.Normalized(rawTitle, rawArtist)
+            }
             applyTrackDecision(
                 trackCoordinator.onMetadata(
                     QQMusicLyricTrack(
                         id = id,
-                        title = value.getString(MediaMetadata.METADATA_KEY_TITLE),
-                        artist = value.getString(MediaMetadata.METADATA_KEY_ARTIST),
+                        title = normalized.title,
+                        artist = normalized.artist,
                         duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
                     ),
                 ),
@@ -258,21 +266,25 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             activeLoadKey = loadKey
             publish(loadCached(track) ?: placeholder(track))
             executor.execute {
-                val songId = runCatching { QQMusicSongMidResolver.resolveNumericSongId(track.id) }
+                val resolution = runCatching { QQMusicSongMidResolver.resolve(track.id) }
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌曲 ID 换算失败: id=${track.id}", error)
                     }
                     .getOrNull()
                     ?: return@execute
-                runCatching { QQClient.fetch(songId) }
+                runCatching { QQClient.fetch(resolution.numericSongId) }
                     .onSuccess { payload ->
-                        writeCache(track.id, payload)
+                        val enriched = payload.copy(
+                            name = resolution.songName,
+                            singer = resolution.singerName,
+                        )
+                        writeCache(track.id, enriched)
                         synchronized(this@QQRuntime) {
-                            if (activeLoadKey == loadKey) publish(toSong(track, payload))
+                            if (activeLoadKey == loadKey) publish(toSong(track, enriched))
                         }
                     }
                     .onFailure { error ->
-                        Log.w(TAG, "QQ 歌词下载失败: id=${track.id} songId=$songId", error)
+                        Log.w(TAG, "QQ 歌词下载失败: id=${track.id} songId=${resolution.numericSongId}", error)
                     }
             }
         }
@@ -508,11 +520,15 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         val lyric: String?,
         val translation: String?,
         val roma: String?,
+        val name: String? = null,
+        val singer: String? = null,
     ) {
         fun toJson() = JSONObject().apply {
             putOpt("lyric", lyric)
             putOpt("translation", translation)
             putOpt("roma", roma)
+            putOpt("name", name)
+            putOpt("singer", singer)
         }
 
         companion object {
@@ -520,6 +536,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 lyric = json.optString("lyric").takeIf(String::isNotBlank),
                 translation = json.optString("translation").takeIf(String::isNotBlank),
                 roma = json.optString("roma").takeIf(String::isNotBlank),
+                name = json.optString("name").takeIf(String::isNotBlank),
+                singer = json.optString("singer").takeIf(String::isNotBlank),
             )
         }
     }
@@ -632,8 +650,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
         return Song().apply {
             id = track.id
-            name = track.title
-            artist = track.artist
+            // 小米音乐车载歌词会把歌词行写进 MediaSession 标题；换算接口返回的
+            // name/singer 是权威曲目信息，能用时优先于本地 MediaSession 元数据。
+            name = payload.name ?: track.title
+            artist = payload.singer ?: track.artist
             duration = track.duration.takeIf { it > 0 } ?: rich.lastOrNull()?.end ?: 0L
             lyrics = rich.takeIf { it.isNotEmpty() }
         }

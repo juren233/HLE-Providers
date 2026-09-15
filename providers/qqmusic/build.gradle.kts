@@ -36,4 +36,5 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.github.proify.lyricon:provider:0.1.70")
     testImplementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
+    testImplementation("org.json:json:20180813")
 }
