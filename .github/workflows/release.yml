@@ -37,7 +37,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v4
+      # runner 镜像已预装 Android SDK（license 预接受，AGP 自动补缺组件）。
+      # android-actions/setup-android@v4 因镜像下线废弃的 `tools` 包而在 sdkmanager 阶段
+      # 必然失败（2026-09-15 qqmusic-v1.0.14 首次构建实证），故不再使用。
       - name: Resolve provider from tag
         id: provider
         run: |
