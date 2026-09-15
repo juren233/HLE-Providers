@@ -9,7 +9,7 @@
     {"id":"lxmusic","displayName":"LX音乐","targetPackages":["cn.toside.music.mobile","com.ikunshare.music.mobile","com.lxnetease.music.mobile"],"available":false},
     {"id":"poweramp","displayName":"Poweramp","targetPackages":["com.maxmpz.audioplayer"],"available":false},
     {"id":"salt-player","displayName":"椒盐音乐","targetPackages":["com.salt.music"],"available":true,"versionName":"1.0.12","versionCode":14,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/salt-player-v1.0.12/salt-player-1.0.12.hlp","sha256":"138b8f8c9d8a89330ae7477d66e7fb05c2c8d501c7adb5304adfc7bfd84b0a0d"},
-    {"id":"qishui","displayName":"汽水音乐","targetPackages":["com.luna.music"],"available":false},
+    {"id":"qishui","displayName":"汽水音乐","targetPackages":["com.luna.music"],"available":true,"versionName":"1.0.4","versionCode":5,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/qishui-v1.0.4/qishui-1.0.4.hlp","sha256":"f8ffe4f9dc3d243c746888761d0b302a3bd24810dc5f60c22b68902fade7d2ba"},
     {"id":"musicfree","displayName":"MusicFree","targetPackages":["fun.upup.musicfree"],"available":false},
     {"id":"gramophone","displayName":"Gramophone","targetPackages":["org.akanework.gramophone"],"available":false},
     {"id":"symfonium","displayName":"Symfonium","targetPackages":["app.symfonik.music.player"],"available":false}
