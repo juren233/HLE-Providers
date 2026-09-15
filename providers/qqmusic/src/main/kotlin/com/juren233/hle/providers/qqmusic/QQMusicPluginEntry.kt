@@ -109,7 +109,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
         private val trackCoordinator = QQMusicLyricTrackCoordinator(playerPackage)
         private val bufferCoordinator = QQMusicBufferStateCoordinator()
-        private val miuiMetadataPolicy = QQMusicMiuiMetadataPolicy()
+        private val carLyricsPolicy = QQMusicCarLyricsMetadataPolicy()
         private val cacheDir = File(application.filesDir, "hle-provider/qqmusic")
         private var activeLoadKey: String? = null
         private var lastSong: Song? = null
@@ -145,11 +145,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             refreshDisplayPreference(provider)
             val rawTitle = value.getString(MediaMetadata.METADATA_KEY_TITLE)
             val rawArtist = value.getString(MediaMetadata.METADATA_KEY_ARTIST)
-            val normalized = if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
-                miuiMetadataPolicy.normalize(id, rawTitle, rawArtist)
-            } else {
-                QQMusicMiuiMetadataPolicy.Normalized(rawTitle, rawArtist)
-            }
+            // 小米音乐与 QQ 音乐本体都存在车载歌词改写元数据的形态，
+            // 策略只在拿到正向污染证据时才改写
+            val normalized = carLyricsPolicy.normalize(id, rawTitle, rawArtist)
             applyTrackDecision(
                 trackCoordinator.onMetadata(
                     QQMusicLyricTrack(

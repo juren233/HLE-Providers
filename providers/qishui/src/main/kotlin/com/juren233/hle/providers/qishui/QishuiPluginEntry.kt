@@ -76,6 +76,8 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
 
         private var lastPublishedSongKey: String? = null
 
+        private val carLyricsPolicy = CarLyricsMetadataPolicy()
+
         @Volatile
         private var provider: LyriconProvider? = null
 
@@ -133,12 +135,18 @@ object QishuiPluginEntry : OfficialProviderSystemMediaPlugin {
                 lastPublishedSongKey = null
                 return
             }
-            val track = QishuiTrackMetadata(
-                mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+            val mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
+            val normalized = carLyricsPolicy.normalize(
+                id = mediaId.orEmpty(),
                 title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)
                     ?: metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE),
                 artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
                     ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST),
+            )
+            val track = QishuiTrackMetadata(
+                mediaId = mediaId,
+                title = normalized.title,
+                artist = normalized.artist,
                 album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM),
                 durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION),
             )

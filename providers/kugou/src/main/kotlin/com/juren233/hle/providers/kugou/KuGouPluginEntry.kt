@@ -230,6 +230,8 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         @Volatile
         private var track = KuGouTrackMetadata(null, null, null, null, 0L)
 
+        private val carLyricsPolicy = CarLyricsMetadataPolicy()
+
         @Volatile
         private var lastSong: Song? = null
 
@@ -269,10 +271,16 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         }
 
         fun onMetadata(value: MediaMetadata?) {
-            val next = KuGouTrackMetadata(
-                mediaId = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+            val mediaId = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
+            val normalized = carLyricsPolicy.normalize(
+                id = mediaId.orEmpty(),
                 title = value?.getString(MediaMetadata.METADATA_KEY_TITLE),
                 artist = value?.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            )
+            val next = KuGouTrackMetadata(
+                mediaId = mediaId,
+                title = normalized.title,
+                artist = normalized.artist,
                 album = value?.getString(MediaMetadata.METADATA_KEY_ALBUM),
                 durationMs = value?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
             )

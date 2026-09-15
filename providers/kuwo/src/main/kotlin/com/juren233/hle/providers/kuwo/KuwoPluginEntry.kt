@@ -95,6 +95,8 @@ object KuwoPluginEntry : OfficialProviderPlugin {
         @Volatile
         private var currentTrack: KuwoTrackMetadata? = null
 
+        private val carLyricsPolicy = CarLyricsMetadataPolicy()
+
         private val requestedNextTrackCapture = Runnable(::captureNextTrack)
         private val periodicNextTrackCapture = object : Runnable {
             override fun run() {
@@ -139,10 +141,16 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                 requestNextTrackCapture()
                 return
             }
-            val track = KuwoTrackMetadata(
-                mediaId = value.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+            val mediaId = value.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
+            val normalized = carLyricsPolicy.normalize(
+                id = mediaId.orEmpty(),
                 title = value.getString(MediaMetadata.METADATA_KEY_TITLE),
                 artist = value.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            )
+            val track = KuwoTrackMetadata(
+                mediaId = mediaId,
+                title = normalized.title,
+                artist = normalized.artist,
                 album = value.getString(MediaMetadata.METADATA_KEY_ALBUM),
                 durationMs = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
             )

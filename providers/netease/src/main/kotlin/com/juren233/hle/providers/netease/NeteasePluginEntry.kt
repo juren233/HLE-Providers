@@ -207,6 +207,8 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         @Volatile
         private var currentTrack: TrackMetadata? = null
 
+        private val carLyricsPolicy = CarLyricsMetadataPolicy()
+
         private var nextTrackResolver: NeteaseNextTrackResolver? = null
 
         @Volatile
@@ -262,10 +264,15 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 requestNextTrackCapture()
                 return
             }
-            val track = TrackMetadata(
-                id = id,
+            val normalized = carLyricsPolicy.normalize(
+                id = id.toString(),
                 title = value.getString(MediaMetadata.METADATA_KEY_TITLE),
                 artist = value.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            )
+            val track = TrackMetadata(
+                id = id,
+                title = normalized.title,
+                artist = normalized.artist,
                 duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
             )
             currentTrack = track
