@@ -30,6 +30,7 @@ import io.github.proify.lyricon.provider.LyriconFactory
 import io.github.proify.lyricon.provider.LyriconProvider
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodResultCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
 import org.json.JSONObject
@@ -55,6 +56,8 @@ object NeteasePluginEntry : OfficialProviderPlugin {
 
     @Volatile
     private var runtime: NeteaseRuntime? = null
+    private val appLyricsHookInstalled = AtomicBoolean(false)
+    private val appLyricsReadFailureLogged = AtomicBoolean(false)
 
     private fun ensureRuntime(
         host: OfficialProviderHost,
@@ -102,6 +105,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
 
         host.hookApplication { application ->
             ensureRuntime(host, application)
+            installAppLyricsHook(host, application)
         }
 
         host.hookMediaSession(
@@ -118,6 +122,38 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         Log.i(TAG, "网易云音乐 Provider Hook 已安装: package=${host.packageName}")
     }
 
+    private fun installAppLyricsHook(host: OfficialProviderHost, application: Application) {
+        val versionCode = runCatching {
+            application.packageManager.getPackageInfo(host.packageName, 0).longVersionCode
+        }.getOrNull() ?: return
+        val target = NeteaseAppLyricsProfile.targetFor(host.packageName, versionCode) ?: return
+        if (!appLyricsHookInstalled.compareAndSet(false, true)) return
+        runCatching {
+            host.hookMethodResult(
+                target,
+                OfficialProviderMethodResultCallback { _, arguments, result ->
+                    if (OfficialCoreHostGuard.isDeactivated()) {
+                        return@OfficialProviderMethodResultCallback result
+                    }
+                    runCatching {
+                        NeteaseAppLyricsReader.read(arguments.firstOrNull())
+                    }.onSuccess { snapshot ->
+                        if (snapshot != null) ensureRuntime(host)?.onAppLyrics(snapshot)
+                    }.onFailure { error ->
+                        if (appLyricsReadFailureLogged.compareAndSet(false, true)) {
+                            Log.w(TAG, "读取网易云 App 歌词对象失败", error)
+                        }
+                    }
+                    result
+                },
+            )
+            Log.i(TAG, "网易云 App 歌词结果 Hook 已安装: versionCode=$versionCode")
+        }.onFailure { error ->
+            appLyricsHookInstalled.set(false)
+            Log.w(TAG, "网易云 App 歌词结果 Hook 未安装: versionCode=$versionCode", error)
+        }
+    }
+
     private class NeteaseRuntime(
         private val application: Application,
         private val playerPackage: String,
@@ -127,17 +163,23 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
             Thread(task, "HLE-Netease-Lyrics").apply { isDaemon = true }
         }
+        private val appLyricsExecutor: ExecutorService = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "HLE-Netease-AppLyrics").apply { isDaemon = true }
+        }
         private val metadata = ConcurrentHashMap<Long, TrackMetadata>()
         private val cacheDir = File(application.filesDir, "hle-provider/netease")
         private val nextTrackScheduler: ScheduledExecutorService =
             Executors.newSingleThreadScheduledExecutor { task ->
                 Thread(task, "HLE-Netease-NextTrack").apply { isDaemon = true }
             }
+        @Volatile
         private var currentId: Long? = null
         private var lastSong: Song? = null
+        private val lyricSelection = NeteaseLyricSelection<NeteasePayload>()
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
         private val diagnosticsEnabled = NeteaseDiagnosticCapability.resolve { host.isDiagnosticEnabled() }
+        private val firstAppLyricsHit = if (diagnosticsEnabled) AtomicBoolean(false) else null
         private val playbackDiagnostics = if (diagnosticsEnabled) {
             NeteasePlaybackDiagnosticSampler()
         } else null
@@ -255,6 +297,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 details = "incomingId=$id,currentId=$currentId,title=${sanitize(value?.getString(MediaMetadata.METADATA_KEY_TITLE))},artist=${sanitize(value?.getString(MediaMetadata.METADATA_KEY_ARTIST))},duration=${value?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L},playerActive=${runCatching { provider?.player?.isActive }.getOrNull()}",
             )
             if (id == null) {
+                currentId = null
                 currentTrack = null
                 if (diagnosticsEnabled) reportMediaCardDiagnostic(
                     stage = "provider",
@@ -294,21 +337,68 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 event = "track_changed",
                 details = "previousId=$previousId,currentId=$id",
             )
-            publish(loadCached(track) ?: placeholder(track))
+            loadCachedPayload(track)
+                ?.takeIf(::hasUsableLyrics)
+                ?.let { lyricSelection.setApi(id, it) }
+            publishSelected(track)
             executor.execute {
                 runCatching { NeteaseClient.fetch(id) }
                     .onSuccess { payload ->
-                        writeCache(id, payload)
+                        val usable = hasUsableLyrics(payload)
+                        if (usable) writeCache(id, payload)
+                        lyricSelection.setApi(id, payload.takeIf { usable })
                         val isCurrent = currentId == id
                         if (diagnosticsEnabled) reportMediaCardDiagnostic(
                             stage = "provider",
                             event = "lyrics_fetch_complete",
-                            details = "id=$id,current=$isCurrent,lines=${payload.lrc?.lines()?.size ?: 0},translated=${payload.translated?.lines()?.size ?: 0}",
+                            details = "id=$id,current=$isCurrent,usable=$usable," +
+                                "lines=${payload.lrc?.lines()?.size ?: 0}," +
+                                "translated=${payload.translated?.lines()?.size ?: 0}",
                         )
-                        if (isCurrent) publish(toSong(track, payload))
+                        if (isCurrent) publishSelected(track)
                     }
                     .onFailure { error -> Log.w(TAG, "网易云歌词下载失败: id=$id", error) }
             }
+        }
+
+        fun onAppLyrics(snapshot: NeteaseAppLyricsSnapshot) {
+            if (firstAppLyricsHit?.compareAndSet(false, true) == true) {
+                reportMediaCardDiagnostic(
+                    stage = "provider",
+                    event = "app_lyrics_first_hit",
+                    details = "id=${snapshot.musicId},currentId=$currentId," +
+                        "lrcLength=${snapshot.lrc?.length ?: 0},yrcLength=${snapshot.yrc?.length ?: 0}",
+                )
+            }
+            val payload = NeteasePayload(
+                lrc = snapshot.lrc,
+                translated = snapshot.lrcTranslation,
+                yrc = snapshot.yrc,
+                yrcTranslated = snapshot.yrcTranslation,
+                roma = snapshot.yrcRomanization ?: snapshot.lrcRomanization,
+                pureMusic = false,
+            )
+            appLyricsExecutor.execute {
+                if (!hasUsableLyrics(payload)) return@execute
+                if (!lyricSelection.setApp(snapshot.musicId, payload)) return@execute
+                val track = metadata[snapshot.musicId] ?: return@execute
+                publishSelected(track)
+            }
+        }
+
+        @Synchronized
+        private fun publishSelected(track: TrackMetadata) {
+            if (currentId != track.id) return
+            val selected = lyricSelection.select(track.id)
+            val song = selected?.value?.let { toSong(track, it) } ?: placeholder(track)
+            if (currentId != track.id) return
+            if (diagnosticsEnabled) reportMediaCardDiagnostic(
+                stage = "provider",
+                event = "lyric_source_selected",
+                details = "id=${track.id},source=${selected?.source ?: "none"}," +
+                    "lines=${song.lyrics?.size ?: 0}",
+            )
+            publish(song)
         }
 
         fun onPlaybackState(state: PlaybackState?) {
@@ -696,10 +786,10 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             duration = track.duration
         }
 
-        private fun loadCached(track: TrackMetadata): Song? {
+        private fun loadCachedPayload(track: TrackMetadata): NeteasePayload? {
             val file = File(cacheDir, "${track.id}.json")
             if (!file.isFile) return null
-            return runCatching { toSong(track, NeteasePayload.fromJson(JSONObject(file.readText()))) }.getOrNull()
+            return runCatching { NeteasePayload.fromJson(JSONObject(file.readText())) }.getOrNull()
         }
 
         private fun writeCache(id: Long, payload: NeteasePayload) {
@@ -900,6 +990,13 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             duration = track.duration.takeIf { it > 0 } ?: rich.lastOrNull()?.end ?: 0L
             lyrics = rich.takeIf { it.isNotEmpty() && !payload.pureMusic }
         }
+    }
+
+    private fun hasUsableLyrics(payload: NeteasePayload): Boolean {
+        if (payload.pureMusic) return false
+        val source = TimelineParser.parseYrc(payload.yrc)
+            .ifEmpty { TimelineParser.parseLrc(payload.lrc) }
+        return NeteaseLyricContentPolicy.hasMeaningfulText(source.map(TimelineLine::text))
     }
 
     private fun closest(lines: List<TimelineLine>, position: Long): TimelineLine? = lines
