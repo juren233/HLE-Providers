@@ -27,6 +27,17 @@ interface OfficialProviderHost {
         metadataCallback: OfficialProviderMetadataCallback,
     )
 
+    fun hookAfterMethod(
+        target: OfficialProviderMethodTarget,
+        callback: OfficialProviderMethodCallback,
+    )
+
+    fun hookAfterDexMethod(
+        application: Application,
+        query: OfficialProviderDexMethodQuery,
+        callback: OfficialProviderMethodCallback,
+    )
+
     fun resolveDexMethods(
         application: Application,
         queries: List<OfficialProviderDexMethodQuery>,
@@ -50,6 +61,10 @@ fun interface OfficialProviderPlaybackStateCallback {
 
 fun interface OfficialProviderMetadataCallback {
     fun onMetadataChanged(metadata: MediaMetadata?)
+}
+
+fun interface OfficialProviderMethodCallback {
+    fun onMethodCalled(receiver: Any?, arguments: Array<Any?>)
 }
 
 data class OfficialProviderMethodTarget(
@@ -89,6 +104,7 @@ data class OfficialProviderDexMethodQuery(
     val returnTypeMatchesDeclaringClass: Boolean = false,
     val isStatic: Boolean? = null,
     val requiredCallerMethodNames: List<String> = emptyList(),
+    val forbiddenInvokedMethodDescriptors: List<String> = emptyList(),
 ) {
     @Suppress("unused")
     @Deprecated("Binary compatibility for Provider Packs", level = DeprecationLevel.HIDDEN)
@@ -108,23 +124,39 @@ data class OfficialProviderDexMethodQuery(
         returnTypeReference: OfficialProviderDexTypeReference? = null,
         returnTypeMatchesDeclaringClass: Boolean = false,
         isStatic: Boolean? = null,
+        requiredCallerMethodNames: List<String> = emptyList(),
     ) : this(
-        cacheKey = cacheKey,
-        preferredTarget = preferredTarget,
-        declaringClassName = declaringClassName,
-        declaringClassNamePrefix = declaringClassNamePrefix,
-        declaringClassReference = declaringClassReference,
-        requiredStrings = requiredStrings,
-        requiredInvokedMethodDescriptors = requiredInvokedMethodDescriptors,
-        requiredInvokedMethodNames = requiredInvokedMethodNames,
-        parameterTypeNames = parameterTypeNames,
-        parameterTypeReferences = parameterTypeReferences,
-        returnTypeName = returnTypeName,
-        returnTypeNamePrefix = returnTypeNamePrefix,
-        returnTypeReference = returnTypeReference,
-        returnTypeMatchesDeclaringClass = returnTypeMatchesDeclaringClass,
-        isStatic = isStatic,
-        requiredCallerMethodNames = emptyList(),
+        cacheKey, preferredTarget, declaringClassName, declaringClassNamePrefix,
+        declaringClassReference, requiredStrings, requiredInvokedMethodDescriptors,
+        requiredInvokedMethodNames, parameterTypeNames, parameterTypeReferences,
+        returnTypeName, returnTypeNamePrefix, returnTypeReference,
+        returnTypeMatchesDeclaringClass, isStatic, requiredCallerMethodNames, emptyList(),
+    )
+
+    @Suppress("unused")
+    @Deprecated("Binary compatibility for Provider Packs", level = DeprecationLevel.HIDDEN)
+    constructor(
+        cacheKey: String,
+        preferredTarget: OfficialProviderMethodTarget? = null,
+        declaringClassName: String? = null,
+        declaringClassNamePrefix: String? = null,
+        declaringClassReference: OfficialProviderDexTypeReference? = null,
+        requiredStrings: List<String> = emptyList(),
+        requiredInvokedMethodDescriptors: List<String> = emptyList(),
+        requiredInvokedMethodNames: List<String> = emptyList(),
+        parameterTypeNames: List<String>? = null,
+        parameterTypeReferences: Map<Int, OfficialProviderDexTypeReference> = emptyMap(),
+        returnTypeName: String? = null,
+        returnTypeNamePrefix: String? = null,
+        returnTypeReference: OfficialProviderDexTypeReference? = null,
+        returnTypeMatchesDeclaringClass: Boolean = false,
+        isStatic: Boolean? = null,
+    ) : this(
+        cacheKey, preferredTarget, declaringClassName, declaringClassNamePrefix,
+        declaringClassReference, requiredStrings, requiredInvokedMethodDescriptors,
+        requiredInvokedMethodNames, parameterTypeNames, parameterTypeReferences,
+        returnTypeName, returnTypeNamePrefix, returnTypeReference,
+        returnTypeMatchesDeclaringClass, isStatic, emptyList(), emptyList(),
     )
 
     @Suppress("unused")
@@ -141,22 +173,10 @@ data class OfficialProviderDexMethodQuery(
         returnTypeMatchesDeclaringClass: Boolean = false,
         isStatic: Boolean? = null,
     ) : this(
-        cacheKey = cacheKey,
-        preferredTarget = preferredTarget,
-        declaringClassName = declaringClassName,
-        declaringClassNamePrefix = declaringClassNamePrefix,
-        declaringClassReference = null,
-        requiredStrings = requiredStrings,
-        requiredInvokedMethodDescriptors = requiredInvokedMethodDescriptors,
-        requiredInvokedMethodNames = emptyList(),
-        parameterTypeNames = parameterTypeNames,
-        parameterTypeReferences = emptyMap(),
-        returnTypeName = returnTypeName,
-        returnTypeNamePrefix = null,
-        returnTypeReference = null,
-        returnTypeMatchesDeclaringClass = returnTypeMatchesDeclaringClass,
-        isStatic = isStatic,
-        requiredCallerMethodNames = emptyList(),
+        cacheKey, preferredTarget, declaringClassName, declaringClassNamePrefix, null,
+        requiredStrings, requiredInvokedMethodDescriptors, emptyList(), parameterTypeNames,
+        emptyMap(), returnTypeName, null, null, returnTypeMatchesDeclaringClass, isStatic,
+        emptyList(), emptyList(),
     )
 }
 

@@ -17,11 +17,13 @@ import android.os.SystemClock
 import android.util.Log
 import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
@@ -36,7 +38,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object KuwoPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/Kuwo"
-    private const val TARGET_PACKAGE = "cn.kuwo.player"
     private const val PROVIDER_PACKAGE =
         "com.juren233.hyperlyricsenhanced.provider.kuwo"
 
@@ -47,13 +48,24 @@ object KuwoPluginEntry : OfficialProviderPlugin {
 
     override fun install(host: OfficialProviderHost) {
         if (OfficialCoreHostGuard.isForeignCoreHost(host)) return
-        require(host.packageName == TARGET_PACKAGE) {
+        require(KuwoHostPlan.supports(host.packageName)) {
             "Unexpected target package: ${host.packageName}"
         }
         host.hookApplication { application ->
-            if (Application.getProcessName() != host.packageName) return@hookApplication
+            val features = KuwoHostPlan.resolve(host.packageName, Application.getProcessName())
+            if (features.isEmpty()) return@hookApplication
             if (!installed.compareAndSet(false, true)) return@hookApplication
-            KuwoRuntime(application, host.packageName, host).start()
+            var lyricRuntime: KuwoRuntime? = null
+            if (KuwoFeature.LYRICS in features) {
+                lyricRuntime = KuwoRuntime(application, host.packageName, host, features)
+                    .also { it.start() }
+            }
+            if (KuwoFeature.BUFFERING_STATE in features && lyricRuntime != null) {
+                BodianBufferRuntime(application, host, lyricRuntime).start()
+            }
+            if (KuwoFeature.NEXT_TRACK in features && host.packageName == KuwoHostPlan.BODIAN_PACKAGE) {
+                BodianNextTrackRuntime(application, host.packageName, host).start()
+            }
         }
         host.hookMediaSession(
             playbackStateCallback = OfficialProviderPlaybackStateCallback { state ->
@@ -66,13 +78,14 @@ object KuwoPluginEntry : OfficialProviderPlugin {
                 runtime?.onMetadata(metadata)
             },
         )
-        Log.i(TAG, "酷我音乐 Provider Hook 已安装")
+        Log.i(TAG, "酷我音乐 Provider Hook 已安装: package=${host.packageName}")
     }
 
     private class KuwoRuntime(
         private val application: Application,
         private val playerPackage: String,
         private val host: OfficialProviderHost,
+        private val features: Set<KuwoFeature>,
     ) {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
             Thread(task, "HLE-Kuwo-Lyrics").apply { isDaemon = true }
@@ -83,11 +96,13 @@ object KuwoPluginEntry : OfficialProviderPlugin {
         private val requestGuard = KuwoRequestGuard()
         private val firstNextTrackHit = AtomicBoolean(false)
         private val nextTrackSetupStarted = AtomicBoolean(false)
+        private val bufferCoordinator = BodianBufferStateCoordinator()
 
         private var lastSong: Song? = null
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
         private var nextTrackResolver: KuwoNextTrackResolver? = null
+        private var latestPlaybackState: PlaybackState? = null
 
         @Volatile
         private var nextTrackValidationKeys: List<String> = emptyList()
@@ -127,10 +142,73 @@ object KuwoPluginEntry : OfficialProviderPlugin {
             Log.i(TAG, "酷我音乐 Lyricon Provider 已注册: process=${Application.getProcessName()}")
         }
 
+        @Synchronized
         fun onPlaybackState(state: PlaybackState?) {
-            provider?.player?.setPlaybackState(state)
+            latestPlaybackState = state
+            when (val decision = bufferCoordinator.onPlaybackState(state?.toSnapshot())) {
+                BodianPlaybackDecision.Forward -> provider?.player?.setPlaybackState(state)
+                BodianPlaybackDecision.Ignore -> Unit
+                is BodianPlaybackDecision.Publish -> publishSyntheticPlaybackState(
+                    decision.state,
+                    reason = "media_session_while_buffering",
+                )
+            }
             if (state?.state == PlaybackState.STATE_PLAYING) {
                 ensureNextTrackCaptureStarted()
+            }
+        }
+
+        @Synchronized
+        fun onBufferStarted() {
+            when (val decision = bufferCoordinator.onBufferStarted(SystemClock.elapsedRealtime())) {
+                is BodianPlaybackDecision.Publish -> publishSyntheticPlaybackState(
+                    decision.state,
+                    reason = "buffer_started",
+                )
+                BodianPlaybackDecision.Forward,
+                BodianPlaybackDecision.Ignore,
+                -> Unit
+            }
+        }
+
+        @Synchronized
+        fun onBufferEnded() {
+            when (val decision = bufferCoordinator.onBufferEnded(SystemClock.elapsedRealtime())) {
+                is BodianPlaybackDecision.Publish -> publishSyntheticPlaybackState(
+                    decision.state,
+                    reason = "buffer_ended",
+                )
+                BodianPlaybackDecision.Forward,
+                BodianPlaybackDecision.Ignore,
+                -> Unit
+            }
+        }
+
+        private fun PlaybackState.toSnapshot() = BodianPlaybackSnapshot(
+            state = state,
+            position = position,
+            updatedAtMs = lastPositionUpdateTime,
+            speed = playbackSpeed,
+        )
+
+        private fun publishSyntheticPlaybackState(
+            snapshot: BodianPlaybackSnapshot,
+            reason: String,
+        ) {
+            val builder = latestPlaybackState?.let(PlaybackState::Builder) ?: PlaybackState.Builder()
+            val state = builder.setState(
+                snapshot.state,
+                snapshot.position,
+                snapshot.speed,
+                snapshot.updatedAtMs,
+            ).build()
+            val result = provider?.player?.setPlaybackState(state)
+            if (BuildConfig.DEBUG) {
+                Log.i(
+                    TAG,
+                    "波点缓冲状态已发布: reason=$reason state=${snapshot.state}, " +
+                        "position=${snapshot.position}, updatedAt=${snapshot.updatedAtMs}, result=$result",
+                )
             }
         }
 
@@ -170,6 +248,10 @@ object KuwoPluginEntry : OfficialProviderPlugin {
         }
 
         private fun ensureNextTrackCaptureStarted() {
+            // 下一首的 playcontrol hook 只在酷我本体存在；波点由 :service 的
+            // BodianNextTrackRuntime 负责，主进程不得发起 DexKit 查询。
+            if (KuwoFeature.NEXT_TRACK !in features) return
+            if (playerPackage != KuwoHostPlan.KUWO_PACKAGE) return
             if (nextTrackSetupStarted.compareAndSet(false, true)) {
                 mainHandler.post(::startNextTrackCapture)
             }
@@ -398,6 +480,133 @@ object KuwoPluginEntry : OfficialProviderPlugin {
             }.onFailure { error ->
                 if (BuildConfig.DEBUG) Log.w(TAG, "酷我歌词缓存写入失败: rid=$rid", error)
             }
+        }
+    }
+
+    /**
+     * 波点主进程的缓冲边界 Hook：AIDL 收口 AIDLPlayDelegateImpl 的
+     * PlayDelegate_WaitForBuffering/Finish 驱动 KuwoRuntime 里的
+     * BodianBufferStateCoordinator，卡顿期间冻结岛内进度，防止歌词漂移。
+     * 未验证版本解析不到精确目标时整体跳过，只损失缓冲合成，不影响歌词。
+     */
+    private class BodianBufferRuntime(
+        private val application: Application,
+        private val host: OfficialProviderHost,
+        private val lyricRuntime: KuwoRuntime,
+    ) {
+        private val firstStartCallback = AtomicBoolean(false)
+        private val firstEndCallback = AtomicBoolean(false)
+
+        fun start() {
+            val queries = BodianBufferHookResolver.queries(application) ?: run {
+                if (BuildConfig.DEBUG) {
+                    Log.i(TAG, "波点缓冲 Hook 跳过: 当前版本无已验证的精确目标")
+                }
+                return
+            }
+            queries.forEach { query ->
+                host.hookAfterDexMethod(
+                    application = application,
+                    query = query,
+                    callback = OfficialProviderMethodCallback { _, _ ->
+                        when (query.cacheKey) {
+                            BodianBufferHookResolver.BUFFER_START_CACHE_KEY -> {
+                                if (BuildConfig.DEBUG && firstStartCallback.compareAndSet(false, true)) {
+                                    Log.i(TAG, "波点缓冲开始 Hook 首次命中")
+                                }
+                                lyricRuntime.onBufferStarted()
+                            }
+                            BodianBufferHookResolver.BUFFER_END_CACHE_KEY -> {
+                                if (BuildConfig.DEBUG && firstEndCallback.compareAndSet(false, true)) {
+                                    Log.i(TAG, "波点缓冲结束 Hook 首次命中")
+                                }
+                                lyricRuntime.onBufferEnded()
+                            }
+                        }
+                    },
+                )
+            }
+            if (BuildConfig.DEBUG) {
+                Log.i(TAG, "波点缓冲边界 Hook 已请求安装: queries=${queries.size}")
+            }
+        }
+    }
+
+    /**
+     * 波点 :service 进程的下一首采集：解码播放与预取都在该进程（真机音频焦点
+     * 日志证实），而主进程的播放队列在 Flutter/Dart 侧不可见。经 PlayManager 的
+     * play/prefetch 稳定精确目标拿到当前曲与预取曲 bean，独立注册 Provider 实例
+     * 发送 NEXT_TRACK 控制帧（QQ 小米音乐 :remote 双注册同款先例）。
+     */
+    private class BodianNextTrackRuntime(
+        private val application: Application,
+        private val playerPackage: String,
+        private val host: OfficialProviderHost,
+    ) {
+        private val mainHandler = Handler(Looper.getMainLooper())
+        private val resolver = BodianNextTrackResolver(SystemClock::elapsedRealtime)
+
+        @Volatile
+        private var provider: LyriconProvider? = null
+
+        private val heartbeat = object : Runnable {
+            override fun run() {
+                resolver.heartbeat()?.let(::sendFrame)
+                mainHandler.postDelayed(this, BodianNextTrackResolver.HEARTBEAT_MS)
+            }
+        }
+
+        fun start() {
+            val queries = BodianNextTrackHookResolver.queries(playerPackage) ?: return
+            host.resolveDexMethods(
+                application = application,
+                queries = queries,
+                callback = OfficialProviderDexMethodsCallback { targets ->
+                    mainHandler.post { startResolved(queries, targets) }
+                },
+            )
+        }
+
+        @Synchronized
+        private fun startResolved(
+            queries: List<OfficialProviderDexMethodQuery>,
+            targets: List<OfficialProviderMethodTarget>,
+        ) {
+            val playResolved = targets.any { it.methodName == "play" }
+            val prefetchResolved = targets.any { it.methodName == "prefetch" }
+            if (!playResolved || !prefetchResolved) {
+                Log.w(TAG, "波点下一首解析不完整: play=$playResolved, prefetch=$prefetchResolved")
+                return
+            }
+            provider = LyriconFactory.createProvider(
+                context = application,
+                providerPackageName = PROVIDER_PACKAGE,
+                playerPackageName = playerPackage,
+            ).also { it.register() }
+            queries.forEach { query ->
+                host.hookAfterDexMethod(
+                    application = application,
+                    query = query,
+                    callback = OfficialProviderMethodCallback { _, arguments ->
+                        val bean = BodianMusicBeanReader.read(arguments?.firstOrNull())
+                            ?: return@OfficialProviderMethodCallback
+                        mainHandler.post {
+                            val frame = when (query.cacheKey) {
+                                BodianNextTrackHookResolver.CURRENT_CACHE_KEY ->
+                                    resolver.onCurrentMusic(bean)
+                                else -> resolver.onPrefetchMusic(bean)
+                            }
+                            if (frame != null) sendFrame(frame)
+                        }
+                    },
+                )
+            }
+            mainHandler.post(heartbeat)
+            Log.i(TAG, "波点下一首 Hook 已安装: process=${Application.getProcessName()}")
+        }
+
+        private fun sendFrame(frame: String) {
+            provider?.player?.sendText(frame)
         }
     }
 

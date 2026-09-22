@@ -3,13 +3,14 @@
   "pluginApiVersion": 3,
   "pluginId": "kuwo",
   "displayName": "酷我音乐",
-  "versionName": "1.0.11",
-  "versionCode": 12,
-  "minCoreVersionCode": 140077,
+  "versionName": "1.0.12",
+  "versionCode": 13,
+  "minCoreVersionCode": 160102,
   "entryClass": "com.juren233.hle.providers.kuwo.KuwoPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.kuwo",
   "targetPackages": [
-    "cn.kuwo.player"
+    "cn.kuwo.player",
+    "cn.wenyu.bodian"
   ],
   "classesSha256": ""
 }
