@@ -931,7 +931,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                         this.begin = segment.begin
                         this.end = segment.begin + segment.duration
                         this.duration = segment.duration
-                        this.text = segment.text
+                        this.text = NeteaseInlineTimestampSanitizer.strip(segment.text)
                     }
                 }
                 TimelineLine(start, start + duration, words.joinToString("") { it.text.orEmpty() }, words)
@@ -944,7 +944,9 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             raw.lineSequence().forEach { line ->
                 val matches = lrcTime.findAll(line).toList()
                 if (matches.isEmpty() || matches.first().range.first != 0) return@forEach
-                val content = line.substring(matches.last().range.last + 1).trim()
+                val content = NeteaseInlineTimestampSanitizer.strip(
+                    line.substring(matches.last().range.last + 1),
+                ).trim()
                 if (isNeteaseSectionMarker(content)) return@forEach
                 matches.forEach { match ->
                     val minutes = match.groupValues[1].toLongOrNull() ?: 0L
