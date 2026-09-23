@@ -95,6 +95,28 @@
 - 修复边界：`KuwoHookProfiles` 新增 `V12_2_2_0` 精确档案（`O/X/k0`），未匹配版本回退到最高已验证版本；不改宿主消歧策略，不给查询追加 caller 约束。若未来酷我再次位移，必须重新从原始 DEX 取证后新增档案，禁止沿用旧名。
 - 验收条件：酷我 `12.2.2.0` 播放后出现 `酷我下一首 Hook 已安装` 与 `酷我下一首 Hook 首次命中`，超级岛下一首预览恢复且随切歌变化；歌词、逐字与开屏启动不回归。编译与单测不能关闭本条。
 
+## KUWO-SEEK-FREEZE-004: 拖动进度条后超级岛/AOD 进度冻结且切歌后无歌词
+
+- 状态：根因已确认并修复（2026-09-23 02:36 Debug 核心二轮取证实锤），待真机验收关闭。修复：`OfficialCoreHostGuard` 删除"宿主进程内 PackageManager 查官方包未安装→停用"复检腿（七个 provider 同步并全部提版）。
+- 症状与复现：酷我音乐 `12.2.2.0 (12220)` 拖动进度条后，超级岛/AOD 进度与歌词可能冻结。用户实测细化：拖动后**当前歌曲正常**；**切歌后**卡在开头进度、只显示歌曲名、超级岛与 AOD 均无歌词；查看系统媒体通知卡片后岛内进度数字会刷新但仍不推进。亮屏与息屏都观察到。另见全岛滚动模式字体重叠（同 issue #35，独立 UI 问题，本条不处理）。
+- 根因（运行时实锤，2026-09-23 02:36:19-02:37:20，pack 1.0.12 + Debug 核心 210066，日志 /tmp/kuwo122/repro2.log）：
+  - `02:36:24.528 W/HLEProvider/CoreGuard: HLE插件仅限官方HLE使用（播放期复检：设备上未安装官方包）`——与 Hook 收到的**第一条 PLAYING**（seq9）同毫秒：`recheckOnPlaybackStarted` 在"未播放→PLAYING"沿上用酷我进程内 `PackageManager.getPackageInfo("com.juren233.hyperlyricsenhanced")` 查询，抛 `NameNotFoundException` → `deactivated=true`，此后 playbackState/metadata 回调全部短路。
+  - Hook 侧 24 个状态事件中，仅前 8 个（NONE/STOPPED/BUFFERING）到达 Central；seq9-24（首次播放 PLAYING pos=67/76/70、**拖动** 02:36:31.849 PLAYING pos=135002、**两次切歌** 02:36:40/46 的 BUFFERING→PLAYING 序列）全部被 `isDeactivated()` 吞掉，Central 一条未收。
+  - 歌词唯一一次送达在 `02:36:24.475`（58 行，songId=270880103）——恰在停用前 53ms，说明首个 metadata 走在首个 PLAYING 沿之前；之后一切静默。Central 最后锚点为 BUFFERING pos=0（`decision=freeze_buffering`）＝"卡在开头、只有歌名、无歌词"。
+  - 反证"未安装"为误判：`adb pm path com.juren233.hyperlyricsenhanced` 返回 `/data/app/.../com.juren233.hyperlyricsenhanced-.../base.apk`（官方核心实际在装）。酷我持有并已授予 `QUERY_ALL_PACKAGES`、appops 为 default，排除"manifest 未声明导致可见性过滤"这一层；真实限制层（HyperOS 对宿主进程的包列表限制）未定位，也不必定位——**宿主进程内 PM 的否定性查询结果不可作为事实证据**。
+  - `当前宿主模块: unknown`：本加载方式下 `moduleApkPaths` 解析不出模块 APK 路径，install 阶段路径自检恒软通过——即守卫唯一实际生效的腿就是这条会误杀的 PM 腿。
+  - 同一停用也在 `02:04`（pack 1.0.11，repro.log 行 123481）复现：该复检由 `66de81e`（09-14"增强校验"）引入，即 1.0.11 起酷我 pack 在本机一直于首个 PLAYING 沿整体停用，本条历史的"拖动/切歌冻结"主因即此。
+- 已证伪/排除方向：
+  - "会话迁到 `:service` 进程"——快照 owner 始终为主进程；
+  - "酷我会话发布沉默/position 恒 0 是主因"（第一轮收敛结论，**撤回其主因地位**）——那是 pack 被停用后只能观察到交互瞬间垃圾状态的次生现象；Hook 实际在播放/拖动/切歌瞬间都能收到带真实 position 的 PLAYING 突发，正常转发即可支撑核心外推；
+  - "Provider 未安装/Hook 失效"、"歌词请求失败"——安装注册与 fetch 证据齐备；
+  - "`lxh123` 堆栈=下一首捕获崩溃"——**证伪**：`setTempPlayListType CaptionSongListBuilder + java.lang.Throwable` 是酷我自身诊断日志（Throwable 快照记录调用方，恰穿过我们 `resolve:76` 帧），`runCatching` 未失守，轮询未死；
+  - 不得恢复任何"查询不到→停用"型复检：宿主进程内 PM/包列表证据只可用于放行，不可用于停用。
+- 修复内容：`OfficialCoreHostGuard.recheckOnPlaybackStarted` 只保留正证据腿（模块 APK 路径判为复刻才停用），删除 PM 未安装腿并留注释记录本次真机证据；七个 provider（kuwo/kugou/netease/qishui/qqmusic/salt-player/spotify）同款文件已同步修复，kuwo 1.0.13 (14)、kugou 1.0.16 (17)、netease 1.0.23 (26)、qishui 1.0.5 (6)、qqmusic 1.0.18 (19)、salt-player 1.0.13 (15)、spotify 1.0.17 (18)，全部随本次发版生效。`:providers:kuwo:test` + 七个 provider Release Kotlin 编译全部通过。
+- 当前未知：修复后酷我"交互瞬间才发布状态"的模式下，核心外推在长曲中段的实际表现（预期可接受：最后锚点 PLAYING + speed=1.0 持续外推）；波点/酷我双宿主无回归。
+- 下一个判别性证据：装 1.0.13 后复现同序列，`CoreGuard` 不得再出现停用日志；`central_state_input` 应连续收到 PLAYING/拖动/切歌锚点；超级岛与 AOD 进度推进、切歌后新词到达。
+- 验收条件：拖动进度条后（亮屏/息屏、含切歌）超级岛与 AOD 进度持续推进且与酷我 App 内位置一致；新曲歌词正确显示；下一首预览、暂停恢复、波点宿主无回归。编译/安装/Hook 日志不能单独关闭本条。
+
 
 ## NETEASE-POSITION-002：成功发送自动锚点后又被手动进度覆盖
 

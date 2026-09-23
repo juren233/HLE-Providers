@@ -6,8 +6,6 @@
 
 package com.juren233.hyperlyricsenhanced.provider
 
-import android.app.Application
-import android.content.pm.PackageManager
 import android.media.session.PlaybackState
 import android.util.Log
 import dalvik.system.BaseDexClassLoader
@@ -21,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 1. install 时：根据加载宿主回调实现类的模块 APK 标准安装路径（/data/app/）
  *    判定宿主包名，判定为复刻模块时不注册任何 Hook；
  * 2. 每次开始播放时（播放状态从未播放变为 PLAYING 的沿上，持续播放期间不复检）：
- *    复核模块 APK 路径，并补充 install 阶段拿不到的官方包安装证据。
+ *    复核模块 APK 路径（不用 PackageManager 复核官方包安装状态，原因见 recheck 处注释）。
  * 任一道判定为复刻模块后，插件在本次进程内停用（媒体回调不再处理，不恢复）。
  * 无法判定时放行，由 Pack 签名体系继续兜底内容完整性。
  */
@@ -71,19 +69,12 @@ object OfficialCoreHostGuard {
 
     private fun recheckOnPlaybackStarted() {
         val host = installedHost ?: return
+        // 只有正证据（模块 APK 路径判定为复刻）才允许停用。官方包“未安装”不得作为停用依据：
+        // 宿主进程内 PackageManager 受包可见性限制（2026-09-23 真机证据：官方核心已安装于
+        // /data/app/，酷我进程内查询仍抛 NameNotFoundException，导致插件在首个 PLAYING 沿
+        // 被整体误停用，详见仓库 DEBUGGING_MISTAKES.md KUWO-SEEK-FREEZE-004）。
         if (isForeignCoreHostInternal(host)) {
             deactivate(host, "（播放期复检）")
-            return
-        }
-        val application = currentApplication() ?: return
-        val officialInstalled = runCatching {
-            application.packageManager.getPackageInfo(OFFICIAL_CORE_PACKAGE, 0)
-            true
-        }.recoverCatching { error ->
-            if (error is PackageManager.NameNotFoundException) false else throw error
-        }.getOrNull()
-        if (officialInstalled == false) {
-            deactivate(host, "（播放期复检：设备上未安装官方包）")
         }
     }
 
@@ -101,15 +92,6 @@ object OfficialCoreHostGuard {
         if (installPaths.isEmpty()) return@runCatching false
         !installPaths.any(::looksLikeOfficialCoreApkPath)
     }.getOrDefault(false)
-
-    private fun currentApplication(): Application? = runCatching {
-        val activityThread = Class.forName(
-            "android.app.ActivityThread",
-            false,
-            OfficialCoreHostGuard::class.java.classLoader,
-        )
-        activityThread.getDeclaredMethod("currentApplication").invoke(null) as? Application
-    }.getOrNull()
 
     private fun firstModuleApkPath(host: Any): String = runCatching {
         moduleApkPaths(host.javaClass.classLoader)
