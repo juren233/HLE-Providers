@@ -10,8 +10,8 @@ android {
         applicationId = "com.juren233.hle.providers.pack.saltplayer"
         minSdk = 33
         targetSdk = 37
-        versionCode = 12
-        versionName = "1.0.10"
+        versionCode = 15
+        versionName = "1.0.13"
     }
 
     buildTypes {
