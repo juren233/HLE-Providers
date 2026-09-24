@@ -57,6 +57,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
     @Volatile
     private var runtime: NeteaseRuntime? = null
     private val appLyricsHookInstalled = AtomicBoolean(false)
+    private val appLyricsCompatibilityLookupStarted = AtomicBoolean(false)
     private val appLyricsReadFailureLogged = AtomicBoolean(false)
 
     private fun ensureRuntime(
@@ -83,10 +84,18 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             if (doubleCheck != null) {
                 doubleCheck
             } else {
+                val packageInfo = runCatching {
+                    app.packageManager.getPackageInfo(host.packageName, 0)
+                }.getOrNull()
+                val nextTrackProcessName = NeteaseNextTrackProfiles.nextTrackProcessName(
+                    host.packageName,
+                    packageInfo?.versionName.orEmpty(),
+                    packageInfo?.longVersionCode ?: 0L,
+                )
                 val newRuntime = NeteaseRuntime(
                     application = app,
                     playerPackage = host.packageName,
-                    enableNextTrack = process == host.packageName,
+                    enableNextTrack = process == nextTrackProcessName,
                     host = host,
                 )
                 runtime = newRuntime
@@ -126,7 +135,38 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         val versionCode = runCatching {
             application.packageManager.getPackageInfo(host.packageName, 0).longVersionCode
         }.getOrNull() ?: return
-        val target = NeteaseAppLyricsProfile.targetFor(host.packageName, versionCode) ?: return
+        NeteaseAppLyricsProfile.targetFor(host.packageName, versionCode)?.let { target ->
+            installAppLyricsTarget(host, versionCode, target, "verified_profile")
+            return
+        }
+        val query = NeteaseAppLyricsProfile.compatibilityQueryFor(host.packageName, versionCode)
+            ?: return
+        if (!appLyricsCompatibilityLookupStarted.compareAndSet(false, true)) return
+        runCatching {
+            host.resolveDexMethods(
+                application = application,
+                queries = listOf(query),
+                callback = OfficialProviderDexMethodsCallback { targets ->
+                    if (targets.size == 1) {
+                        installAppLyricsTarget(host, versionCode, targets.single(), "verified_dex")
+                    } else {
+                        Log.w(TAG, "网易云 App 歌词 DEX 目标数量错误: versionCode=$versionCode count=${targets.size}")
+                    }
+                },
+            )
+            Log.i(TAG, "网易云 App 歌词开始 DEX 兼容解析: versionCode=$versionCode")
+        }.onFailure { error ->
+            appLyricsCompatibilityLookupStarted.set(false)
+            Log.w(TAG, "网易云 App 歌词 DEX 兼容解析未启动: versionCode=$versionCode", error)
+        }
+    }
+
+    private fun installAppLyricsTarget(
+        host: OfficialProviderHost,
+        versionCode: Long,
+        target: OfficialProviderMethodTarget,
+        source: String,
+    ) {
         if (!appLyricsHookInstalled.compareAndSet(false, true)) return
         runCatching {
             host.hookMethodResult(
@@ -147,7 +187,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                     result
                 },
             )
-            Log.i(TAG, "网易云 App 歌词结果 Hook 已安装: versionCode=$versionCode")
+            Log.i(TAG, "网易云 App 歌词结果 Hook 已安装: versionCode=$versionCode source=$source")
         }.onFailure { error ->
             appLyricsHookInstalled.set(false)
             Log.w(TAG, "网易云 App 歌词结果 Hook 未安装: versionCode=$versionCode", error)
@@ -285,7 +325,10 @@ object NeteasePluginEntry : OfficialProviderPlugin {
                 Log.i(TAG, message)
                 host.reportDiagnostic(TAG, message)
             }
-            if (enableNextTrack) startNextTrackCapture()
+            if (enableNextTrack) {
+                runCatching { startNextTrackCapture() }
+                    .onFailure { error -> Log.w(TAG, "网易云下一首查询未启动，歌词服务继续运行", error) }
+            }
             Log.i(TAG, "网易云音乐 Lyricon Provider 已注册: process=${Application.getProcessName()}")
         }
 

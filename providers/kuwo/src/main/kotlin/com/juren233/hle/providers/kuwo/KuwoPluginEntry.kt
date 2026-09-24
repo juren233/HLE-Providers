@@ -545,6 +545,8 @@ object KuwoPluginEntry : OfficialProviderPlugin {
     ) {
         private val mainHandler = Handler(Looper.getMainLooper())
         private val resolver = BodianNextTrackResolver(SystemClock::elapsedRealtime)
+        private val firstPlayCallback = AtomicBoolean(false)
+        private val firstPrefetchCallback = AtomicBoolean(false)
 
         @Volatile
         private var provider: LyriconProvider? = null
@@ -558,13 +560,17 @@ object KuwoPluginEntry : OfficialProviderPlugin {
 
         fun start() {
             val queries = BodianNextTrackHookResolver.queries(playerPackage) ?: return
-            host.resolveDexMethods(
-                application = application,
-                queries = queries,
-                callback = OfficialProviderDexMethodsCallback { targets ->
-                    mainHandler.post { startResolved(queries, targets) }
-                },
-            )
+            runCatching {
+                host.resolveDexMethods(
+                    application = application,
+                    queries = queries,
+                    callback = OfficialProviderDexMethodsCallback { targets ->
+                        mainHandler.post { startResolved(queries, targets) }
+                    },
+                )
+            }.onFailure { error ->
+                Log.e(TAG, "波点下一首目标解析注册失败", error)
+            }
         }
 
         @Synchronized
@@ -572,37 +578,49 @@ object KuwoPluginEntry : OfficialProviderPlugin {
             queries: List<OfficialProviderDexMethodQuery>,
             targets: List<OfficialProviderMethodTarget>,
         ) {
-            val playResolved = targets.any { it.methodName == "play" }
-            val prefetchResolved = targets.any { it.methodName == "prefetch" }
-            if (!playResolved || !prefetchResolved) {
-                Log.w(TAG, "波点下一首解析不完整: play=$playResolved, prefetch=$prefetchResolved")
+            if (targets.size != queries.size) {
+                Log.w(TAG, "波点下一首解析不完整: expected=${queries.size}, actual=${targets.size}")
                 return
             }
-            provider = LyriconFactory.createProvider(
-                context = application,
-                providerPackageName = PROVIDER_PACKAGE,
-                playerPackageName = playerPackage,
-            ).also { it.register() }
-            queries.forEach { query ->
-                host.hookAfterDexMethod(
-                    application = application,
-                    query = query,
-                    callback = OfficialProviderMethodCallback { _, arguments ->
-                        val bean = BodianMusicBeanReader.read(arguments?.firstOrNull())
-                            ?: return@OfficialProviderMethodCallback
-                        mainHandler.post {
-                            val frame = when (query.cacheKey) {
-                                BodianNextTrackHookResolver.CURRENT_CACHE_KEY ->
-                                    resolver.onCurrentMusic(bean)
-                                else -> resolver.onPrefetchMusic(bean)
+            runCatching {
+                // resolveDexMethods already owns both cache keys. Install its resolved targets
+                // directly; hookAfterDexMethod would register the same keys a second time.
+                queries.zip(targets).forEach { (query, target) ->
+                    host.hookAfterMethod(
+                        target = target,
+                        callback = OfficialProviderMethodCallback { _, arguments ->
+                            if (BuildConfig.DEBUG) {
+                                val firstHit = when (query.cacheKey) {
+                                    BodianNextTrackHookResolver.CURRENT_CACHE_KEY -> firstPlayCallback
+                                    else -> firstPrefetchCallback
+                                }
+                                if (firstHit.compareAndSet(false, true)) {
+                                    Log.i(TAG, "波点下一首 Hook 首次命中: key=${query.cacheKey}")
+                                }
                             }
-                            if (frame != null) sendFrame(frame)
-                        }
-                    },
-                )
+                            val bean = BodianMusicBeanReader.read(arguments.firstOrNull())
+                                ?: return@OfficialProviderMethodCallback
+                            mainHandler.post {
+                                val frame = when (query.cacheKey) {
+                                    BodianNextTrackHookResolver.CURRENT_CACHE_KEY ->
+                                        resolver.onCurrentMusic(bean)
+                                    else -> resolver.onPrefetchMusic(bean)
+                                }
+                                if (frame != null) sendFrame(frame)
+                            }
+                        },
+                    )
+                }
+                provider = LyriconFactory.createProvider(
+                    context = application,
+                    providerPackageName = PROVIDER_PACKAGE,
+                    playerPackageName = playerPackage,
+                ).also { it.register() }
+                mainHandler.post(heartbeat)
+                Log.i(TAG, "波点下一首 Hook 已安装: process=${Application.getProcessName()}")
+            }.onFailure { error ->
+                Log.e(TAG, "波点下一首 Hook 安装失败", error)
             }
-            mainHandler.post(heartbeat)
-            Log.i(TAG, "波点下一首 Hook 已安装: process=${Application.getProcessName()}")
         }
 
         private fun sendFrame(frame: String) {

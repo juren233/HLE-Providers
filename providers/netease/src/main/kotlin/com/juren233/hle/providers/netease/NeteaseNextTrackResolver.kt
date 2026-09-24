@@ -37,9 +37,34 @@ internal data class NeteaseNextTrackProfile(
     val artistMethodName: String,
     val albumMethodName: String,
     val durationMethodName: String,
+    val useVerifiedDirectTargets: Boolean = false,
+    val nextTrackProcessSuffix: String = "",
 )
 
 internal object NeteaseNextTrackProfiles {
+    // Original NetEase Cloud Music 9.4.25 (9004025) APK: classes4.dex
+    // PlayService$1.getRealNextMusic() invokes PlayService.W1()Lcq0/y;, then
+    // Lcq0/y;->g()Lcom/netease/cloudmusic/meta/MusicInfo;. Manifest places
+    // PlayService in :play; W1 returns PlayService.sPlayerManager.
+    val V9_4_25 = NeteaseNextTrackProfile(
+        versionName = "9.4.25",
+        versionCode = 9_004_025L,
+        serviceClassName = "com.netease.cloudmusic.service.PlayService",
+        playerManagerClassName = "cq0.y",
+        musicInfoClassName = "com.netease.cloudmusic.meta.MusicInfo",
+        simpleMusicInfoClassName = "com.netease.cloudmusic.meta.virtual.SimpleMusicInfo",
+        playerManagerAccessorName = "W1",
+        nextMusicMethodName = "g",
+        toSimpleMusicInfoMethodName = "toSimpleMusicInfo",
+        idMethodName = "getId",
+        titleMethodName = "getMusicName",
+        artistMethodName = "getSingerName",
+        albumMethodName = "getAlbumName",
+        durationMethodName = "getDuration",
+        useVerifiedDirectTargets = true,
+        nextTrackProcessSuffix = ":play",
+    )
+
     // Verified from the original NetEase Cloud Music 9.5.61 APK DEX on 2026-08-06.
     // Exact descriptors:
     // MainProcessPlayService.E1()Ltr0/z; -> tr0.z.g()L.../MusicInfo;
@@ -82,12 +107,40 @@ internal object NeteaseNextTrackProfiles {
         durationMethodName = "getDuration",
     )
 
+    // Original NetEase Cloud Music 9.6.0 (9006000) APK:
+    // classes5.dex MainProcessPlayService$1.getRealNextMusic() at 0x2a78c4
+    // invokes MainProcessPlayService.w1()Lnp0/z; at 0x2a78d4, then
+    // Lnp0/z;->g()Lcom/netease/cloudmusic/meta/MusicInfo; at 0x2a78ec.
+    // E1() now returns int; it is not the player-manager accessor in this APK.
+    val V9_6_0 = NeteaseNextTrackProfile(
+        versionName = "9.6.0",
+        versionCode = 9_006_000L,
+        serviceClassName = "com.netease.cloudmusic.service.MainProcessPlayService",
+        playerManagerClassName = "np0.z",
+        musicInfoClassName = "com.netease.cloudmusic.meta.MusicInfo",
+        simpleMusicInfoClassName = "com.netease.cloudmusic.meta.virtual.SimpleMusicInfo",
+        playerManagerAccessorName = "w1",
+        nextMusicMethodName = "g",
+        toSimpleMusicInfoMethodName = "toSimpleMusicInfo",
+        idMethodName = "getId",
+        titleMethodName = "getMusicName",
+        artistMethodName = "getSingerName",
+        albumMethodName = "getAlbumName",
+        durationMethodName = "getDuration",
+        useVerifiedDirectTargets = true,
+    )
+
     fun resolve(versionName: String, versionCode: Long): NeteaseNextTrackProfile =
         when {
+            versionCode == 9_004_025L -> V9_4_25
+            versionCode == 9_006_000L -> V9_6_0
             versionCode >= 9_005_070L || versionName.startsWith("9.5.7") -> V9_5_70
             versionCode == 9_005_061L || versionName == "9.5.61" -> V9_5_61
             else -> V9_5_70
         }
+
+    fun nextTrackProcessName(packageName: String, versionName: String, versionCode: Long): String =
+        packageName + resolve(versionName, versionCode).nextTrackProcessSuffix
 }
 
 internal class NeteaseNextTrackResolver private constructor(
@@ -147,18 +200,31 @@ internal class NeteaseNextTrackResolver private constructor(
                 queryCacheKey = "netease-simple-music-v3",
                 source = OfficialProviderDexTypeSource.RETURN_TYPE,
             )
+            val useDirectTargets = profile.useVerifiedDirectTargets
             return listOf(
                 OfficialProviderDexMethodQuery(
                     cacheKey = managerType.queryCacheKey,
+                    preferredTarget = if (useDirectTargets) target(
+                        profile.serviceClassName,
+                        profile.playerManagerAccessorName,
+                        profile.playerManagerClassName,
+                        isStatic = true,
+                    ) else null,
                     declaringClassName = profile.serviceClassName,
-                    requiredCallerMethodNames = listOf("getRealNextMusic"),
+                    requiredCallerMethodNames = if (useDirectTargets) emptyList() else listOf("getRealNextMusic"),
                     parameterTypeNames = emptyList(),
+                    returnTypeName = if (useDirectTargets) profile.playerManagerClassName else null,
                     isStatic = true,
                 ),
                 OfficialProviderDexMethodQuery(
                     cacheKey = musicInfoType.queryCacheKey,
+                    preferredTarget = if (useDirectTargets) target(
+                        profile.playerManagerClassName,
+                        profile.nextMusicMethodName,
+                        profile.musicInfoClassName,
+                    ) else null,
                     declaringClassReference = managerType,
-                    requiredCallerMethodNames = listOf("getRealNextMusic"),
+                    requiredCallerMethodNames = if (useDirectTargets) emptyList() else listOf("getRealNextMusic"),
                     parameterTypeNames = emptyList(),
                     returnTypeName = profile.musicInfoClassName,
                     isStatic = false,

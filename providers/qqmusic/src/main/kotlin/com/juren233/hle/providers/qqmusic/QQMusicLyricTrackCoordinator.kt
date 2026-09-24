@@ -23,8 +23,10 @@ internal sealed interface QQMusicLyricTrackDecision {
 
 /**
  * QQ Music HD exposes a queue-local MediaSession ID instead of the real QQ song ID. Keep the
- * MediaSession metadata for display, but only load HD lyrics after the in-app SongInfo identity
- * agrees with it. QQ Music mobile retains its existing MediaSession ID behavior.
+ * MediaSession metadata for display. The current in-app SongInfo can also start a load when
+ * MediaSession callbacks lag behind automatic track changes; SystemUI verifies the published
+ * title and artist against its current MediaSession before displaying those lyrics.
+ * QQ Music mobile retains its existing MediaSession ID behavior.
  */
 internal class QQMusicLyricTrackCoordinator(
     private val playerPackage: String,
@@ -43,8 +45,21 @@ internal class QQMusicLyricTrackCoordinator(
             return QQMusicLyricTrackDecision.Unchanged
         }
         queueSnapshot = snapshot
-        val track = mediaTrack ?: return QQMusicLyricTrackDecision.Unchanged
-        return decide(track)
+        val current = snapshot.current
+        if (current.id.toLongOrNull()?.let { it > 0L } != true ||
+            normalize(current.title).isEmpty() || normalize(current.artist).isEmpty()
+        ) {
+            return mediaTrack?.let(::decide) ?: QQMusicLyricTrackDecision.Unchanged
+        }
+        val track = mediaTrack?.takeIf { sameIdentity(it, current) }
+            ?.copy(id = current.id)
+            ?: QQMusicLyricTrack(
+                id = current.id,
+                title = current.title,
+                artist = current.artist,
+                duration = 0L,
+            )
+        return emit(track, track)
     }
 
     private fun decide(track: QQMusicLyricTrack): QQMusicLyricTrackDecision {
@@ -55,15 +70,22 @@ internal class QQMusicLyricTrackCoordinator(
         } else {
             track
         }
+        return emit(resolved, track)
+    }
+
+    private fun emit(
+        resolved: QQMusicLyricTrack?,
+        awaiting: QQMusicLyricTrack,
+    ): QQMusicLyricTrackDecision {
         val decisionKey = if (resolved == null) {
-            "awaiting:${track.identityKey()}"
+            "awaiting:${awaiting.identityKey()}"
         } else {
             "load:${resolved.identityKey()}"
         }
         if (decisionKey == lastDecisionKey) return QQMusicLyricTrackDecision.Unchanged
         lastDecisionKey = decisionKey
         return if (resolved == null) {
-            QQMusicLyricTrackDecision.AwaitingVerifiedId(track)
+            QQMusicLyricTrackDecision.AwaitingVerifiedId(awaiting)
         } else {
             QQMusicLyricTrackDecision.Load(resolved)
         }

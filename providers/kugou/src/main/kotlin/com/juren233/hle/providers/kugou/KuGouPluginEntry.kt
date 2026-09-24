@@ -97,14 +97,18 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
             val currentRuntime = KuGouRuntime(application, provider, host).also { runtime = it }
             currentRuntime.start()
-            host.resolveDexMethods(
-                application = application,
-                queries = nextTrackQueriesFor(host.packageName),
-                callback = OfficialProviderDexMethodsCallback { targets ->
-                    currentRuntime.installNextTrackResolver(targets)
-                },
-            )
             currentRuntime.scheduleLyricFileHookRegistration()
+            runCatching {
+                host.resolveDexMethods(
+                    application = application,
+                    queries = nextTrackQueriesFor(host.packageName),
+                    callback = OfficialProviderDexMethodsCallback { targets ->
+                        currentRuntime.installNextTrackResolver(targets)
+                    },
+                )
+            }.onFailure { error ->
+                Log.w(TAG, "酷狗下一首 DexKit 注册失败，本地歌词 Hook 仍按超时兜底注册", error)
+            }
             Log.i(
                 TAG,
                 "酷狗音乐 Provider 已注册: package=${host.packageName} " +
@@ -463,18 +467,21 @@ object KuGouPluginEntry : OfficialProviderPlugin {
 
         private fun registerLyricFileHook() {
             if (!lyricHookRegistered.compareAndSet(false, true)) return
-            mainHandler.removeCallbacks(lyricHookTimeoutRegistration)
-            host.hookAfterDexMethod(
-                application = application,
-                query = KuGouPluginEntry.lyricFileQuery(),
-                callback = OfficialProviderMethodCallback { _, arguments ->
-                    onLyricFileLoaded(arguments)
-                },
-            )
-            Log.i(
-                TAG,
-                "酷狗歌词文件拦截已提交解析注册: class=$LYRIC_MANAGER_CLASS",
-            )
+            runCatching {
+                host.hookAfterDexMethod(
+                    application = application,
+                    query = KuGouPluginEntry.lyricFileQuery(),
+                    callback = OfficialProviderMethodCallback { _, arguments ->
+                        onLyricFileLoaded(arguments)
+                    },
+                )
+            }.onSuccess {
+                mainHandler.removeCallbacks(lyricHookTimeoutRegistration)
+                Log.i(TAG, "酷狗歌词文件拦截已提交解析注册: class=$LYRIC_MANAGER_CLASS")
+            }.onFailure { error ->
+                lyricHookRegistered.set(false)
+                Log.w(TAG, "酷狗歌词文件 Hook 注册失败，后续回调仍可重试", error)
+            }
         }
 
         private fun onLyricFileLoaded(arguments: Array<Any?>?) {

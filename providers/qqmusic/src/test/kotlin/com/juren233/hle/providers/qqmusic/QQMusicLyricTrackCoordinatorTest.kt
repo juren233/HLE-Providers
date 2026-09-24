@@ -45,7 +45,7 @@ class QQMusicLyricTrackCoordinatorTest {
     }
 
     @Test
-    fun `HD clears a resolved track when a newer queue identity arrives first`() {
+    fun `HD loads current SongInfo when queue changes before metadata callback`() {
         val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.HD_PACKAGE)
 
         coordinator.onMetadata(track("4073", "Song A", "Artist A"))
@@ -55,10 +55,42 @@ class QQMusicLyricTrackCoordinatorTest {
             ) is QQMusicLyricTrackDecision.Load,
         )
 
-        assertTrue(
-            coordinator.onQueueSnapshot(
-                snapshot("200", "Song B", "Artist B"),
-            ) is QQMusicLyricTrackDecision.AwaitingVerifiedId,
+        val next = coordinator.onQueueSnapshot(
+            snapshot("200", "Song B", "Artist B"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("200", next.track.id)
+        assertEquals("Song B", next.track.title)
+        assertEquals(0L, next.track.duration)
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("200", "Song B", "Artist B")),
+        )
+    }
+
+    @Test
+    fun `HD can load current SongInfo before any media metadata callback`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.HD_PACKAGE)
+
+        val decision = coordinator.onQueueSnapshot(
+            snapshot("261863461", "Dreamland", "Glass Animals"),
+        ) as QQMusicLyricTrackDecision.Load
+
+        assertEquals("261863461", decision.track.id)
+        assertEquals("Dreamland", decision.track.title)
+        assertEquals("Glass Animals", decision.track.artist)
+    }
+
+    @Test
+    fun `HD rejects invalid current SongInfo instead of requesting unrelated lyrics`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.HD_PACKAGE)
+
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("0", "Dreamland", "Glass Animals")),
+        )
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("261863461", "Dreamland", "")),
         )
     }
 
@@ -78,14 +110,15 @@ class QQMusicLyricTrackCoordinatorTest {
     @Test
     fun `changing HD queue local MediaSession ID does not reload the same song`() {
         val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.HD_PACKAGE)
-        coordinator.onQueueSnapshot(
+        val first = coordinator.onQueueSnapshot(
             snapshot("451887939", "Spotlight (聚光灯)", "蔡徐坤"),
-        )
-
-        val first = coordinator.onMetadata(
-            track("4137", "Spotlight (聚光灯)", "蔡徐坤"),
         ) as QQMusicLyricTrackDecision.Load
         assertEquals("451887939", first.track.id)
+
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onMetadata(track("4137", "Spotlight (聚光灯)", "蔡徐坤")),
+        )
 
         assertEquals(
             QQMusicLyricTrackDecision.Unchanged,

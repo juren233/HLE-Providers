@@ -102,9 +102,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         private val stateLock = Any()
         private val lyricsHookInstallLock = Any()
         private val lyricsClientHookInstallLock = Any()
-        private val installedLyricsTargets = linkedSetOf<String>()
-        private val installedLyricsClientConstructors = linkedSetOf<SpotifyLyricsEndpoint>()
-        private var lyricsEndpointSelectionHookInstalled = false
+        private val hookInstallationState = SpotifyHookInstallationState()
         private val firstLyricsClientHits = mutableMapOf<SpotifyLyricsEndpoint, AtomicBoolean>()
         private val firstLyricsEndpointSelectionHit = AtomicBoolean(false)
         private val firstLyricsEndpointTrafficHit = AtomicBoolean(false)
@@ -135,7 +133,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                 currentProfile().lyricsRequests.forEach { request ->
                     val target = request.target
                     val targetKey = "${target.className}#${target.methodName}"
-                    if (targetKey in installedLyricsTargets) return@forEach
+                    if (!hookInstallationState.needsRequestTarget(target)) return@forEach
                     runCatching {
                         host.hookMethodResult(
                             target = target,
@@ -184,7 +182,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                             },
                         )
                     }.onSuccess {
-                        installedLyricsTargets += targetKey
+                        hookInstallationState.recordRequestTarget(target)
                         Log.i(
                             TAG,
                             "Spotify color-lyrics 请求结果 Hook 已安装: $targetKey",
@@ -204,7 +202,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
         fun installLyricsClientHooks() {
             synchronized(lyricsClientHookInstallLock) {
                 currentProfile().lyricsClientConstructors.forEach { profile ->
-                    if (profile.endpoint in installedLyricsClientConstructors) return@forEach
+                    if (!hookInstallationState.needsClientConstructor(profile)) return@forEach
                     runCatching {
                         host.hookAfterConstructor(
                             target = profile.target,
@@ -213,7 +211,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                             },
                         )
                     }.onSuccess {
-                        installedLyricsClientConstructors += profile.endpoint
+                        hookInstallationState.recordClientConstructor(profile)
                         Log.i(
                             TAG,
                             "Spotify ${profile.endpoint} 歌词客户端构造 Hook 已安装: " +
@@ -231,8 +229,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
 
                 val selectionTarget = currentProfile().lyricsEndpointSelection
                 if (selectionTarget == null) {
-                    if (!lyricsEndpointSelectionHookInstalled) {
-                        lyricsEndpointSelectionHookInstalled = true
+                    if (hookInstallationState.shouldLogMissingEndpointSelector()) {
                         Log.i(
                             TAG,
                             "当前歌词档案无 endpoint 开关 Hook，" +
@@ -241,7 +238,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                     }
                     return
                 }
-                if (!lyricsEndpointSelectionHookInstalled) {
+                if (hookInstallationState.needsEndpointSelector(selectionTarget)) {
                     runCatching {
                         host.hookMethodResult(
                             target = selectionTarget,
@@ -255,7 +252,7 @@ object SpotifyPluginEntry : OfficialProviderPlugin {
                             },
                         )
                     }.onSuccess {
-                        lyricsEndpointSelectionHookInstalled = true
+                        hookInstallationState.recordEndpointSelector(selectionTarget)
                         Log.i(
                             TAG,
                             "Spotify 歌词 endpoint 选择 Hook 已安装: " +
