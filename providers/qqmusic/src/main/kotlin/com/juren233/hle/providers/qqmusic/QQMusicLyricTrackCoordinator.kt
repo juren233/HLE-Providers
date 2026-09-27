@@ -22,6 +22,17 @@ internal data class QQMusicLyricTrack(
     val sessionMediaId: String? = null,
 )
 
+/** Keep songmid/numeric-ID upgrades on one lyric, but distinguish MIUI playback sessions. */
+internal fun QQMusicLyricTrack.publishedIdentityKey(playerPackage: String): String = buildString {
+    append(QQMusicSongMidResolver.normalizeForMatch(title.orEmpty()))
+    append('|')
+    append(QQMusicSongMidResolver.normalizeForMatch(artist.orEmpty()))
+    if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
+        append('|')
+        append(sessionMediaId.orEmpty())
+    }
+}
+
 internal sealed interface QQMusicLyricTrackDecision {
     data class AwaitingVerifiedId(val track: QQMusicLyricTrack) : QQMusicLyricTrackDecision
     data class Load(val track: QQMusicLyricTrack) : QQMusicLyricTrackDecision
@@ -89,12 +100,15 @@ internal class QQMusicLyricTrackCoordinator(
                 ?.takeIf { it.id.toLongOrNull()?.let { id -> id > 0L } == true }
                 ?.let { current ->
                     // 快照 getCurSong() 是播放器当前曲：无条件信任其数字 ID 与权威真名/真歌手。
-                    // 切歌瞬间的旧快照会被 SystemUI 校验拒绝并在下一轮轮询自愈；
-                    // 元数据标题被车载歌词改写或被 App 截断都不影响发布。
+                    // 切歌时快照可能先于 MediaSession 更新；旧曲的 sessionMediaId
+                    // 不能随新曲歌词一起发布，否则 SystemUI 会持续拒收。
+                    val metadataMatchesCurrent = sameMiuiMediaTrack(track, current) ||
+                        current.songMid?.equals(track.id, ignoreCase = true) == true
                     track.copy(
                         id = QQMusicSongMidResolver.sanitizeNumericSongId(current.id),
                         title = current.title.takeIf { normalize(it).isNotEmpty() } ?: track.title,
                         artist = current.artist.takeIf { normalize(it).isNotEmpty() } ?: track.artist,
+                        sessionMediaId = track.sessionMediaId.takeIf { metadataMatchesCurrent },
                     )
                 }
                 ?: track
@@ -133,12 +147,31 @@ internal class QQMusicLyricTrackCoordinator(
             metadataArtist == normalize(snapshot.artist)
     }
 
+    private fun sameMiuiMediaTrack(
+        metadata: QQMusicLyricTrack,
+        snapshot: QQMusicTrackSnapshot,
+    ): Boolean {
+        val metadataTitle = normalize(metadata.title)
+        val snapshotTitle = normalize(snapshot.title)
+        val metadataArtist = normalize(metadata.artist)
+        val sameArtist = metadataArtist.isNotEmpty() &&
+            metadataArtist == normalize(snapshot.artist)
+        if (!sameArtist) return false
+        if (metadataTitle.isNotEmpty() && metadataTitle == snapshotTitle) return true
+        return metadataTitle.length >= 5 && snapshotTitle.length >= 5 &&
+            (snapshotTitle.contains(metadataTitle) || metadataTitle.contains(snapshotTitle))
+    }
+
     private fun QQMusicLyricTrack.identityKey(): String = buildString {
         append(id)
         append('|')
         append(normalize(title))
         append('|')
         append(normalize(artist))
+        if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
+            append('|')
+            append(sessionMediaId.orEmpty())
+        }
     }
 
     private fun normalize(value: String?): String = value.orEmpty()

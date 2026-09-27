@@ -363,4 +363,61 @@ class QQMusicLyricTrackCoordinatorTest {
         assertEquals("438910555", decision.track.id)
         assertEquals("唯一", decision.track.title)
     }
+
+    @Test
+    fun `MIUI queue first does not attach previous session ID and metadata rebinds lyrics`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+        coordinator.onMetadata(
+            track("old-session", "Beautiful Stranger", "Laufey")
+                .copy(sessionMediaId = "old-session"),
+        )
+
+        val early = coordinator.onQueueSnapshot(
+            snapshot("104883226", "再见", "G.E.M.邓紫棋"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("104883226", early.track.id)
+        assertEquals(null, early.track.sessionMediaId)
+
+        val rebound = coordinator.onMetadata(
+            track("new-session", "再见", "G.E.M.邓紫棋")
+                .copy(sessionMediaId = "new-session"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("104883226", rebound.track.id)
+        assertEquals("new-session", rebound.track.sessionMediaId)
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onMetadata(
+                track("new-session", "再见", "G.E.M.邓紫棋")
+                    .copy(sessionMediaId = "new-session"),
+            ),
+        )
+    }
+
+    @Test
+    fun `MIUI keeps session ID when snapshot has longer version of the same title`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+        coordinator.onMetadata(
+            track("session-1", "golden hour", "JVKE")
+                .copy(sessionMediaId = "session-1"),
+        )
+        val decision = coordinator.onQueueSnapshot(
+            snapshot("236084449", "In your golden hour", "JVKE"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("session-1", decision.track.sessionMediaId)
+    }
+
+    @Test
+    fun `MIUI publication identity changes with session while HD identity does not`() {
+        val first = track("songmid", "再见", "G.E.M.邓紫棋")
+            .copy(sessionMediaId = "old-session")
+        val rebound = first.copy(id = "104883226", sessionMediaId = "new-session")
+        assertTrue(
+            first.publishedIdentityKey(QQMusicRuntimePlan.MIUI_PACKAGE) !=
+                rebound.publishedIdentityKey(QQMusicRuntimePlan.MIUI_PACKAGE),
+        )
+        assertEquals(
+            first.publishedIdentityKey(QQMusicRuntimePlan.HD_PACKAGE),
+            rebound.publishedIdentityKey(QQMusicRuntimePlan.HD_PACKAGE),
+        )
+    }
 }

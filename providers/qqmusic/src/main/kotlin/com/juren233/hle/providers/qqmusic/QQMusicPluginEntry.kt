@@ -135,8 +135,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private var publishedLyricIdentity: String? = null
 
         private fun identityKeyOf(track: QQMusicLyricTrack): String =
-            QQMusicSongMidResolver.normalizeForMatch(track.title.orEmpty()) + "|" +
-                QQMusicSongMidResolver.normalizeForMatch(track.artist.orEmpty())
+            track.publishedIdentityKey(playerPackage)
         private var lastMetadataId: String? = null
         private var lastShareSongMid: String? = null
         private val diagLogger = ThrottledLogger()
@@ -528,8 +527,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             publishedLyricIdentity = null
             val cached = loadCached(track)
             if (cached != null) {
-                publish(cached)
-                cached.lyrics?.takeIf { it.isNotEmpty() }?.let {
+                val published = publish(cached)
+                if (published && !cached.lyrics.isNullOrEmpty()) {
                     publishedLyricIdentity = identityKeyOf(track)
                 }
             } else {
@@ -597,7 +596,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             }
         }
 
-        private fun QQMusicLyricTrack.loadKey(): String = "$id\u0000$title\u0000$artist"
+        private fun QQMusicLyricTrack.loadKey(): String =
+            "$id\u0000$title\u0000$artist\u0000${sessionMediaId.orEmpty()}"
 
         private fun refreshDisplayPreference(provider: LyriconProvider?) {
             val target = provider ?: return
