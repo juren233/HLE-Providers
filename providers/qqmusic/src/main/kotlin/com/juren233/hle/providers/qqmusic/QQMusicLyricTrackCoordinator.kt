@@ -13,6 +13,13 @@ internal data class QQMusicLyricTrack(
     val title: String?,
     val artist: String?,
     val duration: Long,
+    /**
+     * MediaSession 原始 MEDIA_ID（未被 songmid/数字 ID 替换前的会话标识）。
+     * 小米音乐车载歌词持续污染会话标题/歌手，mediaId 是唯一逐曲稳定身份；
+     * 随歌曲元数据透传给 Core 后，SystemUI 侧 TrackIdentity 按 包名+mediaId
+     * 严格匹配，不再依赖被污染的标题/歌手。
+     */
+    val sessionMediaId: String? = null,
 )
 
 internal sealed interface QQMusicLyricTrackDecision {

@@ -56,6 +56,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
     /** 小米音乐媒体通知 extras 里 mediaFocusParam JSON 的键（MiuiSystemUI 反编译确认）。 */
     private const val NOTIFICATION_FOCUS_PARAM_KEY = "miui.focus.param.media"
+
+    /**
+     * 随 Song 元数据透传 MediaSession MEDIA_ID 的键（与核心侧
+     * LyricMetadataKeys.SESSION_MEDIA_ID 配对），SystemUI 时间轴据此做
+     * 包名+mediaId 身份匹配，绕开车载歌词对标题/歌手的污染。
+     */
+    private const val SESSION_MEDIA_ID_METADATA_KEY = "hleSessionMediaId"
     private val installed = AtomicBoolean(false)
 
     @Volatile
@@ -311,6 +318,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 title = share?.title?.takeIf(String::isNotBlank) ?: normalized.title,
                 artist = share?.artist?.takeIf(String::isNotBlank) ?: normalized.artist,
                 duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
+                sessionMediaId = id,
             )
             applyTrackDecision(trackCoordinator.onMetadata(track))
         }
@@ -991,6 +999,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             artist = payload.singer ?: track.artist
             duration = track.duration.takeIf { it > 0 } ?: rich.lastOrNull()?.end ?: 0L
             lyrics = rich.takeIf { it.isNotEmpty() }
+            // 会话 mediaId 随元数据透传：SystemUI 侧用它做 TrackIdentity 匹配，
+            // 车载歌词污染的标题/歌手不再影响身份判定。
+            track.sessionMediaId?.takeIf(String::isNotBlank)?.let {
+                metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                    mapOf(SESSION_MEDIA_ID_METADATA_KEY to it)
+                )
+            }
         }
     }
 
