@@ -78,7 +78,9 @@ internal class QQMusicLyricTrackCoordinator(
                 ?.takeIf {
                     it.id.toLongOrNull()?.let { id -> id > 0L } == true && sameIdentity(track, it)
                 }
-                ?.let { current -> track.copy(id = current.id) }
+                ?.let { current ->
+                    track.copy(id = QQMusicSongMidResolver.sanitizeNumericSongId(current.id))
+                }
                 ?: track
             else -> track
         }

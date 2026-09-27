@@ -57,8 +57,20 @@ internal object QQMusicSongMidResolver {
 
     fun isNumericSongId(id: String): Boolean = numericPattern.matches(id)
 
+    /**
+     * 小米音乐 qqmusicsdk 的 SongInfomation.getId() 把真实歌曲 ID 与来源标志位合并成长整型
+     * （4.44.0.9 真机实测：id = songId | 0x2000_0000_0000_0000，陈粒《虚拟》107762076 →
+     * 2305843009321456028）。QQ 歌曲数字 ID 不超过 32 位，超出的高位只能是标志位；
+     * 原样透传会让歌词接口返回空内容，反而覆盖已取得的歌词。
+     */
+    internal fun sanitizeNumericSongId(id: String): String {
+        val value = id.toLongOrNull() ?: return id
+        if (value <= 0xFFFF_FFFFL) return id
+        return (value and 0xFFFF_FFFFL).toString()
+    }
+
     fun resolve(id: String, title: String?, artist: String?): SongMidResolution {
-        if (isNumericSongId(id)) return SongMidResolution(id, null, null)
+        if (isNumericSongId(id)) return SongMidResolution(sanitizeNumericSongId(id), null, null)
         resolved[id]?.let { return it }
         val failureKey = "$id|$title|$artist"
         failedAt[failureKey]?.let { failedAtMs ->

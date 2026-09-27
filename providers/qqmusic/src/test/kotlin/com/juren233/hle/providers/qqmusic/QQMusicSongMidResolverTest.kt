@@ -61,6 +61,24 @@ class QQMusicSongMidResolverTest {
         assertNull(resolution.singerName)
     }
 
+    @Test
+    fun `numeric passthrough strips SDK flag bits from implausible ids`() {
+        // qqmusicsdk SongInfomation.getId() 携带高位标志位：songId | 0x2000000000000000
+        assertEquals(
+            "107762076",
+            QQMusicSongMidResolver.sanitizeNumericSongId("2305843009321456028"),
+        )
+        assertEquals(
+            "107762076",
+            QQMusicSongMidResolver.resolve("2305843009321456028", null, null).numericSongId,
+        )
+        // 正常范围（≤32 位）的数字 ID 原样保留
+        assertEquals("107762076", QQMusicSongMidResolver.sanitizeNumericSongId("107762076"))
+        assertEquals("97773", QQMusicSongMidResolver.sanitizeNumericSongId("97773"))
+        // 非数字输入原样返回，交给 songmid 换算路径
+        assertEquals("0039MnYb0qxYhV", QQMusicSongMidResolver.sanitizeNumericSongId("0039MnYb0qxYhV"))
+    }
+
     // musicu.fcg 网关真实响应样本（music.search.SearchCgiService / DoSearchForQQMusicDesktop）
     private val searchRaw = """
         {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[

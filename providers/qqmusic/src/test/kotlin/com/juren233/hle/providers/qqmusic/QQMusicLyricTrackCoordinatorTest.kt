@@ -155,6 +155,20 @@ class QQMusicLyricTrackCoordinatorTest {
     }
 
     @Test
+    fun `MIUI strips SDK flag bits from SongInfo id`() {
+        // 4.44.0.9 真机实测：SongInfomation.getId() = songId | 0x2000000000000000
+        // （陈粒《虚拟》107762076 → 2305843009321456028），带标志位请求歌词返回空内容
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        coordinator.onMetadata(track("0019lfLV2Rl8VH", "虚拟", "陈粒"))
+        val decision = coordinator.onQueueSnapshot(
+            snapshot("2305843009321456028", "虚拟", "陈粒"),
+        ) as QQMusicLyricTrackDecision.Load
+
+        assertEquals("107762076", decision.track.id)
+    }
+
+    @Test
     fun `MIUI keeps songmid path while identity does not match`() {
         val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
 
