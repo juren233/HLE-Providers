@@ -159,8 +159,10 @@ internal object QQMusicSongMidResolver {
     }.getOrNull()
 
     /**
-     * 搜索兜底只采纳与本地标题、歌手都精确相等的候选（忽略大小写与空白差异），
-     * 绝不放宽为模糊匹配；命中条目允许与输入 songmid 不同（同曲不同版本条目）。
+     * 搜索兜底采纳「标题匹配 + 歌手精确相等」的候选（忽略大小写与空白差异）；
+     * 标题匹配两轮扫描：先精确相等，再互相包含（小米音乐等端上会截断长标题，
+     * 如 golden hour ⊂ In your golden hour），包含要求较短侧 ≥4 字符防误配。
+     * 命中条目允许与输入 songmid 不同（同曲不同版本条目，歌词一致）。
      * musicu.fcg 网关的条目字段是 id/name（旧 client_search_cp 是 songid/songname），
      * 服务层与顶层各有一个 code，任一非 0 都视为失败。
      */
@@ -172,26 +174,42 @@ internal object QQMusicSongMidResolver {
         val songs = service.optJSONObject("data")?.optJSONObject("body")
             ?.optJSONObject("song")?.optJSONArray("list") ?: return null
         val wantedTitle = normalizeForMatch(title)
-        val wantedArtist = normalizeForMatch(artist)
-        for (index in 0 until songs.length()) {
-            val song = songs.getJSONObject(index)
-            if (normalizeForMatch(song.optString("name")) != wantedTitle) continue
-            val singers = song.optJSONArray("singer") ?: continue
-            var matchedSinger: String? = null
-            for (singerIndex in 0 until singers.length()) {
-                val singerName = singers.optJSONObject(singerIndex)?.optString("name")
-                if (singerName != null && normalizeForMatch(singerName) == wantedArtist) {
-                    matchedSinger = singerName
-                    break
+        // 元数据歌手可能是「多人斜杠串」（R3HAB/Noah Neiman/Miranda Glory），
+        // 拆段后按段匹配候选歌手，整串匹配仅作兜底
+        val wantedArtistSegments = artist.split('/', '、')
+            .map(::normalizeForMatch)
+            .filter(String::isNotEmpty)
+            .toSet()
+        if (wantedTitle.isEmpty() || wantedArtistSegments.isEmpty()) return null
+        for (allowContains in booleanArrayOf(false, true)) {
+            for (index in 0 until songs.length()) {
+                val song = songs.getJSONObject(index)
+                val candidateTitle = normalizeForMatch(song.optString("name"))
+                val titleMatch = if (allowContains) {
+                    minOf(candidateTitle.length, wantedTitle.length) >= 4 &&
+                        (candidateTitle.contains(wantedTitle) || wantedTitle.contains(candidateTitle))
+                } else {
+                    candidateTitle == wantedTitle
                 }
+                if (!titleMatch) continue
+                val singers = song.optJSONArray("singer") ?: continue
+                var matchedSinger: String? = null
+                for (singerIndex in 0 until singers.length()) {
+                    val singerName = singers.optJSONObject(singerIndex)?.optString("name")
+                    val candidateSinger = normalizeForMatch(singerName ?: "")
+                    if (candidateSinger.isNotEmpty() && candidateSinger in wantedArtistSegments) {
+                        matchedSinger = singerName
+                        break
+                    }
+                }
+                matchedSinger ?: continue
+                val songId = song.optLong("id", -1L).takeIf { it > 0L }?.toString() ?: continue
+                return SongMidResolution(
+                    numericSongId = songId,
+                    songName = song.optString("name").takeIf(String::isNotBlank),
+                    singerName = matchedSinger,
+                )
             }
-            matchedSinger ?: continue
-            val songId = song.optLong("id", -1L).takeIf { it > 0L }?.toString() ?: continue
-            return SongMidResolution(
-                numericSongId = songId,
-                songName = song.optString("name").takeIf(String::isNotBlank),
-                singerName = matchedSinger,
-            )
         }
         null
     }.getOrNull()

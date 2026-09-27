@@ -101,8 +101,10 @@ class QQMusicSongMidResolverTest {
 
     @Test
     fun `search fallback rejects mismatched singer or title`() {
-        // 标题相等但歌手不相等：拒绝
-        assertNull(QQMusicSongMidResolver.parseSearchResponse(searchRaw, "菲律宾没有雪", "听风叙晚"))
+        // 标题相等但歌手不相等：精确轮拒绝；包含轮可命中「菲律宾没有雪(我想要的)」
+        // 合作版条目（同曲不同版本，歌词一致，听风叙晚在候选歌手列表内）
+        val collab = QQMusicSongMidResolver.parseSearchResponse(searchRaw, "菲律宾没有雪", "听风叙晚")
+        assertEquals("717479938", collab?.numericSongId)
         // 标题不相等（即使歌手相等）：拒绝
         assertNull(QQMusicSongMidResolver.parseSearchResponse(searchRaw, "不存在的歌曲名", "一个小孩"))
         // 缺少服务层键：拒绝
@@ -117,6 +119,20 @@ class QQMusicSongMidResolverTest {
         )
         // 非 JSON 响应（如网关返回错误页）：拒绝且不抛异常
         assertNull(QQMusicSongMidResolver.parseSearchResponse("<html></html>", "x", "y"))
+    }
+
+    @Test
+    fun `search matches multi artist slash separated metadata strings`() {
+        // 元数据歌手是多人斜杠串（小米音乐车载场景实测形态），按段匹配
+        val raw = """
+            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
+              {"id":99,"mid":"x","name":"I Like Me Better","singer":[{"name":"Zach Herron"},{"name":"Lauv"}]}
+            ]}}}}}
+        """.trimIndent()
+        val resolution = QQMusicSongMidResolver.parseSearchResponse(
+            raw, "I Like Me Better", "Zach Herron/Lauv",
+        )!!
+        assertEquals("99", resolution.numericSongId)
     }
 
     @Test
@@ -137,5 +153,40 @@ class QQMusicSongMidResolverTest {
         """.trimIndent()
         val resolution = QQMusicSongMidResolver.parseSearchResponse(raw, "love somebody", "LAUV")!!
         assertEquals("42", resolution.numericSongId)
+    }
+
+    @Test
+    fun `search accepts truncated title via containment after exact pass misses`() {
+        // 真机实测：App 标题 golden hour，QQ 真名 In your golden hour（精确轮不中，包含轮采纳）
+        val raw = """
+            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
+              {"id":236084449,"mid":"002jsOVo03DMQG","name":"In your golden hour","singer":[{"name":"JVKE"}]}
+            ]}}}}}
+        """.trimIndent()
+        val resolution = QQMusicSongMidResolver.parseSearchResponse(raw, "golden hour", "JVKE")!!
+        assertEquals("236084449", resolution.numericSongId)
+        assertEquals("In your golden hour", resolution.songName)
+    }
+
+    @Test
+    fun `search prefers exact title over containment candidate listed earlier`() {
+        val raw = """
+            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
+              {"id":1,"mid":"a","name":"golden hour (Live)","singer":[{"name":"JVKE"}]},
+              {"id":2,"mid":"b","name":"golden hour","singer":[{"name":"JVKE"}]}
+            ]}}}}}
+        """.trimIndent()
+        val resolution = QQMusicSongMidResolver.parseSearchResponse(raw, "golden hour", "JVKE")!!
+        assertEquals("2", resolution.numericSongId)
+    }
+
+    @Test
+    fun `search containment requires at least four normalized characters`() {
+        val raw = """
+            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
+              {"id":3,"mid":"c","name":"晴天笑了","singer":[{"name":"周杰伦"}]}
+            ]}}}}}
+        """.trimIndent()
+        assertNull(QQMusicSongMidResolver.parseSearchResponse(raw, "晴天", "周杰伦"))
     }
 }

@@ -96,15 +96,38 @@ internal class QQMusicLyricTrackCoordinator(
     }
 
     /**
-     * 小米音乐绑定判定：优先 songmid 精确相等（车载歌词污染下元数据标题不可信），
-     * 快照未提供 songmid 时退回标题+歌手精确相等。
+     * 小米音乐绑定判定（快照 getCurSong() 就是播放器当前曲，只防切歌瞬间的旧快照）：
+     * 1. songmid/songMediaMid 精确相等（最可信；真机实测字段可能未填充）；
+     * 2. 标题相等或互相包含 + 歌手相等（App 会截断长标题，如 golden hour ⊂ In your golden hour）；
+     * 3. 时长一致(±1.5s) + 歌手相等（标题被车载歌词改写成歌词行时的兜底）。
+     * 绑定后采用快照权威真名/真歌手发布。绑定错了也会随下一轮快照轮询自愈。
      */
     private fun bindsCurrentSong(track: QQMusicLyricTrack, current: QQMusicTrackSnapshot): Boolean {
-        if (!current.songMid.isNullOrBlank()) {
-            return current.songMid.equals(track.id, ignoreCase = true)
+        if (!current.songMid.isNullOrBlank() && current.songMid.equals(track.id, ignoreCase = true)) {
+            return true
         }
-        return sameIdentity(track, current)
+        if (artistCompat(track.artist, current.artist)) {
+            if (titleCompat(track.title, current.title)) return true
+            if (durationCompat(track.duration, current.duration)) return true
+        }
+        return false
     }
+
+    private fun titleCompat(metadata: String?, snapshot: String?): Boolean {
+        val a = normalize(metadata)
+        val b = normalize(snapshot)
+        if (a.isEmpty() || b.isEmpty()) return false
+        return a == b || a.contains(b) || b.contains(a)
+    }
+
+    private fun artistCompat(metadata: String?, snapshot: String?): Boolean {
+        val a = normalize(metadata)
+        val b = normalize(snapshot)
+        return a.isNotEmpty() && a == b
+    }
+
+    private fun durationCompat(metadata: Long, snapshot: Long): Boolean =
+        metadata > 0L && snapshot > 0L && kotlin.math.abs(metadata - snapshot) <= 1_500L
 
     private fun emit(
         resolved: QQMusicLyricTrack?,

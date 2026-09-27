@@ -231,18 +231,73 @@ class QQMusicLyricTrackCoordinatorTest {
         )
     }
 
-    private fun track(id: String, title: String, artist: String) = QQMusicLyricTrack(
-        id = id,
-        title = title,
-        artist = artist,
-        duration = 202_000L,
+    private fun track(id: String, title: String, artist: String, duration: Long = 202_000L) =
+        QQMusicLyricTrack(
+            id = id,
+            title = title,
+            artist = artist,
+            duration = duration,
+        )
+
+    private fun snapshot(
+        id: String,
+        title: String,
+        artist: String,
+        songMid: String? = null,
+        duration: Long = 0L,
+    ) = QQMusicQueueSnapshot(
+        current = QQMusicTrackSnapshot(id, title, artist, songMid, duration),
+        next = null,
     )
 
-    private fun snapshot(id: String, title: String, artist: String, songMid: String? = null) =
-        QQMusicQueueSnapshot(
-            current = QQMusicTrackSnapshot(id, title, artist, songMid),
-            next = null,
+    @Test
+    fun `MIUI binds truncated title by containment and adopts full snapshot name`() {
+        // 真机实测：App 元数据标题 golden hour，QQ 真名 In your golden hour
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        coordinator.onMetadata(track("002jsOVo03DMQG", "golden hour", "JVKE"))
+        val decision = coordinator.onQueueSnapshot(
+            snapshot("236084449", "In your golden hour", "JVKE"),
+        ) as QQMusicLyricTrackDecision.Load
+
+        assertEquals("236084449", decision.track.id)
+        assertEquals("In your golden hour", decision.track.title)
+        assertEquals("JVKE", decision.track.artist)
+    }
+
+    @Test
+    fun `MIUI binds polluted title by duration and artist match`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        // 标题被车载歌词改写成歌词行、真名无法从元数据恢复：时长+歌手绑定
+        coordinator.onMetadata(
+            track("001N3vAw4KogM1", "看着我坠啊坠啊坠落到云里", "陈粒", duration = 250_000L),
         )
+        val decision = coordinator.onQueueSnapshot(
+            snapshot("107762076", "虚拟", "陈粒", duration = 250_000L),
+        ) as QQMusicLyricTrackDecision.Load
+
+        assertEquals("107762076", decision.track.id)
+        assertEquals("虚拟", decision.track.title)
+    }
+
+    @Test
+    fun `MIUI refuses snapshot when artist and duration both differ`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(
+                snapshot("107762076", "虚拟", "陈粒", duration = 250_000L),
+            ),
+        )
+        val decision = coordinator.onMetadata(
+            track("0039MnYb0qxYhV", "晴天", "周杰伦", duration = 269_000L),
+        ) as QQMusicLyricTrackDecision.Load
+        // 歌手不同、时长差超阈值、标题也不同：快照属于别的歌，保留 songmid 兜底
+        assertEquals("0039MnYb0qxYhV", decision.track.id)
+        assertEquals("晴天", decision.track.title)
+    }
 
     @Test
     fun `MIUI binds by songmid and adopts authoritative identity under pollution`() {

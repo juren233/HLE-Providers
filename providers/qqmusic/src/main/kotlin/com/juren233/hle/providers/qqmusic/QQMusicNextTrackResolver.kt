@@ -19,6 +19,7 @@ internal data class QQMusicTrackSnapshot(
     val title: String,
     val artist: String,
     val songMid: String? = null,
+    val duration: Long = 0L,
 )
 
 internal data class QQMusicQueueSnapshot(
@@ -159,11 +160,18 @@ internal class QQMusicNextTrackResolver private constructor(
         val directId = runCatching { (songIdMethod.invoke(value) as Number).toLong().toString() }.getOrNull()
         val directTitle = runCatching { songTitleMethod.invoke(value) as? String }.getOrNull()?.trim()
         val directArtist = runCatching { songArtistMethod.invoke(value) as? String }.getOrNull()?.trim()
-        // 小米音乐 qqmusicsdk 未混淆的 getSongMid()：与 MediaSession MEDIA_ID 精确绑定，
-        // 车载歌词把元数据标题改写成歌词行时仍能识别同一首歌
+        // 小米音乐 qqmusicsdk 未混淆的 getSongMid()/getSongMediaMid()：与 MediaSession
+        // MEDIA_ID 精确绑定，车载歌词把元数据标题改写成歌词行时仍能识别同一首歌。
+        // 真机实测 4.44.0.9 songMid 可能为空，故再取 getSongMediaMid() 与时长兜底
         val songMid = runCatching {
             value.javaClass.getMethod("getSongMid").invoke(value) as? String
         }.getOrNull()?.trim()?.takeIf(String::isNotEmpty)
+            ?: runCatching {
+                value.javaClass.getMethod("getSongMediaMid").invoke(value) as? String
+            }.getOrNull()?.trim()?.takeIf(String::isNotEmpty)
+        val duration = runCatching {
+            (value.javaClass.getMethod("getDuration").invoke(value) as? Number)?.toLong() ?: 0L
+        }.getOrNull() ?: 0L
 
         if (!directId.isNullOrEmpty() && !directTitle.isNullOrEmpty()) {
             return QQMusicTrackSnapshot(
@@ -171,13 +179,14 @@ internal class QQMusicNextTrackResolver private constructor(
                 title = directTitle,
                 artist = directArtist.orEmpty(),
                 songMid = songMid,
+                duration = duration,
             )
         }
 
         // Fallback 1: SongInfo.shortMessage() parse
         val fromShortMessage = runCatching { parseFromShortMessage(value) }.getOrNull()
         if (fromShortMessage != null && fromShortMessage.id.isNotEmpty() && fromShortMessage.title.isNotEmpty()) {
-            return fromShortMessage.copy(songMid = songMid)
+            return fromShortMessage.copy(songMid = songMid, duration = duration)
         }
 
         // Fallback 2: Direct field reflection (field b: Long)
@@ -191,6 +200,7 @@ internal class QQMusicNextTrackResolver private constructor(
             title = directTitle.orEmpty(),
             artist = directArtist.orEmpty(),
             songMid = songMid,
+            duration = duration,
         )
     }
 
