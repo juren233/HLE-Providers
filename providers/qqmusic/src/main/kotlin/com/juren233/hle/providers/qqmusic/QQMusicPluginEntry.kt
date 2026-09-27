@@ -138,18 +138,16 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
         // 小米音乐 QQMusicCar 会话的 PlaybackState position 长期上报 0/冻结/滞后，
         // 不能作为进度锚点；SDK 的 getCurrTimeExact()（binder 到播放服务）是 App 内
-        // 同源的真实进度，按 1s 轮询换算成权威 PlaybackState 发布给 Core
-        private val sdkPlayerInstance: Any? = if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
-            runCatching {
-                application.classLoader.loadClass(SDK_MUSIC_PLAYER_CLASS)
-                    .getMethod(SDK_GET_INSTANCE)
-                    .invoke(null)
-            }.getOrNull()
-        } else {
-            null
-        }
+        // 同源的真实进度，按 1s 轮询换算成权威 PlaybackState 发布给 Core。
+        // 1.0.25 真机教训：构造时 SDK 未就绪 getInstance() 返回 null 且被永久缓存
+        // （hasPlayer=false），进度发布从此失效；改为懒获取 + 5s 节流重试。
+        @Volatile
+        private var sdkPlayerInstance: Any? = null
+
+        private var lastSdkAcquireAttemptAtMs = 0L
+
         private val miuiProgressTicker: ScheduledExecutorService? = if (
-            playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE && sdkPlayerInstance != null
+            playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE
         ) {
             Executors.newSingleThreadScheduledExecutor { task ->
                 Thread(task, "HLE-QQMusic-MiuiProgress").apply { isDaemon = true }
@@ -357,14 +355,32 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             }
         }
 
+        private fun acquireSdkPlayer(): Any? {
+            sdkPlayerInstance?.let { return it }
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastSdkAcquireAttemptAtMs < 5_000L) return null
+            lastSdkAcquireAttemptAtMs = now
+            val acquired = runCatching {
+                application.classLoader.loadClass(SDK_MUSIC_PLAYER_CLASS)
+                    .getMethod(SDK_GET_INSTANCE)
+                    .invoke(null)
+            }.getOrNull()
+            if (acquired != null) {
+                sdkPlayerInstance = acquired
+                Log.i(TAG, "QQ SDK Player 实例就绪(懒获取): player=$acquired")
+            }
+            return acquired
+        }
+
         @Synchronized
         private fun tickSdkProgress() {
             if (playerPackage != QQMusicRuntimePlan.MIUI_PACKAGE) return
             val session = latestPlaybackState ?: return
             val state = session.state
             if (state != PlaybackState.STATE_PLAYING && state != PlaybackState.STATE_PAUSED) return
+            val player = acquireSdkPlayer()
             val position = runCatching {
-                (sdkPlayerInstance?.javaClass?.getMethod(SDK_GET_CURR_TIME)?.invoke(sdkPlayerInstance) as? Number)
+                (player?.javaClass?.getMethod(SDK_GET_CURR_TIME)?.invoke(player) as? Number)
                     ?.toLong()
             }.getOrNull()
             if (position == null || position < 0L) {
@@ -512,37 +528,63 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 publish(placeholder(track))
             }
             executor.execute {
+                // 1.0.25 真机教训：单线程执行器里任何一个任务卡死（HTTP/DNS 无限
+                // 等待、解析死循环、发布 binder 挂起）都会让后续所有歌曲的换算与
+                // 发布永远排队，且无任何失败日志。以下阶段日志（release 可见、按
+                // 歌曲次数输出）用于在真机日志里直接定位卡住的阶段。
+                Log.i(TAG, "QQ 歌词任务开始: id=${track.id}, title=${track.title}")
                 val resolution = runCatching { QQMusicSongMidResolver.resolve(track.id, track.title, track.artist) }
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌曲 ID 换算失败: id=${track.id}", error)
+                        Log.i(TAG, "QQ 歌词任务结束(换算失败): id=${track.id}")
                     }
                     .getOrNull()
                     ?: return@execute
+                Log.i(TAG, "QQ 换算完成: id=${track.id}, songId=${resolution.numericSongId}")
                 runCatching { QQClient.fetch(resolution.numericSongId) }
                     .onSuccess { payload ->
+                        Log.i(
+                            TAG,
+                            "QQ 歌词下载完成: id=${track.id}, songId=${resolution.numericSongId}, " +
+                                "lyricChars=${payload.lyric?.length ?: 0}",
+                        )
                         val enriched = payload.copy(
                             name = resolution.songName,
                             singer = resolution.singerName,
                         )
                         val song = toSong(track, enriched)
+                        Log.i(TAG, "QQ 歌词解析完成: id=${track.id}, lines=${song.lyrics?.size ?: 0}")
                         if (song.lyrics.isNullOrEmpty()) {
                             Log.w(
                                 TAG,
                                 "QQ 歌词内容为空，不发布以免覆盖已有歌词: id=${track.id} " +
                                     "songId=${resolution.numericSongId}",
                             )
+                            Log.i(TAG, "QQ 歌词任务结束(空歌词): id=${track.id}")
                             return@onSuccess
                         }
                         writeCache(track.id, enriched)
                         synchronized(this@QQRuntime) {
                             if (activeLoadKey == loadKey) {
-                                publish(song)
-                                publishedLyricIdentity = identityKeyOf(track)
+                                val published = publish(song)
+                                Log.i(
+                                    TAG,
+                                    "QQ 已发布: id=${track.id}, lines=${song.lyrics?.size ?: 0}, " +
+                                        "result=$published",
+                                )
+                                if (published) {
+                                    publishedLyricIdentity = identityKeyOf(track)
+                                } else {
+                                    Log.i(TAG, "QQ 发布未成功，保留重试机会: id=${track.id}")
+                                }
+                            } else {
+                                Log.i(TAG, "QQ 发布跳过(轨道已切换): id=${track.id}")
                             }
                         }
                     }
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌词下载失败: id=${track.id} songId=${resolution.numericSongId}", error)
+                        Log.i(TAG, "QQ 歌词任务结束(下载失败): id=${track.id}")
                     }
             }
         }
@@ -556,10 +598,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             target.player.setDisplayRoma(prefs.getBoolean("showromalyric", false))
         }
 
-        private fun publish(song: Song) {
-            if (lastSong == song) return
+        private fun publish(song: Song): Boolean {
+            if (lastSong == song) return true
             lastSong = song
-            provider?.player?.setSong(song)
+            return provider?.player?.setSong(song) ?: false
         }
 
         private fun placeholder(track: QQMusicLyricTrack): Song = Song().apply {
