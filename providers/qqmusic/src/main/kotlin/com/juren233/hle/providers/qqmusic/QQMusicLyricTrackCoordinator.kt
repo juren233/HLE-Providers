@@ -28,8 +28,10 @@ internal sealed interface QQMusicLyricTrackDecision {
  * title and artist against its current MediaSession before displaying those lyrics.
  * Xiaomi Music (com.miui.player) reports a QQ songmid in its MediaSession while the public
  * lyric endpoint only accepts numeric IDs; when the in-app SongInfomation belongs to the same
- * song (title+artist match), replace the songmid with its numeric ID so no public conversion
- * is needed. A non-matching or invalid snapshot keeps the existing songmid conversion path.
+ * song — bound by exact songmid (immune to car-lyrics metadata pollution) or by title+artist
+ * when the snapshot lacks it — replace the songmid with its numeric ID and adopt the
+ * snapshot's authoritative name/singer so a polluted MediaSession title is not published.
+ * A non-matching or invalid snapshot keeps the existing songmid conversion path.
  * QQ Music mobile retains its existing MediaSession ID behavior.
  */
 internal class QQMusicLyricTrackCoordinator(
@@ -76,15 +78,32 @@ internal class QQMusicLyricTrackCoordinator(
                 ?.let { current -> track.copy(id = current.id) }
             QQMusicRuntimePlan.MIUI_PACKAGE -> queueSnapshot?.current
                 ?.takeIf {
-                    it.id.toLongOrNull()?.let { id -> id > 0L } == true && sameIdentity(track, it)
+                    it.id.toLongOrNull()?.let { id -> id > 0L } == true && bindsCurrentSong(track, it)
                 }
                 ?.let { current ->
-                    track.copy(id = QQMusicSongMidResolver.sanitizeNumericSongId(current.id))
+                    // 快照身份是 App 播放器的权威曲目信息：songmid 绑定成功但元数据标题
+                    // 已被车载歌词改写成歌词行时，用快照真名/真歌手发布
+                    track.copy(
+                        id = QQMusicSongMidResolver.sanitizeNumericSongId(current.id),
+                        title = current.title.takeIf { normalize(it).isNotEmpty() } ?: track.title,
+                        artist = current.artist.takeIf { normalize(it).isNotEmpty() } ?: track.artist,
+                    )
                 }
                 ?: track
             else -> track
         }
         return emit(resolved, track)
+    }
+
+    /**
+     * 小米音乐绑定判定：优先 songmid 精确相等（车载歌词污染下元数据标题不可信），
+     * 快照未提供 songmid 时退回标题+歌手精确相等。
+     */
+    private fun bindsCurrentSong(track: QQMusicLyricTrack, current: QQMusicTrackSnapshot): Boolean {
+        if (!current.songMid.isNullOrBlank()) {
+            return current.songMid.equals(track.id, ignoreCase = true)
+        }
+        return sameIdentity(track, current)
     }
 
     private fun emit(

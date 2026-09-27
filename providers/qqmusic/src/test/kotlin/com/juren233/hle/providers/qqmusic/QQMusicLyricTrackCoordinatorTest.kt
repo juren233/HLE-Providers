@@ -238,8 +238,72 @@ class QQMusicLyricTrackCoordinatorTest {
         duration = 202_000L,
     )
 
-    private fun snapshot(id: String, title: String, artist: String) = QQMusicQueueSnapshot(
-        current = QQMusicTrackSnapshot(id, title, artist),
-        next = null,
-    )
+    private fun snapshot(id: String, title: String, artist: String, songMid: String? = null) =
+        QQMusicQueueSnapshot(
+            current = QQMusicTrackSnapshot(id, title, artist, songMid),
+            next = null,
+        )
+
+    @Test
+    fun `MIUI binds by songmid and adopts authoritative identity under pollution`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        // 冷启动落到歌曲中段：元数据标题是首采样歌词行，策略无法恢复真名
+        coordinator.onMetadata(track("001AzzRc42NBVo", "看着我坠啊坠啊坠落到云里", "陈粒"))
+        val decision = coordinator.onQueueSnapshot(
+            // SongInfomation.getId() = songId | 0x2000000000000000（438910555 → 带标志位）
+            snapshot(
+                "2305843009652604507",
+                "唯一",
+                "陈粒",
+                songMid = "001AzzRc42NBVo",
+            ),
+        ) as QQMusicLyricTrackDecision.Load
+
+        assertEquals("438910555", decision.track.id)
+        assertEquals("唯一", decision.track.title)
+        assertEquals("陈粒", decision.track.artist)
+    }
+
+    @Test
+    fun `MIUI ignores snapshot bound to a different songmid`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(
+                snapshot(
+                    "2305843009652604507",
+                    "唯一",
+                    "陈粒",
+                    songMid = "001AzzRc42NBVo",
+                ),
+            ),
+        )
+        // songmid 不相等且标题/歌手也不相等：快照属于别的歌，保留 songmid 兜底
+        val decision = coordinator.onMetadata(
+            track("0039MnYb0qxYhV", "晴天", "周杰伦"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("0039MnYb0qxYhV", decision.track.id)
+        assertEquals("晴天", decision.track.title)
+    }
+
+    @Test
+    fun `MIUI songmid binding tolerates polluted title but requires same song`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        // songmid 相等即绑定，即使元数据标题被污染成歌词行、歌手字段格式不同
+        coordinator.onMetadata(track("001AzzRc42NBVo", "You cut me open", "Love Somebody-LAUV"))
+        val decision = coordinator.onQueueSnapshot(
+            snapshot(
+                "2305843009652604507",
+                "唯一",
+                "陈粒",
+                songMid = "001azzrc42nbvo",
+            ),
+        ) as QQMusicLyricTrackDecision.Load
+
+        assertEquals("438910555", decision.track.id)
+        assertEquals("唯一", decision.track.title)
+    }
 }

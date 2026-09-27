@@ -18,6 +18,7 @@ internal data class QQMusicTrackSnapshot(
     val id: String,
     val title: String,
     val artist: String,
+    val songMid: String? = null,
 )
 
 internal data class QQMusicQueueSnapshot(
@@ -158,19 +159,25 @@ internal class QQMusicNextTrackResolver private constructor(
         val directId = runCatching { (songIdMethod.invoke(value) as Number).toLong().toString() }.getOrNull()
         val directTitle = runCatching { songTitleMethod.invoke(value) as? String }.getOrNull()?.trim()
         val directArtist = runCatching { songArtistMethod.invoke(value) as? String }.getOrNull()?.trim()
+        // 小米音乐 qqmusicsdk 未混淆的 getSongMid()：与 MediaSession MEDIA_ID 精确绑定，
+        // 车载歌词把元数据标题改写成歌词行时仍能识别同一首歌
+        val songMid = runCatching {
+            value.javaClass.getMethod("getSongMid").invoke(value) as? String
+        }.getOrNull()?.trim()?.takeIf(String::isNotEmpty)
 
         if (!directId.isNullOrEmpty() && !directTitle.isNullOrEmpty()) {
             return QQMusicTrackSnapshot(
                 id = directId,
                 title = directTitle,
                 artist = directArtist.orEmpty(),
+                songMid = songMid,
             )
         }
 
         // Fallback 1: SongInfo.shortMessage() parse
         val fromShortMessage = runCatching { parseFromShortMessage(value) }.getOrNull()
         if (fromShortMessage != null && fromShortMessage.id.isNotEmpty() && fromShortMessage.title.isNotEmpty()) {
-            return fromShortMessage
+            return fromShortMessage.copy(songMid = songMid)
         }
 
         // Fallback 2: Direct field reflection (field b: Long)
@@ -183,6 +190,7 @@ internal class QQMusicNextTrackResolver private constructor(
             id = directId ?: fieldId ?: "",
             title = directTitle.orEmpty(),
             artist = directArtist.orEmpty(),
+            songMid = songMid,
         )
     }
 

@@ -113,6 +113,17 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private val cacheDir = File(application.filesDir, "hle-provider/qqmusic")
         private var activeLoadKey: String? = null
         private var lastSong: Song? = null
+
+        /**
+         * 最近一次成功带上歌词发布的歌曲身份（归一化标题|歌手）。songmid 路径与
+         * 数字 ID 路径会先后为同一首歌发起加载，第二次加载若先发占位会把已上屏
+         * 的歌词抹掉再恢复（真机表现为歌词进度闪动）；身份一致且已带歌词时直接跳过。
+         */
+        private var publishedLyricIdentity: String? = null
+
+        private fun identityKeyOf(track: QQMusicLyricTrack): String =
+            QQMusicSongMidResolver.normalizeForMatch(track.title.orEmpty()) + "|" +
+                QQMusicSongMidResolver.normalizeForMatch(track.artist.orEmpty())
         private var lastMetadataId: String? = null
         private var latestPlaybackState: PlaybackState? = null
 
@@ -236,6 +247,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             when (decision) {
                 is QQMusicLyricTrackDecision.AwaitingVerifiedId -> {
                     activeLoadKey = null
+                    publishedLyricIdentity = null
                     if (BuildConfig.DEBUG && playerPackage == QQMusicRuntimePlan.HD_PACKAGE) {
                         Log.i(
                             TAG,
@@ -260,9 +272,19 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
 
         private fun load(track: QQMusicLyricTrack) {
+            if (publishedLyricIdentity == identityKeyOf(track)) return
             val loadKey = track.loadKey()
             activeLoadKey = loadKey
-            publish(loadCached(track) ?: placeholder(track))
+            publishedLyricIdentity = null
+            val cached = loadCached(track)
+            if (cached != null) {
+                publish(cached)
+                cached.lyrics?.takeIf { it.isNotEmpty() }?.let {
+                    publishedLyricIdentity = identityKeyOf(track)
+                }
+            } else {
+                publish(placeholder(track))
+            }
             executor.execute {
                 val resolution = runCatching { QQMusicSongMidResolver.resolve(track.id, track.title, track.artist) }
                     .onFailure { error ->
@@ -276,9 +298,21 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                             name = resolution.songName,
                             singer = resolution.singerName,
                         )
+                        val song = toSong(track, enriched)
+                        if (song.lyrics.isNullOrEmpty()) {
+                            Log.w(
+                                TAG,
+                                "QQ 歌词内容为空，不发布以免覆盖已有歌词: id=${track.id} " +
+                                    "songId=${resolution.numericSongId}",
+                            )
+                            return@onSuccess
+                        }
                         writeCache(track.id, enriched)
                         synchronized(this@QQRuntime) {
-                            if (activeLoadKey == loadKey) publish(toSong(track, enriched))
+                            if (activeLoadKey == loadKey) {
+                                publish(song)
+                                publishedLyricIdentity = identityKeyOf(track)
+                            }
                         }
                     }
                     .onFailure { error ->
