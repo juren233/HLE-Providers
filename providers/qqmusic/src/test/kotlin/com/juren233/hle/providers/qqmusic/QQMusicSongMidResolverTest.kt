@@ -189,4 +189,32 @@ class QQMusicSongMidResolverTest {
         """.trimIndent()
         assertNull(QQMusicSongMidResolver.parseSearchResponse(raw, "晴天", "周杰伦"))
     }
+
+    @Test
+    fun `search throttle detector flags service level rate limit code`() {
+        val raw = """
+            {"code":0,"ts":1790509010743,"music.search.SearchCgiService":{"code":2001,"data":{
+              "body":{"song":{"list":[]}},"code":0}}}
+        """.trimIndent()
+        assertTrue(QQMusicSongMidResolver.parseSearchThrottled(raw))
+    }
+
+    @Test
+    fun `search throttle detector flags top level gateway errors`() {
+        val raw = """{"code":500001,"ts":1790508681101,"traceid":"x"}"""
+        assertTrue(QQMusicSongMidResolver.parseSearchThrottled(raw))
+    }
+
+    @Test
+    fun `search throttle detector passes valid empty result through`() {
+        val raw = """
+            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[]}},"code":0}}}
+        """.trimIndent()
+        assertTrue(!QQMusicSongMidResolver.parseSearchThrottled(raw))
+    }
+
+    @Test
+    fun `search throttle detector treats malformed payload as retryable`() {
+        assertTrue(QQMusicSongMidResolver.parseSearchThrottled("<html>gateway</html>"))
+    }
 }

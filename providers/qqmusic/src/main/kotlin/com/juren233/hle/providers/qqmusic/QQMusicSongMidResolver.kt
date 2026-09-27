@@ -14,24 +14,28 @@ import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 小米音乐（com.miui.player）的 MediaSession MEDIA_ID 上报的是 QQ 音乐 songmid，而
- * lyric_download.fcg 只接受数字歌曲 ID。已对照原包 4.44.0.9 DEX 与在线接口验证：
- * musicid=songmid 返回空内容（musicid="0"），数字 ID 返回完整 QRC。
+ * 小米音乐（com.miui.player）的歌词接口只接受数字歌曲 ID，歌词下载按数字 ID 进行，
  * 数字 ID（QQ 手机版/HD 的 MediaSession 上报值）原样透传。
  *
- * songmid → 数字 ID 的主路径是单曲接口（songmid 精确主键查询，必须带
- * songmid 与 format=json 参数：裸端点返回 HTML 页而非 JSON；1.0.14 及之前
- * 从未拼接查询串导致换算全量失败）。接口对无版权/小众歌曲返回 code=0 且
- * data 为空数组（如 000Afpal3mCeFw、003ubw8F1sZAyy 实测），此时走搜索接口
- * 兜底：候选必须「标题精确相等且歌手列表精确包含」才采纳（搜索命中的条目
- * 可能与输入 songmid 不同——同一首歌的不同版本条目，歌词一致）。
+ * 4.44.0.9 真机证伪（2026-09-27）：小米音乐的 MediaSession MEDIA_ID 不是 QQ songmid
+ * （三首不同歌曲的 MEDIA_ID 在单曲接口一律 code=0 且 data 为空数组），而系统媒体卡片
+ * mediaFocusParam.shareData 携带的 songmid 才是真身（Exhale 实测：MEDIA_ID=
+ * 001Q5MKR47b4JH 查无此歌，shareData 的 004OZHd728dJgm 返回正确歌曲）。因此
+ * songmid → 数字 ID 的主路径优先级低于会话 extras 提取（见 QQMusicPluginEntry），
+ * 本换算只在 extras 没有提供 songmid 时兜底：单曲接口（songmid 精确主键查询，必须带
+ * songmid 与 format=json 参数：裸端点返回 HTML 页而非 JSON）→ 搜索接口。
+ * 接口对无版权/小众歌曲返回 code=0 且 data 为空数组（如 000Afpal3mCeFw、
+ * 003ubw8F1sZAyy 实测），此时走搜索接口兜底：候选必须「标题精确相等且歌手列表
+ * 精确包含」才采纳（搜索命中的条目可能与输入 songmid 不同——同一首歌的不同版本
+ * 条目，歌词一致）。
  * 搜索走 u.y.qq.com/cgi-bin/musicu.fcg 统一网关的
  * music.search.SearchCgiService（DoSearchForQQMusicDesktop）：旧搜索端点
  * soso/fcgi-bin/client_search_cp 已被 QQ 服务端下线（2026-09-27 实测所有
  * 查询一律 HTTP 500，真机侧表现为 FileNotFoundException，1.0.19 及之前
  * 依赖它兜底的换算全部失败）。
  * 响应同时携带权威 name/singer，车载歌词污染场景下用它覆盖 MediaSession 标题。
- * 负缓存按 mid+标题+歌手 组合键：污染首行失败不会挡住归一化后的重试。
+ * 负缓存按 mid+标题+歌手 组合键：污染首行失败不会挡住归一化后的重试；
+ * 限流/网关错误只进 60s 短冷却（见 THROTTLED_RETRY_MS）。
  */
 internal object QQMusicSongMidResolver {
     private const val TAG = "HLEProvider/QQMusic"
@@ -41,6 +45,16 @@ internal object QQMusicSongMidResolver {
         "https://u.y.qq.com/cgi-bin/musicu.fcg"
     private const val REQUEST_TIMEOUT_MS = 15_000
     private const val FAILED_RETRY_MS = 10 * 60_000L
+
+    /**
+     * musicu.fcg 搜索网关按 IP 限流（服务层 code=2001，2026-09-27 真机与 PC 双侧实测）。
+     * 全局搜索节流：任何一次真实搜索后至少间隔这么久才允许下一次，防止车载歌词
+     * 逐行改写元数据把每行都变成一次真实搜索（同 IP 的桌面端调试流量也会连累手机）。
+     */
+    private const val SEARCH_MIN_INTERVAL_MS = 10_000L
+
+    /** 限流/网关错误导致的失败只挡 60s（瞬时故障），与「查无此歌」的 10 分钟负缓存区分。 */
+    private const val THROTTLED_RETRY_MS = 60_000L
 
     private val numericPattern = Regex("""^\d+$""")
 
@@ -52,6 +66,16 @@ internal object QQMusicSongMidResolver {
 
     private val resolved = ConcurrentHashMap<String, SongMidResolution>()
     private val failedAt = ConcurrentHashMap<String, Long>()
+    private val throttledAt = ConcurrentHashMap<String, Long>()
+
+    @Volatile
+    private var lastSearchStartedAtMs = 0L
+
+    private sealed interface SearchOutcome {
+        data class Found(val resolution: SongMidResolution) : SearchOutcome
+        data object NotFound : SearchOutcome
+        data object Throttled : SearchOutcome
+    }
 
     internal var elapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime
 
@@ -79,11 +103,23 @@ internal object QQMusicSongMidResolver {
             }
             failedAt.remove(failureKey)
         }
-        val resolution = fetchSingleSong(id) ?: fetchBySearch(id, title, artist)
-            ?: run {
-                failedAt[failureKey] = elapsedRealtimeMs()
-                throw IllegalStateException("QQ 歌曲 ID 换算失败: mid=$id")
+        throttledAt[failureKey]?.let { throttledAtMs ->
+            if (elapsedRealtimeMs() - throttledAtMs < THROTTLED_RETRY_MS) {
+                throw IllegalStateException("QQ 歌曲 ID 换算失败(搜索限流冷却中): mid=$id")
             }
+            throttledAt.remove(failureKey)
+        }
+        val resolution = fetchSingleSong(id) ?: when (val search = fetchBySearch(id, title, artist)) {
+            is SearchOutcome.Found -> search.resolution
+            SearchOutcome.Throttled -> {
+                throttledAt[failureKey] = elapsedRealtimeMs()
+                throw IllegalStateException("QQ 歌曲 ID 换算失败(搜索限流或节流跳过): mid=$id")
+            }
+            SearchOutcome.NotFound, null -> {
+                failedAt[failureKey] = elapsedRealtimeMs()
+                throw IllegalStateException("QQ 歌曲 ID 换算失败(单曲与搜索接口均无此歌): mid=$id")
+            }
+        }
         resolved[id] = resolution
         Log.i(TAG, "QQ 歌曲 ID 已换算: mid=$id songId=${resolution.numericSongId}")
         return resolution
@@ -106,8 +142,11 @@ internal object QQMusicSongMidResolver {
         }
     }
 
-    private fun fetchBySearch(id: String, title: String?, artist: String?): SongMidResolution? {
-        if (title.isNullOrBlank() || artist.isNullOrBlank()) return null
+    private fun fetchBySearch(id: String, title: String?, artist: String?): SearchOutcome {
+        if (title.isNullOrBlank() || artist.isNullOrBlank()) return SearchOutcome.NotFound
+        val now = elapsedRealtimeMs()
+        if (now - lastSearchStartedAtMs < SEARCH_MIN_INTERVAL_MS) return SearchOutcome.Throttled
+        lastSearchStartedAtMs = now
         val url = "$SEARCH_URL?data=${URLEncoder.encode(searchRequestBody("$title $artist"), "UTF-8")}"
         val connection = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
             connectTimeout = REQUEST_TIMEOUT_MS
@@ -116,13 +155,31 @@ internal object QQMusicSongMidResolver {
             setRequestProperty("Referer", "https://y.qq.com/")
         }
         return try {
-            connection.getInputStream().bufferedReader().use { reader ->
-                parseSearchResponse(reader.readText(), title, artist)
+            val raw = connection.getInputStream().bufferedReader().use { reader ->
+                reader.readText()
+            }
+            when {
+                parseSearchThrottled(raw) -> SearchOutcome.Throttled
+                else -> parseSearchResponse(raw, title, artist)
+                    ?.let(SearchOutcome::Found)
+                    ?: SearchOutcome.NotFound
             }
         } finally {
             connection.disconnect()
         }
     }
+
+    /**
+     * 搜索网关的失败分两类：服务层/顶层 code 非 0（限流 code=2001、网关错误等，
+     * 瞬时性，短冷却后重试）；code=0 但结果为空（查无此歌，进 10 分钟负缓存）。
+     */
+    internal fun parseSearchThrottled(raw: String): Boolean = runCatching {
+        val root = org.json.JSONObject(raw)
+        if (root.optInt("code", 0) != 0) return@runCatching true
+        val service = root.optJSONObject("music.search.SearchCgiService")
+            ?: return@runCatching false
+        service.optInt("code", 0) != 0
+    }.getOrDefault(true)
 
     private fun searchRequestBody(query: String): String =
         org.json.JSONObject()

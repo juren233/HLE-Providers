@@ -11,6 +11,7 @@
 package com.juren233.hle.providers.qqmusic
 
 import android.app.Application
+import android.app.Notification
 import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.PlaybackState
@@ -24,6 +25,7 @@ import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
+import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodTarget
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlaybackStateCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderPlugin
 import com.juren233.hle.providers.qqmusic.qrc.QqQrcDecrypter
@@ -51,6 +53,9 @@ import java.util.concurrent.atomic.AtomicLong
 object QQMusicPluginEntry : OfficialProviderPlugin {
     private const val TAG = "HLEProvider/QQMusic"
     private const val PROVIDER_PACKAGE = "com.juren233.hyperlyricsenhanced.provider.qqmusic"
+
+    /** 小米音乐媒体通知 extras 里 mediaFocusParam JSON 的键（MiuiSystemUI 反编译确认）。 */
+    private const val NOTIFICATION_FOCUS_PARAM_KEY = "miui.focus.param.media"
     private val installed = AtomicBoolean(false)
 
     @Volatile
@@ -74,7 +79,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             if (!installed.compareAndSet(false, true)) return@hookApplication
             var lyricRuntime: QQRuntime? = null
             if (QQMusicRuntimeFeature.LYRICS in features) {
-                lyricRuntime = QQRuntime(application, host.packageName).also { it.start() }
+                lyricRuntime = QQRuntime(application, host, host.packageName).also { it.start() }
             }
             if (QQMusicRuntimeFeature.BUFFERING_STATE in features && lyricRuntime != null) {
                 QQBufferRuntime(application, host, lyricRuntime).also {
@@ -102,6 +107,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
     private class QQRuntime(
         private val application: Application,
+        private val host: OfficialProviderHost,
         private val playerPackage: String,
     ) {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
@@ -125,6 +131,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             QQMusicSongMidResolver.normalizeForMatch(track.title.orEmpty()) + "|" +
                 QQMusicSongMidResolver.normalizeForMatch(track.artist.orEmpty())
         private var lastMetadataId: String? = null
+        private var lastShareSongMid: String? = null
+        private val diagLogger = ThrottledLogger()
+        private val tickerSuccessLogged = AtomicBoolean(false)
         private var latestPlaybackState: PlaybackState? = null
 
         // 小米音乐 QQMusicCar 会话的 PlaybackState position 长期上报 0/冻结/滞后，
@@ -179,33 +188,173 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 refreshDisplayPreference(it)
             }
             runtime = this
+            if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
+                registerNotificationHooks()
+            }
             Log.i(TAG, "QQ 音乐 Lyricon Provider 已注册: process=${Application.getProcessName()}")
+        }
+
+        /**
+         * mediaFocusParam（干净 songmid + 真名歌手）由小米音乐写进媒体通知 extras
+         * （key=miui.focus.param.media；MiuiSystemUI LegacyMediaDataManagerImpl 反编译
+         * 确认），MediaSession 元数据里没有。hook NotificationManager.notify 两个
+         * 重载在通知发布时捕获；串曲防护由 onMetadata 侧的同曲校验承担。
+         */
+        private fun registerNotificationHooks() {
+            val targets = listOf(
+                OfficialProviderMethodTarget(
+                    className = "android.app.NotificationManager",
+                    methodName = "notify",
+                    parameterTypeNames = listOf("java.lang.String", "int", "android.app.Notification"),
+                    returnTypeName = "void",
+                    isStatic = false,
+                ),
+                OfficialProviderMethodTarget(
+                    className = "android.app.NotificationManager",
+                    methodName = "notify",
+                    parameterTypeNames = listOf("int", "android.app.Notification"),
+                    returnTypeName = "void",
+                    isStatic = false,
+                ),
+            )
+            targets.forEach { target ->
+                runCatching {
+                    host.hookAfterMethod(target) { _, arguments ->
+                        val notification = arguments.lastOrNull() as? Notification
+                        onNotificationPosted(notification)
+                    }
+                }.onFailure { error ->
+                    Log.w(TAG, "QQ 媒体通知 Hook 注册失败: ${target.parameterTypeNames}", error)
+                }
+            }
+        }
+
+        @Volatile
+        private var notificationShareIdentity: QQShareSongIdentity? = null
+
+        private fun onNotificationPosted(notification: Notification?) {
+            val json = runCatching {
+                notification?.extras?.getString(NOTIFICATION_FOCUS_PARAM_KEY)
+            }.getOrNull() ?: return
+            val identity = extractShareSongIdentity(listOf(json)) ?: return
+            val previous = notificationShareIdentity
+            notificationShareIdentity = identity
+            if (previous?.songMid != identity.songMid) {
+                Log.i(
+                    TAG,
+                    "QQ 媒体通知 shareData: songMid=${identity.songMid}, " +
+                        "title=${identity.title}, artist=${identity.artist}",
+                )
+            }
+        }
+
+        /**
+         * 通知里的 shareData 属于「发布通知那一刻的歌」；元数据回调先于新通知到达时
+         * 直接采纳会把上一首的 songmid 贴到新歌上。用归一化包含校验（标题必中，
+         * 歌手可选）：车载歌词把元数据改写成「歌名-歌手」粘连或歌词行时，
+         * 真名歌名/歌手仍是元数据的子串；漂移歌词行则校验失败、暂不采纳。
+         */
+        private fun matchesCurrentMetadata(
+            identity: QQShareSongIdentity,
+            rawTitle: String?,
+            rawArtist: String?,
+        ): Boolean {
+            val title = identity.title?.let(QQMusicSongMidResolver::normalizeForMatch).orEmpty()
+            if (title.length < 2) return false
+            val haystack = QQMusicSongMidResolver.normalizeForMatch(
+                rawTitle.orEmpty() + " " + rawArtist.orEmpty(),
+            )
+            if (!haystack.contains(title)) return false
+            val artist = identity.artist?.let(QQMusicSongMidResolver::normalizeForMatch).orEmpty()
+            return artist.isEmpty() || haystack.contains(artist)
         }
 
         @Synchronized
         fun onMetadata(value: MediaMetadata?) {
             val id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.trim()
                 ?.takeIf(String::isNotEmpty) ?: return
-            if (lastMetadataId != id) {
-                lastMetadataId = id
-                bufferCoordinator.reset()
-            }
             refreshDisplayPreference(provider)
             val rawTitle = value.getString(MediaMetadata.METADATA_KEY_TITLE)
             val rawArtist = value.getString(MediaMetadata.METADATA_KEY_ARTIST)
+            val extrasBundle = if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
+                metadataExtras(value)
+            } else {
+                null
+            }
+            // MEDIA_ID 不是 songmid（4.44.0.9 真机证伪）。首选随同一次 setMetadata
+            // 写入的元数据 Bundle；媒体通知 extras 的 mediaFocusParam（干净 songmid
+            // +真名歌手）按「与当前元数据同曲」校验通过后采纳，防止串曲。
+            val share = when {
+                playerPackage != QQMusicRuntimePlan.MIUI_PACKAGE -> null
+                else -> extrasBundle?.let(::identityFromBundle)
+                    ?: notificationShareIdentity?.takeIf {
+                        matchesCurrentMetadata(it, rawTitle, rawArtist)
+                    }
+            }
+            if (lastMetadataId != id || lastShareSongMid != share?.songMid) {
+                lastMetadataId = id
+                lastShareSongMid = share?.songMid
+                bufferCoordinator.reset()
+                Log.i(
+                    TAG,
+                    "QQ 会话元数据更新: id=$id, shareSongMid=${share?.songMid}, " +
+                        "extrasKeys=${extrasBundle?.keySet()}, " +
+                        "title=$rawTitle, artist=$rawArtist",
+                )
+            }
+            diagLogger.log(TAG, "meta_heartbeat", 15_000L) {
+                "QQ 会话元数据到达: id=$id, title=$rawTitle"
+            }
             // 小米音乐与 QQ 音乐本体都存在车载歌词改写元数据的形态，
             // 策略只在拿到正向污染证据时才改写
             val normalized = carLyricsPolicy.normalize(id, rawTitle, rawArtist)
-            applyTrackDecision(
-                trackCoordinator.onMetadata(
-                    QQMusicLyricTrack(
-                        id = id,
-                        title = normalized.title,
-                        artist = normalized.artist,
-                        duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
-                    ),
-                ),
+            val track = QQMusicLyricTrack(
+                id = share?.songMid ?: id,
+                title = share?.title?.takeIf(String::isNotBlank) ?: normalized.title,
+                artist = share?.artist?.takeIf(String::isNotBlank) ?: normalized.artist,
+                duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
             )
+            applyTrackDecision(trackCoordinator.onMetadata(track))
+        }
+
+        /**
+         * MediaMetadata 没有 public extras 访问器（android.media.MediaMetadata
+         * 无 getExtras）；AOSP 隐藏方法 getBundle() 返回底层 Bundle，MIUI 系统侧
+         * 的 mediaFocusParam 即随元数据 Bundle 下发。反射失败时返回 null，
+         * 仅失去 extras 通道，不影响主流程。Method 句柄进程内缓存（元数据
+         * 回调逐行到达，避免每秒getMethod查找）。
+         */
+        private val metadataGetBundleMethod: java.lang.reflect.Method? = runCatching {
+            MediaMetadata::class.java.getMethod("getBundle")
+        }.getOrNull()
+
+        private fun metadataExtras(metadata: MediaMetadata): android.os.Bundle? = runCatching {
+            metadataGetBundleMethod?.invoke(metadata) as? android.os.Bundle
+        }.getOrNull()
+
+        private fun identityFromBundle(bundle: android.os.Bundle): QQShareSongIdentity? {
+            val values = runCatching {
+                bundle.keySet().mapNotNull { key -> bundle.getString(key) }
+            }.getOrDefault(emptyList())
+            return extractShareSongIdentity(values)
+        }
+
+        private fun shareIdentityOf(metadata: MediaMetadata): QQShareSongIdentity? =
+            metadataExtras(metadata)?.let(::identityFromBundle)
+
+        /**
+         * 发现通道（本轮只记日志不改行为）：若 mediaFocusParam 不在元数据 Bundle
+         * 而在 PlaybackState extras，则下一轮据此把提取来源迁移到此处。
+         */
+        private fun diagPlaybackStateExtras(state: PlaybackState?) {
+            val extras = state?.extras ?: return
+            val identity = runCatching {
+                extractShareSongIdentity(extras.keySet().mapNotNull { key -> extras.getString(key) })
+            }.getOrNull() ?: return
+            diagLogger.log(TAG, "state_share", 30_000L) {
+                "QQ PlaybackState extras 携带 shareData: songMid=${identity.songMid}, " +
+                    "title=${identity.title}, artist=${identity.artist}"
+            }
         }
 
         @Synchronized
@@ -217,8 +366,16 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             val position = runCatching {
                 (sdkPlayerInstance?.javaClass?.getMethod(SDK_GET_CURR_TIME)?.invoke(sdkPlayerInstance) as? Number)
                     ?.toLong()
-            }.getOrNull() ?: return
-            if (position < 0L) return
+            }.getOrNull()
+            if (position == null || position < 0L) {
+                diagLogger.log(TAG, "sdk_progress_fail", 30_000L) {
+                    "QQ SDK 进度读取失败: hasPlayer=${sdkPlayerInstance != null}, state=$state"
+                }
+                return
+            }
+            if (tickerSuccessLogged.compareAndSet(false, true)) {
+                Log.i(TAG, "QQ SDK 进度读取成功: position=$position")
+            }
             if (state == lastTickState && position == lastTickPosition) return
             lastTickState = state
             lastTickPosition = position
@@ -239,6 +396,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
                 // QQMusicCar 会话 position 长期上报 0/冻结，缓冲合成状态不适用；
                 // 进度统一由 SDK 真实位置 1s 轮询发布，会话仅提供播放/暂停态
+                diagPlaybackStateExtras(state)
                 tickSdkProgress()
                 return
             }
@@ -537,6 +695,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             )
         }
 
+        // 1.0.24 真机教训：任何一次瞬时异常都 stopPolling 会让快照通道在进程启动
+        // 瞬间（SDK 未就绪）静默自毁且 release 无日志，1.0.25 改为连续失败达到阈值
+        // 才停并上报；采集失败与快照为空都在 release 以节流日志可见。
+        private var consecutiveCaptureFailures = 0
+        private var lastSnapshotCurrentId: String? = null
+        private val nextTrackDiagLogger = ThrottledLogger()
+
         private fun capture(resolver: QQMusicNextTrackResolver, generation: Long) {
             if (resolverGeneration.get() != generation) return
             runCatching {
@@ -548,6 +713,21 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             }
                 .onSuccess { snapshot ->
                     if (resolverGeneration.get() != generation) return@onSuccess
+                    consecutiveCaptureFailures = 0
+                    val current = snapshot?.current
+                    if (current != null && current.id != lastSnapshotCurrentId) {
+                        lastSnapshotCurrentId = current.id
+                        Log.i(
+                            TAG,
+                            "QQ 队列快照: current=${current.id}, " +
+                                "title=${current.title}, next=${snapshot?.next?.id ?: "none"}",
+                        )
+                    }
+                    if (snapshot == null) {
+                        nextTrackDiagLogger.log(TAG, "snapshot_null", 30_000L) {
+                            "QQ 队列快照为空: getCurSong 无当前曲（SDK 未就绪或未在播放）"
+                        }
+                    }
                     reportNextTrackValidation(
                         valid = true,
                         detail = "next=${snapshot?.next?.id ?: "none"}",
@@ -555,12 +735,25 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 }
                 .onFailure { error ->
                     if (resolverGeneration.get() != generation) return@onFailure
-                    reportNextTrackValidation(
-                        valid = false,
-                        detail = "${error::class.java.simpleName}: ${error.message}",
-                    )
-                    stopPolling(generation)
-                    if (BuildConfig.DEBUG) Log.w(TAG, "QQ 音乐下一首采集失败", error)
+                    consecutiveCaptureFailures += 1
+                    if (consecutiveCaptureFailures == 1) {
+                        Log.w(
+                            TAG,
+                            "QQ 下一首采集失败: ${error::class.java.simpleName}: ${error.message}",
+                        )
+                    } else {
+                        nextTrackDiagLogger.log(TAG, "capture_fail", 30_000L) {
+                            "QQ 下一首采集持续失败: 连续=$consecutiveCaptureFailures, " +
+                                "${error::class.java.simpleName}: ${error.message}"
+                        }
+                    }
+                    if (consecutiveCaptureFailures >= 10) {
+                        reportNextTrackValidation(
+                            valid = false,
+                            detail = "${error::class.java.simpleName}: ${error.message}",
+                        )
+                        stopPolling(generation)
+                    }
                 }
         }
 
