@@ -35,6 +35,8 @@ import io.github.proify.lyricon.lyric.model.Song
 import io.github.proify.lyricon.provider.LyriconFactory
 import io.github.proify.lyricon.provider.LyriconProvider
 import org.json.JSONObject
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
@@ -42,9 +44,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -127,6 +127,43 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private var lastMetadataId: String? = null
         private var latestPlaybackState: PlaybackState? = null
 
+        // 小米音乐 QQMusicCar 会话的 PlaybackState position 长期上报 0/冻结/滞后，
+        // 不能作为进度锚点；SDK 的 getCurrTimeExact()（binder 到播放服务）是 App 内
+        // 同源的真实进度，按 1s 轮询换算成权威 PlaybackState 发布给 Core
+        private val sdkPlayerInstance: Any? = if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
+            runCatching {
+                application.classLoader.loadClass(SDK_MUSIC_PLAYER_CLASS)
+                    .getMethod(SDK_GET_INSTANCE)
+                    .invoke(null)
+            }.getOrNull()
+        } else {
+            null
+        }
+        private val miuiProgressTicker: ScheduledExecutorService? = if (
+            playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE && sdkPlayerInstance != null
+        ) {
+            Executors.newSingleThreadScheduledExecutor { task ->
+                Thread(task, "HLE-QQMusic-MiuiProgress").apply { isDaemon = true }
+            }
+        } else {
+            null
+        }
+        private var lastTickState: Int = Int.MIN_VALUE
+        private var lastTickPosition: Long = Long.MIN_VALUE
+
+        init {
+            miuiProgressTicker?.scheduleWithFixedDelay(
+                { tickSdkProgress() },
+                1_000L,
+                1_000L,
+                TimeUnit.MILLISECONDS,
+            )
+        }
+
+        private val SDK_MUSIC_PLAYER_CLASS = "com.tencent.qqmusicsdk.protocol.MusicPlayer"
+        private val SDK_GET_INSTANCE = "getInstance"
+        private val SDK_GET_CURR_TIME = "getCurrTimeExact"
+
         @Volatile
         var provider: LyriconProvider? = null
             private set
@@ -172,8 +209,39 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
 
         @Synchronized
+        private fun tickSdkProgress() {
+            if (playerPackage != QQMusicRuntimePlan.MIUI_PACKAGE) return
+            val session = latestPlaybackState ?: return
+            val state = session.state
+            if (state != PlaybackState.STATE_PLAYING && state != PlaybackState.STATE_PAUSED) return
+            val position = runCatching {
+                (sdkPlayerInstance?.javaClass?.getMethod(SDK_GET_CURR_TIME)?.invoke(sdkPlayerInstance) as? Number)
+                    ?.toLong()
+            }.getOrNull() ?: return
+            if (position < 0L) return
+            if (state == lastTickState && position == lastTickPosition) return
+            lastTickState = state
+            lastTickPosition = position
+            val playbackState = PlaybackState.Builder()
+                .setState(
+                    state,
+                    position,
+                    session.playbackSpeed.coerceAtLeast(0f),
+                    SystemClock.elapsedRealtime(),
+                )
+                .build()
+            provider?.player?.setPlaybackState(playbackState)
+        }
+
+        @Synchronized
         fun onPlaybackState(state: PlaybackState?) {
             latestPlaybackState = state
+            if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
+                // QQMusicCar 会话 position 长期上报 0/冻结，缓冲合成状态不适用；
+                // 进度统一由 SDK 真实位置 1s 轮询发布，会话仅提供播放/暂停态
+                tickSdkProgress()
+                return
+            }
             when (val decision = bufferCoordinator.onPlaybackState(state?.toSnapshot())) {
                 QQMusicPlaybackDecision.Forward -> provider?.player?.setPlaybackState(state)
                 QQMusicPlaybackDecision.Ignore -> Unit

@@ -169,10 +169,11 @@ class QQMusicLyricTrackCoordinatorTest {
     }
 
     @Test
-    fun `MIUI keeps songmid path while identity does not match`() {
+    fun `MIUI trusts snapshot identity even when it lags behind metadata`() {
         val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
 
-        // 内部 SongInfo 仍是另一首（切歌间隙），身份不匹配：元数据回调保留 songmid 兜底路径
+        // 切歌瞬间快照仍是另一首：无条件信任快照（SystemUI 校验拒绝误显示，
+        // 下一轮轮询自愈），发布快照的数字 ID 与权威真名
         assertEquals(
             QQMusicLyricTrackDecision.Unchanged,
             coordinator.onQueueSnapshot(
@@ -182,7 +183,8 @@ class QQMusicLyricTrackCoordinatorTest {
         val decision = coordinator.onMetadata(
             track("002sXsnt1doEOH", "The Other Side of Paradise（天堂彼岸）", "Glass Animals"),
         ) as QQMusicLyricTrackDecision.Load
-        assertEquals("002sXsnt1doEOH", decision.track.id)
+        assertEquals("319782348", decision.track.id)
+        assertEquals("A Different Song", decision.track.title)
     }
 
     @Test
@@ -282,9 +284,10 @@ class QQMusicLyricTrackCoordinatorTest {
     }
 
     @Test
-    fun `MIUI refuses snapshot when artist and duration both differ`() {
+    fun `MIUI adopts snapshot even when metadata identity is fully unrelated`() {
         val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
 
+        // 歌手/时长/标题全不同也采用快照（播放器当前曲即权威），元数据仅作兜底
         assertEquals(
             QQMusicLyricTrackDecision.Unchanged,
             coordinator.onQueueSnapshot(
@@ -294,9 +297,8 @@ class QQMusicLyricTrackCoordinatorTest {
         val decision = coordinator.onMetadata(
             track("0039MnYb0qxYhV", "晴天", "周杰伦", duration = 269_000L),
         ) as QQMusicLyricTrackDecision.Load
-        // 歌手不同、时长差超阈值、标题也不同：快照属于别的歌，保留 songmid 兜底
-        assertEquals("0039MnYb0qxYhV", decision.track.id)
-        assertEquals("晴天", decision.track.title)
+        assertEquals("107762076", decision.track.id)
+        assertEquals("虚拟", decision.track.title)
     }
 
     @Test
@@ -321,7 +323,7 @@ class QQMusicLyricTrackCoordinatorTest {
     }
 
     @Test
-    fun `MIUI ignores snapshot bound to a different songmid`() {
+    fun `MIUI snapshot adoption does not depend on songmid field`() {
         val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
 
         assertEquals(
@@ -335,12 +337,12 @@ class QQMusicLyricTrackCoordinatorTest {
                 ),
             ),
         )
-        // songmid 不相等且标题/歌手也不相等：快照属于别的歌，保留 songmid 兜底
+        // songMid 字段运行时常为空，绑定不依赖它：元数据回调直接采用快照数字 ID
         val decision = coordinator.onMetadata(
             track("0039MnYb0qxYhV", "晴天", "周杰伦"),
         ) as QQMusicLyricTrackDecision.Load
-        assertEquals("0039MnYb0qxYhV", decision.track.id)
-        assertEquals("晴天", decision.track.title)
+        assertEquals("438910555", decision.track.id)
+        assertEquals("唯一", decision.track.title)
     }
 
     @Test
