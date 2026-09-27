@@ -61,13 +61,14 @@ class QQMusicSongMidResolverTest {
         assertNull(resolution.singerName)
     }
 
+    // musicu.fcg 网关真实响应样本（music.search.SearchCgiService / DoSearchForQQMusicDesktop）
     private val searchRaw = """
-        {"code":0,"data":{"song":{"list":[
-          {"songid":390478855,"songmid":"004c8nzy40CLsL","songname":"菲律宾没有雪",
+        {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
+          {"id":390478855,"mid":"004c8nzy40CLsL","name":"菲律宾没有雪",
            "singer":[{"name":"一个小孩"}]},
-          {"songid":717479938,"songmid":"004BO87l2BofMf","songname":"菲律宾没有雪(我想要的)",
+          {"id":717479938,"mid":"004BO87l2BofMf","name":"菲律宾没有雪(我想要的)",
            "singer":[{"name":"一个小孩"},{"name":"听风叙晚"}]}
-        ]}}}
+        ]}}}}}
     """.trimIndent()
 
     @Test
@@ -86,7 +87,18 @@ class QQMusicSongMidResolverTest {
         assertNull(QQMusicSongMidResolver.parseSearchResponse(searchRaw, "菲律宾没有雪", "听风叙晚"))
         // 标题不相等（即使歌手相等）：拒绝
         assertNull(QQMusicSongMidResolver.parseSearchResponse(searchRaw, "不存在的歌曲名", "一个小孩"))
+        // 缺少服务层键：拒绝
         assertNull(QQMusicSongMidResolver.parseSearchResponse("""{"code":0}""", "x", "y"))
+        // 顶层 code 非 0：拒绝
+        assertNull(QQMusicSongMidResolver.parseSearchResponse("""{"code":2000}""", "x", "y"))
+        // 服务层 code 非 0：拒绝
+        assertNull(
+            QQMusicSongMidResolver.parseSearchResponse(
+                """{"code":0,"music.search.SearchCgiService":{"code":2000,"data":{}}}""", "x", "y",
+            ),
+        )
+        // 非 JSON 响应（如网关返回错误页）：拒绝且不抛异常
+        assertNull(QQMusicSongMidResolver.parseSearchResponse("<html></html>", "x", "y"))
     }
 
     @Test
@@ -101,9 +113,9 @@ class QQMusicSongMidResolverTest {
     @Test
     fun `match normalization ignores case and whitespace`() {
         val raw = """
-            {"code":0,"data":{"song":{"list":[
-              {"songid":42,"songmid":"m","songname":"Love  Somebody","singer":[{"name":"lauv"}]}
-            ]}}}
+            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
+              {"id":42,"mid":"m","name":"Love  Somebody","singer":[{"name":"lauv"}]}
+            ]}}}}}
         """.trimIndent()
         val resolution = QQMusicSongMidResolver.parseSearchResponse(raw, "love somebody", "LAUV")!!
         assertEquals("42", resolution.numericSongId)

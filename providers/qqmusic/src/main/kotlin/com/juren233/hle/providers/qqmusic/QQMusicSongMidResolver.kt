@@ -25,6 +25,11 @@ import java.util.concurrent.ConcurrentHashMap
  * data 为空数组（如 000Afpal3mCeFw、003ubw8F1sZAyy 实测），此时走搜索接口
  * 兜底：候选必须「标题精确相等且歌手列表精确包含」才采纳（搜索命中的条目
  * 可能与输入 songmid 不同——同一首歌的不同版本条目，歌词一致）。
+ * 搜索走 u.y.qq.com/cgi-bin/musicu.fcg 统一网关的
+ * music.search.SearchCgiService（DoSearchForQQMusicDesktop）：旧搜索端点
+ * soso/fcgi-bin/client_search_cp 已被 QQ 服务端下线（2026-09-27 实测所有
+ * 查询一律 HTTP 500，真机侧表现为 FileNotFoundException，1.0.19 及之前
+ * 依赖它兜底的换算全部失败）。
  * 响应同时携带权威 name/singer，车载歌词污染场景下用它覆盖 MediaSession 标题。
  * 负缓存按 mid+标题+歌手 组合键：污染首行失败不会挡住归一化后的重试。
  */
@@ -33,7 +38,7 @@ internal object QQMusicSongMidResolver {
     private const val SINGLE_SONG_URL =
         "https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg"
     private const val SEARCH_URL =
-        "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
+        "https://u.y.qq.com/cgi-bin/musicu.fcg"
     private const val REQUEST_TIMEOUT_MS = 15_000
     private const val FAILED_RETRY_MS = 10 * 60_000L
 
@@ -91,8 +96,7 @@ internal object QQMusicSongMidResolver {
 
     private fun fetchBySearch(id: String, title: String?, artist: String?): SongMidResolution? {
         if (title.isNullOrBlank() || artist.isNullOrBlank()) return null
-        val query = URLEncoder.encode("$title $artist", "UTF-8")
-        val url = "$SEARCH_URL?w=$query&format=json"
+        val url = "$SEARCH_URL?data=${URLEncoder.encode(searchRequestBody("$title $artist"), "UTF-8")}"
         val connection = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
             connectTimeout = REQUEST_TIMEOUT_MS
             readTimeout = REQUEST_TIMEOUT_MS
@@ -107,6 +111,24 @@ internal object QQMusicSongMidResolver {
             connection.disconnect()
         }
     }
+
+    private fun searchRequestBody(query: String): String =
+        org.json.JSONObject()
+            .put(
+                "music.search.SearchCgiService",
+                org.json.JSONObject()
+                    .put("method", "DoSearchForQQMusicDesktop")
+                    .put("module", "music.search.SearchCgiService")
+                    .put(
+                        "param",
+                        org.json.JSONObject()
+                            .put("search_type", 0)
+                            .put("query", query)
+                            .put("page_num", 1)
+                            .put("num_per_page", 10),
+                    ),
+            )
+            .toString()
 
     internal fun parseSingleSongResponse(raw: String): SongMidResolution? = runCatching {
         val root = org.json.JSONObject(raw)
@@ -127,17 +149,21 @@ internal object QQMusicSongMidResolver {
     /**
      * 搜索兜底只采纳与本地标题、歌手都精确相等的候选（忽略大小写与空白差异），
      * 绝不放宽为模糊匹配；命中条目允许与输入 songmid 不同（同曲不同版本条目）。
+     * musicu.fcg 网关的条目字段是 id/name（旧 client_search_cp 是 songid/songname），
+     * 服务层与顶层各有一个 code，任一非 0 都视为失败。
      */
     internal fun parseSearchResponse(raw: String, title: String, artist: String): SongMidResolution? = runCatching {
         val root = org.json.JSONObject(raw)
         if (root.optInt("code", -1) != 0) return null
-        val songs = root.optJSONObject("data")?.optJSONObject("song")?.optJSONArray("list")
-            ?: return null
+        val service = root.optJSONObject("music.search.SearchCgiService") ?: return null
+        if (service.optInt("code", -1) != 0) return null
+        val songs = service.optJSONObject("data")?.optJSONObject("body")
+            ?.optJSONObject("song")?.optJSONArray("list") ?: return null
         val wantedTitle = normalizeForMatch(title)
         val wantedArtist = normalizeForMatch(artist)
         for (index in 0 until songs.length()) {
             val song = songs.getJSONObject(index)
-            if (normalizeForMatch(song.optString("songname")) != wantedTitle) continue
+            if (normalizeForMatch(song.optString("name")) != wantedTitle) continue
             val singers = song.optJSONArray("singer") ?: continue
             var matchedSinger: String? = null
             for (singerIndex in 0 until singers.length()) {
@@ -148,10 +174,10 @@ internal object QQMusicSongMidResolver {
                 }
             }
             matchedSinger ?: continue
-            val songId = song.optLong("songid", -1L).takeIf { it > 0L }?.toString() ?: continue
+            val songId = song.optLong("id", -1L).takeIf { it > 0L }?.toString() ?: continue
             return SongMidResolution(
                 numericSongId = songId,
-                songName = song.optString("songname").takeIf(String::isNotBlank),
+                songName = song.optString("name").takeIf(String::isNotBlank),
                 singerName = matchedSinger,
             )
         }

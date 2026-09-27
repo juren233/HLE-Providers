@@ -139,6 +139,84 @@ class QQMusicLyricTrackCoordinatorTest {
         assertEquals("368304013", decision.track.id)
     }
 
+    @Test
+    fun `MIUI replaces songmid with matching SongInfo numeric ID`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        coordinator.onMetadata(track("003iXtVK2B6Zk6", "this is what winter feels like", "JVKE"))
+        val decision = coordinator.onQueueSnapshot(
+            snapshot("463324123", "this is what winter feels like", "JVKE"),
+        ) as QQMusicLyricTrackDecision.Load
+
+        assertEquals("463324123", decision.track.id)
+        assertEquals("this is what winter feels like", decision.track.title)
+        assertEquals("JVKE", decision.track.artist)
+        assertEquals(202_000L, decision.track.duration)
+    }
+
+    @Test
+    fun `MIUI keeps songmid path while identity does not match`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        // 内部 SongInfo 仍是另一首（切歌间隙），身份不匹配：元数据回调保留 songmid 兜底路径
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(
+                snapshot("319782348", "A Different Song", "Glass Animals"),
+            ),
+        )
+        val decision = coordinator.onMetadata(
+            track("002sXsnt1doEOH", "The Other Side of Paradise（天堂彼岸）", "Glass Animals"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("002sXsnt1doEOH", decision.track.id)
+    }
+
+    @Test
+    fun `MIUI ignores invalid SongInfo id and keeps songmid`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("0", "this is what winter feels like", "JVKE")),
+        )
+        val decision = coordinator.onMetadata(
+            track("003iXtVK2B6Zk6", "this is what winter feels like", "JVKE"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("003iXtVK2B6Zk6", decision.track.id)
+    }
+
+    @Test
+    fun `MIUI snapshot without metadata waits for media callback`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("463324123", "this is what winter feels like", "JVKE")),
+        )
+
+        // 元数据回调到达后，与已缓存的快照同曲：直接用数字 ID
+        val decision = coordinator.onMetadata(
+            track("003iXtVK2B6Zk6", "this is what winter feels like", "JVKE"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("463324123", decision.track.id)
+    }
+
+    @Test
+    fun `repeated MIUI snapshot does not trigger another lyric download`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+
+        coordinator.onMetadata(track("003iXtVK2B6Zk6", "this is what winter feels like", "JVKE"))
+        assertTrue(
+            coordinator.onQueueSnapshot(
+                snapshot("463324123", "this is what winter feels like", "JVKE"),
+            ) is QQMusicLyricTrackDecision.Load,
+        )
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("463324123", "this is what winter feels like", "JVKE")),
+        )
+    }
+
     private fun track(id: String, title: String, artist: String) = QQMusicLyricTrack(
         id = id,
         title = title,

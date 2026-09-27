@@ -26,6 +26,10 @@ internal sealed interface QQMusicLyricTrackDecision {
  * MediaSession metadata for display. The current in-app SongInfo can also start a load when
  * MediaSession callbacks lag behind automatic track changes; SystemUI verifies the published
  * title and artist against its current MediaSession before displaying those lyrics.
+ * Xiaomi Music (com.miui.player) reports a QQ songmid in its MediaSession while the public
+ * lyric endpoint only accepts numeric IDs; when the in-app SongInfomation belongs to the same
+ * song (title+artist match), replace the songmid with its numeric ID so no public conversion
+ * is needed. A non-matching or invalid snapshot keeps the existing songmid conversion path.
  * QQ Music mobile retains its existing MediaSession ID behavior.
  */
 internal class QQMusicLyricTrackCoordinator(
@@ -41,10 +45,13 @@ internal class QQMusicLyricTrackCoordinator(
     }
 
     fun onQueueSnapshot(snapshot: QQMusicQueueSnapshot?): QQMusicLyricTrackDecision {
-        if (playerPackage != QQMusicRuntimePlan.HD_PACKAGE || snapshot == null) {
+        if (snapshot == null || playerPackage == QQMusicRuntimePlan.MOBILE_PACKAGE) {
             return QQMusicLyricTrackDecision.Unchanged
         }
         queueSnapshot = snapshot
+        if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
+            return mediaTrack?.let(::decide) ?: QQMusicLyricTrackDecision.Unchanged
+        }
         val current = snapshot.current
         if (current.id.toLongOrNull()?.let { it > 0L } != true ||
             normalize(current.title).isEmpty() || normalize(current.artist).isEmpty()
@@ -63,12 +70,17 @@ internal class QQMusicLyricTrackCoordinator(
     }
 
     private fun decide(track: QQMusicLyricTrack): QQMusicLyricTrackDecision {
-        val resolved = if (playerPackage == QQMusicRuntimePlan.HD_PACKAGE) {
-            queueSnapshot?.current
+        val resolved = when (playerPackage) {
+            QQMusicRuntimePlan.HD_PACKAGE -> queueSnapshot?.current
                 ?.takeIf { sameIdentity(track, it) }
                 ?.let { current -> track.copy(id = current.id) }
-        } else {
-            track
+            QQMusicRuntimePlan.MIUI_PACKAGE -> queueSnapshot?.current
+                ?.takeIf {
+                    it.id.toLongOrNull()?.let { id -> id > 0L } == true && sameIdentity(track, it)
+                }
+                ?.let { current -> track.copy(id = current.id) }
+                ?: track
+            else -> track
         }
         return emit(resolved, track)
     }
