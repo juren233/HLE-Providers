@@ -138,6 +138,16 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             track.publishedIdentityKey(playerPackage)
         private var lastMetadataId: String? = null
         private var lastShareSongMid: String? = null
+
+        /**
+         * 最近一次会话元数据的 MEDIA_ID。下一首控制帧的当前曲身份优先用它：
+         * SystemUI 按同一 MediaSession 的 MEDIA_ID 查询下一首缓存，SDK 队列内部
+         * long id 与其结构性不等（XIAOMI-MUSIC-NEXT-PREVIEW-IDENTITY-001），
+         * 车载歌词污染标题后 text 别名也无兜底，帧身份必须与会话同源。
+         */
+        @Volatile
+        var latestSessionMediaId: String? = null
+            private set
         private val diagLogger = ThrottledLogger()
         private val tickerSuccessLogged = AtomicBoolean(false)
         private var latestPlaybackState: PlaybackState? = null
@@ -309,6 +319,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             diagLogger.log(TAG, "meta_heartbeat", 15_000L) {
                 "QQ 会话元数据到达: id=$id, title=$rawTitle"
             }
+            latestSessionMediaId = id
             // 小米音乐与 QQ 音乐本体都存在车载歌词改写元数据的形态，
             // 策略只在拿到正向污染证据时才改写
             val normalized = carLyricsPolicy.normalize(id, rawTitle, rawArtist)
@@ -770,6 +781,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         Log.i(
                             TAG,
                             "QQ 队列快照: current=${current.id}, " +
+                                "sessionId=${runtime?.latestSessionMediaId ?: "none"}, " +
                                 "title=${current.title}, next=${snapshot?.next?.id ?: "none"}",
                         )
                     }
@@ -823,16 +835,17 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
 
         private fun publish(snapshot: QQMusicQueueSnapshot?) {
+            val frameSessionId = runtime?.latestSessionMediaId
             val frame = when {
                 snapshot == null -> OfficialProviderControlProtocol.encodeNextTrackClear()
                 snapshot.next == null || snapshot.next.title.isBlank() ->
                     OfficialProviderControlProtocol.encodeNextTrackClear(
-                        currentId = snapshot.current.id,
+                        currentId = nextTrackFrameCurrentId(frameSessionId, snapshot.current),
                         currentTitle = snapshot.current.title,
                         currentArtist = snapshot.current.artist,
                     )
                 else -> OfficialProviderControlProtocol.encodeNextTrack(
-                    currentId = snapshot.current.id,
+                    currentId = nextTrackFrameCurrentId(frameSessionId, snapshot.current),
                     currentTitle = snapshot.current.title,
                     currentArtist = snapshot.current.artist,
                     nextId = snapshot.next.id,
@@ -1026,6 +1039,18 @@ internal enum class QQMusicRuntimeFeature {
     BUFFERING_STATE,
     NEXT_TRACK,
 }
+
+/**
+ * 下一首控制帧的当前曲身份：优先用会话 MEDIA_ID——SystemUI 查询下一首缓存用的
+ * 正是同一 MediaSession 的 MEDIA_ID（XIAOMI-MUSIC-NEXT-PREVIEW-IDENTITY-001，
+ * 小米音乐 SDK 队列内部 long id 与其结构性不等、车载歌词污染标题又毁掉 text
+ * 别名）。会话身份未知（手机 QQ 主进程只跑 NEXT_TRACK、无歌词 runtime）时回退
+ * SDK 队列 id，保持既有行为。
+ */
+internal fun nextTrackFrameCurrentId(
+    sessionMediaId: String?,
+    current: QQMusicTrackSnapshot,
+): String = sessionMediaId?.trim()?.takeIf(String::isNotEmpty) ?: current.id
 
 internal object QQMusicRuntimePlan {
     const val MOBILE_PACKAGE = "com.tencent.qqmusic"
