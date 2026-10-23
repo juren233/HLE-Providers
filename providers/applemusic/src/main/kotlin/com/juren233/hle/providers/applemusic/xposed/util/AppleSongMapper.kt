@@ -1,0 +1,290 @@
+/*
+ * Copyright 2026 juren233
+ * Licensed under the Apache License, Version 2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
+ */
+
+package com.juren233.hle.providers.applemusic.xposed.util
+
+import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
+import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
+import com.juren233.hle.providers.applemusic.xposed.ProviderLogger
+import com.juren233.hle.providers.applemusic.xposed.model.AppleSong
+import com.juren233.hle.providers.applemusic.xposed.model.LyricAgent
+import com.juren233.hle.providers.applemusic.xposed.model.LyricLine
+import io.github.proify.lyricon.lyric.model.LyricWord
+import io.github.proify.lyricon.lyric.model.RichLyricLine
+import io.github.proify.lyricon.lyric.model.Song
+import io.github.proify.lyricon.lyric.model.lyricMetadataOf
+
+fun AppleSong.toSong(): Song = AppleSongMapper.map(this)
+
+object AppleSongMapper {
+
+    fun map(song: AppleSong): Song {
+        val textLines = song.lyrics.filter { line ->
+            !line.htmlLineText.isNullOrBlank() ||
+                line.words.any { !it.text.isNullOrBlank() }
+        }
+        val metadataEntries = buildList {
+            song.genre?.takeIf { it.isNotBlank() }?.let {
+                add(LyricMetadataKeys.APPLE_CATALOG_GENRE to it)
+            }
+            song.pronunciationLanguages
+                .map(String::trim)
+                .filter(String::isNotEmpty)
+                .distinct()
+                .takeIf(List<String>::isNotEmpty)
+                ?.joinToString(",")
+                ?.let {
+                    add(LyricMetadataKeys.APPLE_PRONUNCIATION_LANGUAGES to it)
+                }
+            song.originalTitle?.takeIf { it.isNotBlank() }?.let {
+                add(LyricMetadataKeys.APPLE_ORIGINAL_TITLE to it)
+            }
+            song.originalArtist?.takeIf { it.isNotBlank() }?.let {
+                add(LyricMetadataKeys.APPLE_ORIGINAL_ARTIST to it)
+            }
+            song.originalAlbum?.takeIf { it.isNotBlank() }?.let {
+                add(LyricMetadataKeys.APPLE_ORIGINAL_ALBUM to it)
+            }
+            if (song.originalMetadataResolved) {
+                add(LyricMetadataKeys.APPLE_ORIGINAL_METADATA_RESOLVED to "true")
+            }
+            song.lyricsSource?.takeIf { it.isNotBlank() }?.let {
+                add(LyricMetadataKeys.APPLE_LYRICS_CACHE_SOURCE to it)
+            }
+            if (song.lyricsSource == "apple" && textLines.isNotEmpty() &&
+                textLines.none { line ->
+                    line.end > line.begin || line.words.any { it.end > it.begin }
+                }
+            ) {
+                add(LyricMetadataKeys.APPLE_NATIVE_LYRICS_UNTIMED to "true")
+            }
+        }
+        return Song(
+            id = song.adamId,
+            name = song.name,
+            artist = song.artist,
+            duration = song.duration.toLong(),
+            metadata = metadataEntries
+                .takeIf { it.isNotEmpty() }
+                ?.let { lyricMetadataOf(*it.toTypedArray()) },
+            lyrics = convertLyrics(song.lyrics, song.agents)
+        )
+    }
+
+    private fun convertLyrics(
+        appleLyrics: List<LyricLine>,
+        agents: List<LyricAgent>
+    ): MutableList<RichLyricLine> {
+        val lineDirections = computeLineDirections(appleLyrics, agents)
+        val groupAgentIds = agents
+            .filter { LyricAgent.getType(it.type) == LyricAgent.Type.GROUP }
+            .mapNotNull(LyricAgent::id)
+            .toSet()
+        logLineDirections(agents, appleLyrics, lineDirections)
+
+        return appleLyrics.mapIndexed { index, appleLine ->
+            RichLyricLine().apply {
+
+                begin = appleLine.begin.toLong()
+                end = appleLine.end.toLong()
+                duration = appleLine.duration.toLong()
+
+                words = appleLine.words.map { it.toLyricWord() }.toMutableList()
+                text = appleLine.mainText()
+
+                secondary = appleLine.backgroundVocalsText()
+                secondaryWords = appleLine.backgroundWords
+                    .map { it.toLyricWord() }
+                    .toMutableList()
+
+                translation = appleLine.htmlTranslationLineText
+                roma = RomanizationPolicy.sanitize(
+                    originalText = text,
+                    pronunciation = appleLine.htmlPronunciationLineText,
+                )
+                val metadataEntries = buildList {
+                    if (appleLine.agent in groupAgentIds) {
+                        add(LyricMetadataKeys.GROUP_VOCALS to "true")
+                    }
+                    appleLine.htmlTranslatedBackgroundVocalsLineText
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let {
+                            add(LyricMetadataKeys.BACKGROUND_VOCALS_TRANSLATION to it)
+                        }
+                }
+                if (metadataEntries.isNotEmpty()) {
+                    metadata = lyricMetadataOf(*metadataEntries.toTypedArray())
+                }
+//                translationWords = listOf(
+//                    LyricWord(
+//                        begin = begin,
+//                        end = end,
+//                        duration = duration,
+//                        text = appleLine.htmlTranslationLineText
+//                    )
+//                )
+
+                isAlignedRight = lineDirections[index] == LyricDirection.RIGHT
+            }
+        }.toMutableList()
+    }
+
+    private fun com.juren233.hle.providers.applemusic.xposed.model.LyricWord.toLyricWord(): LyricWord =
+        LyricWord(
+            text = this.text,
+            begin = this.begin.toLong(),
+            duration = this.duration.toLong(),
+            end = this.end.toLong()
+        )
+
+    private fun LyricLine.backgroundVocalsText(): String? =
+        htmlBackgroundVocalsLineText
+            ?.takeIf { it.isNotBlank() }
+            ?: backgroundWords
+                .joinToString("") { it.text.orEmpty() }
+                .takeIf { it.isNotBlank() }
+
+    private fun computeLineDirections(
+        appleLyrics: List<LyricLine>,
+        agents: List<LyricAgent>
+    ): List<LyricDirection> {
+        val agentTypes = agents
+            .mapNotNull { agent -> agent.id?.let { it to LyricAgent.getType(agent.type) } }
+            .toMap()
+        val duetAgentCount = agentTypes.values.count { type ->
+            type == LyricAgent.Type.PERSON || type == LyricAgent.Type.OTHER
+        }
+        if (duetAgentCount <= 1) return List(appleLyrics.size) { LyricDirection.DEFAULT }
+
+        val resolvedLines = mutableListOf<DirectedLine>()
+        appleLyrics.forEachIndexed { index, line ->
+            val agentId = line.agent.orEmpty()
+            val type = agentTypes[agentId]
+            val direction = resolveLineDirection(
+                appleLyrics = appleLyrics,
+                resolvedLines = resolvedLines,
+                agentId = agentId,
+                agentType = type,
+                lineIndex = index
+            )
+            resolvedLines += DirectedLine(agentId, direction)
+        }
+        return resolvedLines.map(DirectedLine::direction)
+    }
+
+    private fun resolveLineDirection(
+        appleLyrics: List<LyricLine>,
+        resolvedLines: List<DirectedLine>,
+        agentId: String,
+        agentType: LyricAgent.Type?,
+        lineIndex: Int
+    ): LyricDirection {
+        if (agentId.isEmpty()) return LyricDirection.DEFAULT
+        if (lineIndex <= 0) {
+            return when (agentType) {
+                LyricAgent.Type.PERSON -> LyricDirection.LEFT
+                LyricAgent.Type.OTHER -> LyricDirection.RIGHT
+                else -> LyricDirection.DEFAULT
+            }
+        }
+        if (agentType == LyricAgent.Type.GROUP) return LyricDirection.DEFAULT
+
+        val previous = resolvedLines.getOrNull(lineIndex - 1)
+        if (previous == null || previous.direction == LyricDirection.DEFAULT) {
+            return resolveLineDirection(
+                appleLyrics = appleLyrics,
+                resolvedLines = resolvedLines,
+                agentId = agentId,
+                agentType = agentType,
+                lineIndex = lineIndex - 1
+            )
+        }
+        if (agentId == previous.agentId) return previous.direction
+
+        return directionAfterAgentChange(
+            previousDirection = previous.direction,
+            previousTextIsRtl = isAppleRtlText(appleLyrics[lineIndex - 1].mainText()),
+            currentTextIsRtl = isAppleRtlText(appleLyrics[lineIndex].mainText())
+        )
+    }
+
+    private fun directionAfterAgentChange(
+        previousDirection: LyricDirection,
+        previousTextIsRtl: Boolean,
+        currentTextIsRtl: Boolean
+    ): LyricDirection {
+        val useLeft = if (previousDirection == LyricDirection.LEFT) {
+            previousTextIsRtl != currentTextIsRtl
+        } else {
+            previousTextIsRtl == currentTextIsRtl
+        }
+        return if (useLeft) LyricDirection.LEFT else LyricDirection.RIGHT
+    }
+
+    private fun isAppleRtlText(text: String?): Boolean {
+        if (text.isNullOrEmpty()) return false
+        for (index in text.indices) {
+            val codePoint = text.codePointAt(index)
+            if (Character.isLetter(codePoint)) {
+                return text[index].code in APPLE_RTL_FIRST_LETTER_RANGE
+            }
+        }
+        return false
+    }
+
+    private fun logLineDirections(
+        agents: List<LyricAgent>,
+        appleLyrics: List<LyricLine>,
+        directions: List<LyricDirection>
+    ) {
+        val agentTypes = agents.associate { it.id to LyricAgent.getType(it.type) }
+        val agentIndices = agents.mapIndexed { index, agent -> agent.id to index }.toMap()
+        val duetAgentCount = agents.count { agent ->
+            val type = LyricAgent.getType(agent.type)
+            type == LyricAgent.Type.PERSON || type == LyricAgent.Type.OTHER
+        }
+        val sampleCount = minOf(appleLyrics.size, DIAGNOSTIC_LINE_SAMPLE_LIMIT)
+        ProviderLogger.diagnostic(
+            "AppleSongMapper: agentCount=${agents.size}, duetAgentCount=$duetAgentCount, " +
+                "duetLayout=${duetAgentCount > 1}, lineCount=${appleLyrics.size}, " +
+                "leftCount=${directions.count { it == LyricDirection.LEFT }}, " +
+                "rightCount=${directions.count { it == LyricDirection.RIGHT }}, " +
+                "sampleCount=$sampleCount, omittedLines=${appleLyrics.size - sampleCount}"
+        )
+        appleLyrics.take(sampleCount).forEachIndexed { index, line ->
+            val agentId = line.agent.orEmpty()
+            ProviderLogger.diagnostic(
+                "AppleSongMapper: line[$index] agentIndex=${agentIndices[agentId]}, " +
+                    "type=${agentTypes[agentId]}, direction=${directions[index].logName}, " +
+                    "textLength=${line.mainText().orEmpty().length}, " +
+                    "wordCount=${line.words.size}, backgroundWordCount=${line.backgroundWords.size}"
+            )
+        }
+    }
+
+    /**
+     * 部分 Apple syllable-lyrics 只在逐字向量中保留正文，行级 HTML 文本为空。
+     * 超级岛与 AOD 的公共模型必须同时携带行级正文，不能把这种有效逐字歌词映射为空行。
+     */
+    private fun LyricLine.mainText(): String? =
+        htmlLineText?.takeIf(String::isNotBlank)
+            ?: words.joinToString("") { it.text.orEmpty() }
+                .takeIf(String::isNotBlank)
+
+    private data class DirectedLine(
+        val agentId: String,
+        val direction: LyricDirection
+    )
+
+    private enum class LyricDirection(val logName: String) {
+        DEFAULT("default"),
+        LEFT("left"),
+        RIGHT("right")
+    }
+
+    private val APPLE_RTL_FIRST_LETTER_RANGE = 1424..1791
+    private const val DIAGNOSTIC_LINE_SAMPLE_LIMIT = 6
+}

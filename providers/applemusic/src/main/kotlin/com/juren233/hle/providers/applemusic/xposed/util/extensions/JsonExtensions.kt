@@ -1,0 +1,16 @@
+/*
+ * Copyright 2026 juren233
+ * Licensed under the Apache License, Version 2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
+ */
+
+package com.juren233.hle.providers.applemusic.xposed.util.extensions
+
+import kotlinx.serialization.json.Json
+
+val json: Json = Json {
+    coerceInputValues = true     // 尝试转换类型
+    ignoreUnknownKeys = true     // 忽略未知字段
+    isLenient = true             // 宽松的 JSON 语法
+    explicitNulls = false        // 不序列化 null
+}

@@ -33,6 +33,7 @@ android {
 dependencies {
     compileOnly("io.github.proify.lyricon:provider:0.1.70")
     compileOnly("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")
+    compileOnly("org.luckypray:dexkit:2.2.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.github.proify.lyricon:provider:0.1.70")
     testImplementation("org.jetbrains.kotlin:kotlin-stdlib:2.3.21")

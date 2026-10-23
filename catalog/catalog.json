@@ -12,6 +12,7 @@
     {"id":"qishui","displayName":"汽水音乐","targetPackages":["com.luna.music"],"available":true,"versionName":"1.0.5","versionCode":6,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/qishui-v1.0.5/qishui-1.0.5.hlp","sha256":"c1721d612f7e25f5deb9c3b80f664d53606d60e59881ee9cb82b3a290a9814a2","releases":[{"versionCode":6,"versionName":"1.0.5","pluginApiVersion":3,"minCoreVersionCode":140071,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/qishui-v1.0.5/qishui-1.0.5.hlp","sha256":"c1721d612f7e25f5deb9c3b80f664d53606d60e59881ee9cb82b3a290a9814a2"}]},
     {"id":"musicfree","displayName":"MusicFree","targetPackages":["fun.upup.musicfree"],"available":false},
     {"id":"gramophone","displayName":"Gramophone","targetPackages":["org.akanework.gramophone"],"available":false},
-    {"id":"symfonium","displayName":"Symfonium","targetPackages":["app.symfonik.music.player"],"available":false}
+    {"id":"symfonium","displayName":"Symfonium","targetPackages":["app.symfonik.music.player"],"available":false},
+    {"id":"applemusic","displayName":"Apple Music","targetPackages":["com.apple.android.music"],"available":false}
   ]
 }

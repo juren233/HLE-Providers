@@ -1,0 +1,165 @@
+/*
+ * Copyright 2026 juren233
+ * Licensed under the Apache License, Version 2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
+ */
+
+package com.juren233.hle.providers.applemusic.xposed
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+
+class AppleMusicIdentifierCentralizationTest {
+    @Test
+    fun `business hooks do not introduce short obfuscated reflection literals`() {
+        val relativeSourcePath = "src/main/kotlin/com/juren233/hle/providers/applemusic/xposed"
+        val sourceRoot = listOf(File("app/$relativeSourcePath"), File(relativeSourcePath))
+            .first(File::isDirectory)
+        val excluded = setOf(
+            "AppleMusicHookProfiles.kt",
+            "AppleMusicDexKitResolver.kt",
+        )
+        val shortLiteral = Regex("\"[A-Za-z][A-Za-z0-9_$]{0,2}\"")
+        val violations = sourceRoot.walkTopDown()
+            .filter { file -> file.isFile && file.extension == "kt" && file.name !in excluded }
+            .flatMap { file ->
+                val lines = file.readLines()
+                lines.indices.asSequence().mapNotNull { index ->
+                    val window = lines.subList(index, minOf(index + 6, lines.size)).joinToString("\n")
+                    val callStart = listOf(
+                        "AppleReflection.findMethod(",
+                        "AppleReflection.field(",
+                        "AppleReflection.call(",
+                        "getDeclaredMethod(",
+                        "getDeclaredField(",
+                    ).map(window::indexOf).filter { it >= 0 }.minOrNull()
+                    val reflectionArguments = callStart?.let(window::substring).orEmpty()
+                    if (callStart != null && shortLiteral.containsMatchIn(reflectionArguments)) {
+                        "${file.path}:${index + 1}"
+                    } else {
+                        null
+                    }
+                }
+            }
+            .distinct()
+            .toList()
+
+        assertTrue(
+            "Apple Music 混淆反射标识必须进入 Hook Profile/Resolver: $violations",
+            violations.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `resolver repairs members but refreshes trusted baselines only for exact targets`() {
+        val relativeSourcePath =
+            "src/main/kotlin/com/juren233/hle/providers/applemusic/xposed/AppleMusicHookProfiles.kt"
+        val sourceFile = listOf(File("app/$relativeSourcePath"), File(relativeSourcePath))
+            .first(File::isFile)
+        val source = sourceFile.readText()
+
+        assertTrue(
+            "精确类或方法仍可加载时，也必须先修复内部混淆成员",
+            source.contains("private fun repairClass(") &&
+                source.contains("private fun repairMethod(") &&
+                source.contains("dexKitResolver?.repairRuntimeMembers("),
+        )
+        assertTrue(
+            "只有精确档案结果可以刷新跨版本可信基线",
+            source.contains("recordTrustedBaseline") &&
+                source.contains("if (recordTrustedBaseline)") &&
+            source.indexOf("dexKitResolver?.repairRuntimeMembers(") <
+                source.lastIndexOf("dexKitResolver?.recordMethodBaseline("),
+        )
+    }
+
+    @Test
+    fun `DexKit fallback cannot overwrite trusted cross version baselines`() {
+        // 模块拆分后：解析主流程仍在 Resolver，基线编解码与缓存常量在 Codec 文件。
+        fun readSource(fileName: String): String {
+            val relativeSourcePath =
+                "src/main/kotlin/com/juren233/hle/providers/applemusic/xposed/$fileName"
+            return listOf("app/$relativeSourcePath", relativeSourcePath)
+                .map(::File)
+                .first(File::isFile)
+                .readText()
+        }
+        val source = readSource("AppleMusicDexKitResolver.kt")
+        val codecSource = readSource("AppleMusicDexKitBaselineCodec.kt")
+        val classResolution = source.substring(
+            source.indexOf("fun resolveClasses("),
+            source.indexOf("fun resolveMethod("),
+        )
+        val methodResolution = source.substring(source.indexOf("fun resolveMethod("))
+
+        assertFalse(classResolution.contains("recordBaseline("))
+        assertFalse(methodResolution.contains("recordMethodBaseline("))
+        val combined = source + codecSource
+        assertTrue(combined.contains("hle_apple_music_dex_methods_v2"))
+        assertTrue(combined.contains("AppleMusicDexKitCachePolicy.methodCacheKey"))
+        assertTrue(combined.contains("AppleMusicDexKitCachePolicy.classCacheKey"))
+    }
+
+    @Test
+    fun `Apple Music 6 5 2 profile overrides every target that changed from 6 5 1`() {
+        val version = AppleMusicVersion("6.5.2", 1_586L)
+        assertNotNull(AppleMusicHookProfiles.profileFor(version))
+
+        fun targets(hookPoint: AppleMusicHookPoint) =
+            AppleMusicHookProfiles.exactTargets(version, hookPoint)
+
+        val listenNowBuilder = targets(AppleMusicHookPoint.LISTEN_NOW_MODEL_BUILDER).single()
+        assertEquals("buildStandardSwoosh\$lambda\$35", listenNowBuilder.methodName)
+        assertEquals(
+            "com.apple.android.music.common.F0",
+            listenNowBuilder.parameterTypeNames?.get(2),
+        )
+
+        assertEquals(
+            "com.apple.android.music.common.L",
+            targets(AppleMusicHookPoint.LISTEN_NOW_ARTWORK_RESOLVER).single().className,
+        )
+
+        val libraryBuild = targets(AppleMusicHookPoint.LIBRARY_EPOXY_BUILD).single()
+        assertEquals("com.apple.android.music.library2.M", libraryBuild.parameterTypeNames?.first())
+
+        val composeObserve = targets(AppleMusicHookPoint.COMPOSE_OBSERVE_AS_STATE).single()
+        assertEquals("C1.w", composeObserve.className)
+        assertEquals("e", composeObserve.methodName)
+        assertEquals(
+            listOf("androidx.lifecycle.G", "z0.n"),
+            composeObserve.parameterTypeNames,
+        )
+
+        assertEquals(
+            listOf("z1.q", "z1.i"),
+            targets(AppleMusicHookPoint.COMPOSE_TEXT_LAYOUT).map { it.className },
+        )
+        assertEquals(
+            "com.apple.android.music.utils.j1\$a",
+            targets(AppleMusicHookPoint.APPLE_TEXT_STYLE_UTILS).single().className,
+        )
+
+        assertEquals(
+            "z0.s0",
+            targets(AppleMusicHookPoint.COMPOSE_NEVER_EQUAL_POLICY).single().className,
+        )
+
+        val sourceMenu = targets(AppleMusicHookPoint.LYRICS_SOURCE_MENU_CLICK_LISTENER).single()
+        assertEquals("com.apple.android.music.player.fragment.d0", sourceMenu.className)
+        assertEquals("onClick", sourceMenu.methodName)
+        assertEquals(
+            "a",
+            sourceMenu.runtimeMemberNames[AppleMusicRuntimeMember.LYRICS_SOURCE_MENU_FRAGMENT_FIELD],
+        )
+
+        assertEquals(
+            "com.apple.android.music.player.e",
+            targets(AppleMusicHookPoint.IN_APP_GLOBAL_METADATA_DISPATCHER).single().className,
+        )
+    }
+}

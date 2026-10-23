@@ -7,8 +7,11 @@
 package com.juren233.hyperlyricsenhanced.provider
 
 import android.app.Application
+import android.content.SharedPreferences
 import android.media.MediaMetadata
 import android.media.session.PlaybackState
+import org.luckypray.dexkit.DexKitBridge
+import java.lang.reflect.Executable
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
@@ -22,9 +25,44 @@ interface OfficialProviderPlugin {
     fun install(host: OfficialProviderHost)
 }
 
+/**
+ * 一次真实方法调用的可改写入口，形状与 libxposed 的 Chain 对齐。
+ *
+ * 仅在 [OfficialProviderInterceptor.intercept] 回调期间有效，Host 可能复用同一对象；
+ * Provider 不得保存该实例或跨线程使用。
+ */
+interface OfficialProviderCall {
+    val executable: Executable
+    val thisObject: Any?
+    val args: List<Any?>
+
+    fun proceed(): Any?
+
+    fun proceed(args: Array<out Any?>): Any?
+
+    fun proceedWith(thisObject: Any): Any?
+
+    fun proceedWith(thisObject: Any, args: Array<out Any?>): Any?
+}
+
+fun interface OfficialProviderInterceptor {
+    fun intercept(call: OfficialProviderCall): Any?
+}
+
+fun interface OfficialProviderHookHandle {
+    fun unhook()
+}
+
 interface OfficialProviderHost {
     val packageName: String
     val processName: String
+
+    /**
+     * 目标 App 的类加载器；Pack 在 Application 可用之前做反射或早期装配时使用。
+     *
+     * 旧主程序没有这项能力，返回 null；调用方应等到 `hookApplication` 回调后再装配。
+     */
+    val targetClassLoader: ClassLoader? get() = null
 
     fun hookApplication(callback: OfficialProviderApplicationCallback)
 
@@ -123,6 +161,42 @@ interface OfficialProviderHost {
      * Pack 应相应提高 manifest 的 minCoreVersionCode，避免在旧主模块上静默降级。
      */
     fun getBooleanPreference(key: String, default: Boolean): Boolean = default
+
+    /**
+     * 为精确的 [Executable] 安装可完全接管调用的 Hook。
+     *
+     * 拦截器可以改写参数、替换返回值或绕开原方法。拦截器抛异常时 Host 统一兜底：
+     * 尚未调用 proceed 就执行原方法，已经调用过则返回该次 proceed 的结果。
+     * 新 Pack 必须提高 minCoreVersionCode，旧主程序没有这项能力。
+     */
+    fun intercept(
+        executable: Executable,
+        interceptor: OfficialProviderInterceptor,
+    ): OfficialProviderHookHandle =
+        throw UnsupportedOperationException("当前主程序不支持 Provider 拦截 Hook")
+
+    /** 取消目标方法的 AOT/JIT 内联，供需要拦截内联调用方的 Pack 使用。 */
+    fun deoptimize(executable: Executable): Boolean = false
+
+    /** 读取主模块远端偏好；旧主程序或读取失败时返回 null。 */
+    fun getRemotePreferences(group: String): SharedPreferences? = null
+
+    /**
+     * 打开目标 App DEX 的 DexKit 桥接，Host 负责加载 libdexkit.so。
+     *
+     * 每次调用返回新的 [DexKitBridge]，由调用方负责 close()。
+     */
+    fun openDexKit(application: Application): DexKitBridge? = null
+
+    /** 当前主程序 versionCode，Pack 可据此区分 DexKit 缓存等与版本相关的行为。 */
+    val coreVersionCode: Int get() = 0
+
+    /**
+     * 主模块 APK 路径；Pack 读取模块 assets 中的共享资源（如繁简字典）时使用。
+     *
+     * 旧主程序没有这项能力，返回 null；调用方应自行降级。
+     */
+    val moduleApkPath: String? get() = null
 }
 
 /**

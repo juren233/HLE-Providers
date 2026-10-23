@@ -360,6 +360,43 @@ class VerifyPacksTest(unittest.TestCase):
 
         self.assertEqual([], errors)
 
+    def test_unavailable_provider_with_releases_still_audits_newest_pack(self) -> None:
+        # 新核心专属插件没有旧版可用的顶层版本，但仍要校验最新发行版的包。
+        release = make_release(1, minCoreVersionCode=230029)
+        pack = make_pack(release)
+        release["sha256"] = hashlib.sha256(pack).hexdigest()
+        catalog = {"providers": [{
+            "id": "applemusic",
+            "available": False,
+            "releases": [release],
+        }]}
+        fetched: list[str] = []
+
+        def fetch(url: str, _token) -> bytes:
+            fetched.append(url)
+            return pack
+
+        errors = verify_packs(catalog, fetch_bytes=fetch)
+
+        self.assertEqual([], errors)
+        self.assertEqual([release["assetUrl"]], fetched)
+
+    def test_unavailable_provider_with_releases_fails_on_bad_pack(self) -> None:
+        release = make_release(1, minCoreVersionCode=230029)
+        release["sha256"] = "0" * 64
+        catalog = {"providers": [{
+            "id": "applemusic",
+            "available": False,
+            "releases": [release],
+        }]}
+
+        errors = verify_packs(
+            catalog,
+            fetch_bytes=lambda _url, _token: b"not a zip",
+        )
+
+        self.assertTrue(errors)
+
     def test_only_newest_remote_release_is_downloaded(self) -> None:
         newest = make_release(30)
         newest_pack = make_pack(newest)
@@ -622,6 +659,57 @@ class UpdateCatalogReleaseTest(unittest.TestCase):
         self.assertEqual(11, provider["versionCode"])
         self.assertEqual(old_packages, provider["targetPackages"])
         self.assertEqual([31, 11], [r["versionCode"] for r in provider["releases"]])
+
+    def _run_new_core_only_publish(self, allow_unavailable: bool) -> dict:
+        catalog = {
+            "schemaVersion": 1,
+            "providers": [{
+                "id": "applemusic",
+                "displayName": "Apple Music",
+                "targetPackages": ["com.apple.android.music"],
+                "available": False,
+            }],
+        }
+        manifest = {
+            "versionCode": 1,
+            "versionName": "1.0.0",
+            "pluginApiVersion": 3,
+            "minCoreVersionCode": 230029,
+            "targetPackages": ["com.apple.android.music"],
+        }
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            catalog_path = pathlib.Path(tmp) / "catalog.json"
+            manifest_path = pathlib.Path(tmp) / "provider.json"
+            catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            argv = [
+                "update_catalog_release.py",
+                "--catalog", str(catalog_path),
+                "--provider", "applemusic",
+                "--provider-manifest", str(manifest_path),
+                "--asset-url", make_release(1)["assetUrl"],
+                "--sha256", make_release(1)["sha256"],
+            ]
+            if allow_unavailable:
+                argv.append("--allow-unavailable-top-level")
+            with mock.patch("sys.argv", argv):
+                update_catalog_release_main()
+
+            return json.loads(catalog_path.read_text(encoding="utf-8"))
+
+    def test_new_core_only_provider_stays_unavailable_when_allowed(self) -> None:
+        updated = self._run_new_core_only_publish(allow_unavailable=True)
+
+        provider = updated["providers"][0]
+        self.assertFalse(provider["available"])
+        self.assertNotIn("versionCode", provider)
+        self.assertEqual([1], [r["versionCode"] for r in provider["releases"]])
+        self.assertEqual(["com.apple.android.music"], provider["targetPackages"])
+
+    def test_new_core_only_provider_without_flag_fails(self) -> None:
+        with self.assertRaises(SystemExit):
+            self._run_new_core_only_publish(allow_unavailable=False)
 
 
 class BackfillCatalogReleasesTest(unittest.TestCase):

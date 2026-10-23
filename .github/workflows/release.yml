@@ -15,6 +15,7 @@ on:
           - qishui
           - salt-player
           - spotify
+          - applemusic
   push:
     tags:
       - "netease-v*"
@@ -24,6 +25,7 @@ on:
       - "qishui-v*"
       - "salt-player-v*"
       - "spotify-v*"
+      - "applemusic-v*"
 
 permissions:
   contents: write
@@ -56,6 +58,7 @@ jobs:
             qishui) display_name="汽水音乐" ;;
             salt-player) display_name="椒盐音乐" ;;
             spotify) display_name="Spotify" ;;
+            applemusic) display_name="Apple Music" ;;
             *) echo "Unsupported provider tag: $GITHUB_REF_NAME" >&2; exit 1 ;;
           esac
           echo "id=$provider" >> "$GITHUB_OUTPUT"
@@ -69,6 +72,10 @@ jobs:
           chmod 600 signing-private.pem
       - name: Run catalog script tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Run provider unit tests
+        run: |
+          provider='${{ steps.provider.outputs.id }}'
+          ./gradlew --no-daemon --max-workers=2 ":providers:$provider:testDebugUnitTest"
       - name: Build signed Provider Pack
         id: pack
         run: |
@@ -122,12 +129,19 @@ jobs:
 
           git fetch origin main
           git switch -C main origin/main
+          # applemusic 是新核心专属插件，没有旧版 App 能用的发行版；顶层保持
+          # available=false，新版 App 通过 releases 选择候选。
+          top_level_flag=""
+          if [ "$provider" = "applemusic" ]; then
+            top_level_flag="--allow-unavailable-top-level"
+          fi
           python3 scripts/update_catalog_release.py \
             --catalog catalog/catalog.json \
             --provider "$provider" \
             --provider-manifest "providers/$provider/provider.json" \
             --asset-url "$asset_url" \
-            --sha256 "$pack_sha"
+            --sha256 "$pack_sha" \
+            $top_level_flag
 
           GH_TOKEN='${{ github.token }}' python3 scripts/verify_catalog_assets.py \
             --catalog catalog/catalog.json \

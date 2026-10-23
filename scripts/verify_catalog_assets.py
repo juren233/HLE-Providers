@@ -296,6 +296,8 @@ def verify_packs(
       + pack_dir 里能命中的本地新包」，按 versionCode 去重；其余历史版本
       在其发布时已完整校验过，且资产存在性始终由 disable_missing_assets
       覆盖，不再逐个全量下载，避免随 releases 增长线性放大发布耗时。
+    - 顶层不可用但仍有 releases 的 Provider（新核心专属插件）也要审计最新
+      发行版，不能因为旧 App 用不了就跳过包校验。
     """
     if fetch_bytes is None:
         def fetch_bytes(url: str, _token: str | None) -> bytes:
@@ -308,9 +310,21 @@ def verify_packs(
 
     errors: list[str] = []
     for provider in catalog.get("providers", []):
-        if not provider.get("available", False):
-            continue
         releases = provider_releases(provider)
+        if not provider.get("available", False):
+            if not releases:
+                continue
+            newest = max(releases, key=lambda release: release["versionCode"])
+            verify_one(
+                provider=provider,
+                release=newest,
+                pack_dir=pack_dir,
+                fetch_bytes=fetch_bytes,
+                token=token,
+                errors=errors,
+                check_manifest_fields=True,
+            )
+            continue
         if not releases:
             # 旧格式：只验 versionCode 与 sha256，没有元数据可比。
             verify_one(

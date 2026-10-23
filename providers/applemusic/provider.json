@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "pluginApiVersion": 3,
+  "pluginId": "applemusic",
+  "displayName": "Apple Music",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "minCoreVersionCode": 230029,
+  "entryClass": "com.juren233.hle.providers.applemusic.AppleMusicPluginEntry",
+  "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.applemusic",
+  "targetPackages": [
+    "com.apple.android.music"
+  ],
+  "classesSha256": ""
+}

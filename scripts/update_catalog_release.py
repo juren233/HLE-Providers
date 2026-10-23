@@ -32,6 +32,11 @@ def main() -> None:
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--legacy-plugin-api", type=int, default=DEFAULT_LEGACY_PLUGIN_API)
     parser.add_argument("--min-supported-core", type=int, default=DEFAULT_MIN_SUPPORTED_CORE)
+    parser.add_argument(
+        "--allow-unavailable-top-level",
+        action="store_true",
+        help="新核心专属插件没有旧版可用的顶层版本时，保留 releases 并保持 available=false",
+    )
     args = parser.parse_args()
 
     manifest = json.loads(args.provider_manifest.read_text(encoding="utf-8"))
@@ -63,17 +68,25 @@ def main() -> None:
     provider["releases"] = releases
 
     if not recompute_top_level(provider, args.legacy_plugin_api, args.min_supported_core):
+        if not args.allow_unavailable_top_level:
+            print(
+                f"No release qualifies for top-level fields: {args.provider} "
+                "(check pluginApiVersion / minCoreVersionCode)",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        # 新核心专属插件：没有旧版 App 能用的发行版，顶层保持不可用；
+        # releases 仍会写入，新版 App 通过 releases 选择候选。
         print(
-            f"No release qualifies for top-level fields: {args.provider} "
-            "(check pluginApiVersion / minCoreVersionCode)",
+            f"Provider has no legacy-compatible release: {args.provider} "
+            "(available=false, releases kept)",
             file=sys.stderr,
         )
-        raise SystemExit(1)
 
     # targetPackages 描述的是顶层版本的目标集合。新版本因 minCore 提高而无法
     # 成为顶层、顶层仍指向旧版本时，不得用新版本的 targetPackages 覆盖目录，
     # 否则旧 App 会看到「旧包 + 新目标包名」的组合。
-    if provider["versionCode"] == release["versionCode"]:
+    if provider.get("versionCode") == release["versionCode"]:
         provider["targetPackages"] = manifest["targetPackages"]
 
     errors = validate_provider_structure(provider)
@@ -83,9 +96,11 @@ def main() -> None:
         raise SystemExit(1)
 
     write_catalog(args.catalog, catalog)
+    top_level_name = provider.get("versionName")
+    top_level = f"v{top_level_name}" if top_level_name else "unavailable"
     print(
         f"Catalog updated: {args.provider} v{release['versionName']} "
-        f"({release['versionCode']}), top-level -> v{provider['versionName']}"
+        f"({release['versionCode']}), top-level -> {top_level}"
     )
 
 
