@@ -7,9 +7,17 @@ import argparse
 import hashlib
 import json
 import pathlib
+import re
 import subprocess
 import tempfile
 import zipfile
+
+
+def dex_index(name: str) -> int | None:
+    if name == "classes.dex":
+        return 1
+    match = re.fullmatch(r"classes([2-9][0-9]*)\.dex", name)
+    return int(match.group(1)) if match else None
 
 
 def main() -> None:
@@ -22,24 +30,37 @@ def main() -> None:
 
     with zipfile.ZipFile(args.apk) as apk:
         dex_names = sorted(
-            name for name in apk.namelist()
-            if name == "classes.dex" or name.startswith("classes") and name.endswith(".dex")
+            (name for name in apk.namelist() if dex_index(name) is not None),
+            key=dex_index,
         )
-        if dex_names != ["classes.dex"]:
-            raise SystemExit(f"Provider Pack v1 requires exactly one classes.dex: {dex_names}")
-        classes_dex = apk.read("classes.dex")
+        if not dex_names or [dex_index(name) for name in dex_names] != list(
+            range(1, len(dex_names) + 1)
+        ):
+            raise SystemExit(
+                "Provider Pack requires classes.dex, classes2.dex... without gaps: "
+                f"{dex_names}"
+            )
+        dex_files = {name: apk.read(name) for name in dex_names}
         forbidden_symbols = (
             b"io/github/libxposed/api/XposedModule",
             b"io/github/libxposed/api/XposedInterface",
         )
-        if any(symbol in classes_dex for symbol in forbidden_symbols):
+        if any(
+            symbol in data
+            for data in dex_files.values()
+            for symbol in forbidden_symbols
+        ):
             raise SystemExit(
                 "Provider Pack plugin code must not reference libxposed API; "
                 "use the static host callback API instead"
             )
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-    manifest["classesSha256"] = hashlib.sha256(classes_dex).hexdigest()
+    manifest["classesSha256"] = hashlib.sha256(dex_files["classes.dex"]).hexdigest()
+    manifest["dexSha256"] = {
+        name: hashlib.sha256(data).hexdigest()
+        for name, data in dex_files.items()
+    }
     manifest_bytes = json.dumps(
         manifest,
         ensure_ascii=False,
@@ -51,7 +72,7 @@ def main() -> None:
         temp = pathlib.Path(temp_dir)
         payload = temp / "payload.bin"
         signature = temp / "signature.ed25519"
-        payload.write_bytes(manifest_bytes + b"\0" + classes_dex)
+        payload.write_bytes(manifest_bytes + b"\0" + b"\0".join(dex_files.values()))
         subprocess.run(
             [
                 "openssl", "pkeyutl", "-sign", "-rawin",
@@ -71,7 +92,8 @@ def main() -> None:
                 pack.writestr(entry, data)
 
             write_entry("manifest.json", manifest_bytes)
-            write_entry("classes.dex", classes_dex)
+            for name, data in dex_files.items():
+                write_entry(name, data)
             write_entry("signature.ed25519", signature.read_bytes())
 
     print(args.output)

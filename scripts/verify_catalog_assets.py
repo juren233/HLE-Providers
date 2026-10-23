@@ -19,6 +19,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,6 +28,11 @@ from collections.abc import Callable
 
 
 CATALOG_ASSET_FIELDS = ("versionName", "versionCode", "assetUrl", "sha256")
+
+# 旧主程序（≤230005）的 ProviderPackVerifier 只接受单个 classes.dex；
+# 多 DEX 包必须声明 minCoreVersionCode ≥ 230006，否则旧 App 会直接报
+# “Provider Pack 文件集合无效”。
+MULTI_DEX_MIN_CORE_VERSION_CODE = 230006
 
 # 顶层字段指向「仍在支持的最低主程序版本也能用的最新版」。旧版 App 对
 # pluginApiVersion 做精确等值校验，因此顶层只指向 legacy API 的发行版。
@@ -265,9 +271,14 @@ def validate_provider_structure(provider: dict) -> list[str]:
     return errors
 
 
-def read_pack_manifest(pack_bytes: bytes) -> dict:
+def read_pack_manifest_and_dex_names(pack_bytes: bytes) -> tuple[dict, list[str]]:
     with zipfile.ZipFile(io.BytesIO(pack_bytes)) as pack:
-        return json.loads(pack.read("manifest.json").decode("utf-8"))
+        manifest = json.loads(pack.read("manifest.json").decode("utf-8"))
+        dex_names = [
+            name for name in pack.namelist()
+            if re.fullmatch(r"classes(?:[2-9][0-9]*)?\.dex", name)
+        ]
+    return manifest, dex_names
 
 
 def verify_packs(
@@ -314,6 +325,7 @@ def verify_packs(
                 token=token,
                 errors=errors,
                 check_manifest_fields=False,
+                require_single_dex=True,
             )
             continue
 
@@ -343,6 +355,8 @@ def verify_packs(
                 token=token,
                 errors=errors,
                 check_manifest_fields=True,
+                require_single_dex=top_level is not None
+                and release["versionCode"] == top_level["versionCode"],
             )
     return errors
 
@@ -355,6 +369,7 @@ def verify_one(
     token: str | None,
     errors: list[str],
     check_manifest_fields: bool,
+    require_single_dex: bool = False,
 ) -> None:
     url = release["assetUrl"]
     asset_name = url.rstrip("/").rsplit("/", 1)[-1]
@@ -370,10 +385,27 @@ def verify_one(
                 f"(期望 {release['sha256'][:12]}, 实际 {actual[:12]})"
             )
             return
-        manifest = read_pack_manifest(pack_bytes)
+        manifest, dex_names = read_pack_manifest_and_dex_names(pack_bytes)
     except Exception as error:  # noqa: BLE001 - CI 需要汇总所有错误而非裸 traceback
         errors.append(f"{provider['id']} v{release['versionCode']}: 包读取失败 {error}")
         return
+    if len(dex_names) > 1:
+        for label, min_core in (
+            ("manifest", manifest.get("minCoreVersionCode")),
+            ("目录 release", release.get("minCoreVersionCode")),
+        ):
+            if not isinstance(min_core, int) or min_core < MULTI_DEX_MIN_CORE_VERSION_CODE:
+                errors.append(
+                    f"{provider['id']} v{release['versionCode']}: 多 DEX 包的 {label} "
+                    f"minCoreVersionCode={min_core!r} 必须 ≥ "
+                    f"{MULTI_DEX_MIN_CORE_VERSION_CODE}；旧版 App 只接受单个 classes.dex"
+                )
+        if require_single_dex:
+            # 顶层字段是旧版 App（不解析 releases）实际下载的版本。
+            errors.append(
+                f"{provider['id']} v{release['versionCode']}: 顶层字段指向多 DEX 包，"
+                "旧版 App 只接受单个 classes.dex"
+            )
     if manifest.get("versionCode") != release["versionCode"]:
         errors.append(
             f"{provider['id']} v{release['versionCode']}: manifest versionCode="

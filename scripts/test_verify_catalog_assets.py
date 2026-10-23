@@ -35,7 +35,7 @@ def make_release(version_code: int, **overrides) -> dict:
     return release
 
 
-def make_pack(release: dict) -> bytes:
+def make_pack(release: dict, dex_names: tuple[str, ...] = ("classes.dex",)) -> bytes:
     manifest = {
         "schemaVersion": 1,
         "pluginApiVersion": release.get("pluginApiVersion", 3),
@@ -47,7 +47,8 @@ def make_pack(release: dict) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as pack:
         pack.writestr("manifest.json", json.dumps(manifest))
-        pack.writestr("classes.dex", b"dex")
+        for name in dex_names:
+            pack.writestr(name, b"dex")
     return buffer.getvalue()
 
 
@@ -450,6 +451,76 @@ class VerifyPacksTest(unittest.TestCase):
         errors = verify_packs(catalog, fetch_bytes=lambda _url, _token: pack)
 
         self.assertTrue(any("minCoreVersionCode" in error for error in errors))
+
+    def test_multi_dex_pack_requires_core_with_multi_dex_support(self) -> None:
+        release = make_release(29, minCoreVersionCode=160102)
+        pack = make_pack(release, dex_names=("classes.dex", "classes2.dex"))
+        release["sha256"] = hashlib.sha256(pack).hexdigest()
+        catalog = {"providers": [{
+            "id": "netease",
+            "available": True,
+            "releases": [release],
+        }]}
+
+        errors = verify_packs(catalog, fetch_bytes=lambda _url, _token: pack)
+
+        self.assertTrue(
+            any("多 DEX" in error and "230006" in error for error in errors),
+        )
+
+    def test_multi_dex_pack_with_multi_dex_core_version_passes(self) -> None:
+        release = make_release(29, minCoreVersionCode=230006)
+        pack = make_pack(release, dex_names=("classes.dex", "classes2.dex"))
+        release["sha256"] = hashlib.sha256(pack).hexdigest()
+        catalog = {"providers": [{
+            "id": "netease",
+            "available": True,
+            "releases": [release],
+        }]}
+
+        errors = verify_packs(catalog, fetch_bytes=lambda _url, _token: pack)
+
+        self.assertEqual([], errors)
+
+    def test_top_level_field_must_not_point_to_multi_dex_pack(self) -> None:
+        # 旧版 App 不解析 releases，顶层字段是多 DEX 包就算 minCore 再高也装不上。
+        release = make_release(29, minCoreVersionCode=230006)
+        pack = make_pack(release, dex_names=("classes.dex", "classes2.dex"))
+        release["sha256"] = hashlib.sha256(pack).hexdigest()
+        catalog = {"providers": [{
+            "id": "netease",
+            "available": True,
+            "versionName": release["versionName"],
+            "versionCode": 29,
+            "assetUrl": release["assetUrl"],
+            "sha256": release["sha256"],
+            "releases": [release],
+        }]}
+
+        errors = verify_packs(catalog, fetch_bytes=lambda _url, _token: pack)
+
+        self.assertTrue(any("顶层字段指向多 DEX 包" in error for error in errors))
+
+    def test_legacy_top_level_entry_rejects_multi_dex_pack(self) -> None:
+        # 旧格式目录没有 release 元数据，顶层字段不能指向多 DEX 包。
+        release = {"versionCode": 29, "assetUrl": make_release(29)["assetUrl"]}
+        pack = make_pack(
+            make_release(29, minCoreVersionCode=230006),
+            dex_names=("classes.dex", "classes2.dex"),
+        )
+        release["sha256"] = hashlib.sha256(pack).hexdigest()
+        catalog = {"providers": [{
+            "id": "netease",
+            "available": True,
+            "versionCode": 29,
+            "versionName": "1.0.29",
+            "assetUrl": release["assetUrl"],
+            "sha256": release["sha256"],
+        }]}
+
+        errors = verify_packs(catalog, fetch_bytes=lambda _url, _token: pack)
+
+        self.assertTrue(any("多 DEX" in error for error in errors))
 
 
 class UpdateCatalogReleaseTest(unittest.TestCase):
