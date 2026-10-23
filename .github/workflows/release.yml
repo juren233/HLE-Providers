@@ -67,12 +67,13 @@ jobs:
           test -n "$HLE_PROVIDER_SIGNING_KEY_PEM"
           printf '%s' "$HLE_PROVIDER_SIGNING_KEY_PEM" > signing-private.pem
           chmod 600 signing-private.pem
+      - name: Run catalog script tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Build signed Provider Pack
         id: pack
         run: |
           provider='${{ steps.provider.outputs.id }}'
           version_name=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionName"])' "$provider")
-          version_code=$(python3 -c 'import json, pathlib, sys; p=sys.argv[1]; print(json.loads(pathlib.Path(f"providers/{p}/provider.json").read_text())["versionCode"])' "$provider")
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             release_tag="${provider}-v${version_name}"
           else
@@ -89,7 +90,6 @@ jobs:
           pack_sha=$(sha256sum "$asset" | cut -d' ' -f1)
           echo "provider=$provider" >> "$GITHUB_OUTPUT"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
-          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
           echo "sha256=$pack_sha" >> "$GITHUB_OUTPUT"
@@ -116,64 +116,23 @@ jobs:
         run: |
           provider='${{ steps.pack.outputs.provider }}'
           version_name='${{ steps.pack.outputs.version_name }}'
-          version_code='${{ steps.pack.outputs.version_code }}'
           release_tag='${{ steps.pack.outputs.release_tag }}'
           pack_sha='${{ steps.pack.outputs.sha256 }}'
           asset_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/${provider}-${version_name}.hlp"
 
           git fetch origin main
           git switch -C main origin/main
-          python3 - "$provider" "$version_name" "$version_code" "$asset_url" "$pack_sha" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          provider_id, version_name, version_code, asset_url, pack_sha = sys.argv[1:]
-          catalog_path = pathlib.Path("catalog/catalog.json")
-          catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-          manifest_path = pathlib.Path(f"providers/{provider_id}/provider.json")
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          if provider_id == "qqmusic":
-              catalog["providers"] = [
-                  item for item in catalog["providers"] if item["id"] != "qqmusic-hd"
-              ]
-          canonical_display_names = {
-              "qqmusic": "QQ音乐",
-              "kugou": "酷狗音乐",
-              "lxmusic": "LX音乐",
-              "qishui": "汽水音乐",
-              "salt-player": "椒盐音乐",
-              "spotify": "Spotify",
-          }
-          for item in catalog["providers"]:
-              if item["id"] in canonical_display_names:
-                  item["displayName"] = canonical_display_names[item["id"]]
-          provider = next(item for item in catalog["providers"] if item["id"] == provider_id)
-          provider.update(
-              targetPackages=manifest["targetPackages"],
-              available=True,
-              versionName=version_name,
-              versionCode=int(version_code),
-              assetUrl=asset_url,
-              sha256=pack_sha,
-          )
-
-          lines = [
-              "{",
-              f'  "schemaVersion": {catalog["schemaVersion"]},',
-              '  "providers": [',
-          ]
-          for index, item in enumerate(catalog["providers"]):
-              suffix = "," if index + 1 < len(catalog["providers"]) else ""
-              encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-              lines.append(f"    {encoded}{suffix}")
-          lines.extend(["  ]", "}"])
-          catalog_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-          PY
+          python3 scripts/update_catalog_release.py \
+            --catalog catalog/catalog.json \
+            --provider "$provider" \
+            --provider-manifest "providers/$provider/provider.json" \
+            --asset-url "$asset_url" \
+            --sha256 "$pack_sha"
 
           GH_TOKEN='${{ github.token }}' python3 scripts/verify_catalog_assets.py \
             --catalog catalog/catalog.json \
-            --repository "$GITHUB_REPOSITORY"
+            --repository "$GITHUB_REPOSITORY" \
+            --verify-packs --pack-dir dist
 
           signature_file=$(mktemp)
           openssl pkeyutl -sign -rawin \
@@ -198,8 +157,8 @@ jobs:
             -m "- 同步 $version_name 版本与 CI 生成的 Pack 摘要。" \
             -m "- 使用项目 Ed25519 私钥重新签名官方目录。"
           git push origin main
-      # 同步到 Cloudflare R2（App 端回退源）。桶内只保留目录引用的最新插件包，
-      # 历史版本以 GitHub Releases 为准；上传后按 catalog 反查引用的 tag，删除其余目录。
+      # 同步到 Cloudflare R2（App 端回退源）。桶内保留所有被目录引用的插件包
+      # （顶层版本与 releases 历史条目）；上传后按 catalog 反查引用的 tag，删除其余目录。
       # 需在仓库 Secrets 配置 R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY，
       # 可选 Variable R2_BUCKET（默认 hle-plugins）。对象键复刻仓库相对路径：
       # catalog/catalog.json(.sig) 与 releases/download/<tag>/<file>。
@@ -210,7 +169,7 @@ jobs:
           unzip -oq /tmp/rclone.zip -d /tmp/rclone-install
           sudo install /tmp/rclone-install/rclone-*/rclone /usr/local/bin/rclone
           rclone version
-      - name: Sync catalog and latest packs to Cloudflare R2
+      - name: Sync catalog and referenced packs to Cloudflare R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -235,9 +194,13 @@ jobs:
 
           catalog = json.load(open("catalog/catalog.json", encoding="utf-8"))
           for item in catalog["providers"]:
-              parts = (item.get("assetUrl") or "").rstrip("/").split("/")
-              if len(parts) >= 3 and parts[-3] == "download":
-                  print(parts[-2])
+              # releases 历史版本同样可能被新 App 选中下载（含崩溃回退），全部保留镜像。
+              urls = [item.get("assetUrl") or ""]
+              urls += [release.get("assetUrl") or "" for release in item.get("releases", [])]
+              for url in urls:
+                  parts = url.rstrip("/").split("/")
+                  if len(parts) >= 3 and parts[-3] == "download":
+                      print(parts[-2])
           PY
           rclone lsf "R2:${bucket}/releases/download" --dirs-only \
             | sed 's:/*$::' | sort -u > /tmp/remote_tags.txt
@@ -247,4 +210,4 @@ jobs:
                 echo "Pruning stale pack: $stale"
                 rclone purge "R2:${bucket}/releases/download/$stale"
               done
-          echo "Synced catalog/ and ${release_path}/ to R2 bucket: ${bucket} (latest-only)"
+          echo "Synced catalog/ and ${release_path}/ to R2 bucket: ${bucket} (catalog-referenced)"

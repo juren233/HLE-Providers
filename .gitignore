@@ -10,3 +10,6 @@ DEBUGGING_MISTAKES.md
 .trae/
 docs/
 .zcodeignore
+__pycache__/
+signing-private.pem
+signing-public.pem

@@ -1,6 +1,6 @@
 # 手动同步官方目录到 Cloudflare R2（App 端回退源）。
-# 桶内只保留目录引用的最新插件包，历史版本以 GitHub Releases 为准；
-# 勾选补齐输入时会从 GitHub Releases 下载目录引用的最新包上传，随后删除桶内未被目录引用的 tag 目录。
+# 桶内保留所有被目录引用的插件包（顶层版本与 releases 历史条目）；
+# 勾选补齐输入时会从 GitHub Releases 下载目录引用的包上传，随后删除桶内未被目录引用的 tag 目录。
 #
 # 前置配置（仓库 Settings → Secrets and variables → Actions）：
 # - Secrets: R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
@@ -59,7 +59,7 @@ jobs:
         run: |
           rclone copy catalog "R2:${{ steps.bucket.outputs.name }}/catalog"
           echo "Synced catalog/ to R2 bucket: ${{ steps.bucket.outputs.name }}"
-      - name: Sync latest packs and prune stale
+      - name: Sync referenced packs and prune stale
         env:
           GH_TOKEN: ${{ github.token }}
           RCLONE_CONFIG_R2_TYPE: s3
@@ -74,9 +74,13 @@ jobs:
 
           catalog = json.load(open("catalog/catalog.json", encoding="utf-8"))
           for item in catalog["providers"]:
-              parts = (item.get("assetUrl") or "").rstrip("/").split("/")
-              if len(parts) >= 3 and parts[-3] == "download":
-                  print(parts[-2])
+              # releases 历史版本同样可能被新 App 选中下载（含崩溃回退），全部保留镜像。
+              urls = [item.get("assetUrl") or ""]
+              urls += [release.get("assetUrl") or "" for release in item.get("releases", [])]
+              for url in urls:
+                  parts = url.rstrip("/").split("/")
+                  if len(parts) >= 3 and parts[-3] == "download":
+                      print(parts[-2])
           PY
           if [ '${{ inputs.sync_referenced_packs }}' = 'true' ]; then
             mkdir -p staging/releases/download
@@ -96,4 +100,4 @@ jobs:
                 echo "Pruning stale pack: $stale"
                 rclone purge "R2:${bucket}/releases/download/$stale"
               done
-          echo "R2 bucket ${bucket} now holds only catalog-referenced latest packs."
+          echo "R2 bucket ${bucket} now holds all catalog-referenced packs."

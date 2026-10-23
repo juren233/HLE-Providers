@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "HLE Provider Catalog",
+  "description": "目录格式的说明文档。实际生效的校验在 scripts/verify_catalog_assets.py 的 validate_provider_structure / verify_packs 与 App 端 OfficialProviderRepository；修改字段时需同步维护这几处，本文件本身不参与 CI 校验。",
   "type": "object",
   "required": ["schemaVersion", "providers"],
   "properties": {
@@ -23,10 +24,38 @@
           "versionName": { "type": "string" },
           "versionCode": { "type": "integer", "minimum": 1 },
           "assetUrl": { "type": "string" },
-          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "releases": {
+            "type": "array",
+            "description": "按 versionCode 降序的历史发行版。顶层字段是其中「最低仍支持的主程序也能用的最新版」的投影；旧版 App 忽略本字段。",
+            "items": {
+              "type": "object",
+              "required": [
+                "versionCode",
+                "versionName",
+                "pluginApiVersion",
+                "minCoreVersionCode",
+                "assetUrl",
+                "sha256"
+              ],
+              "properties": {
+                "versionCode": { "type": "integer", "minimum": 1 },
+                "versionName": { "type": "string" },
+                "pluginApiVersion": { "type": "integer", "minimum": 1 },
+                "minCoreVersionCode": { "type": "integer", "minimum": 0 },
+                "assetUrl": { "type": "string" },
+                "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            }
+          },
+          "revokedVersionCodes": {
+            "type": "array",
+            "description": "已撤回的 versionCode；新 App 选择更新候选时跳过这些版本。",
+            "items": { "type": "integer", "minimum": 1 },
+            "uniqueItems": true
+          }
         }
       }
     }
   }
 }
-
