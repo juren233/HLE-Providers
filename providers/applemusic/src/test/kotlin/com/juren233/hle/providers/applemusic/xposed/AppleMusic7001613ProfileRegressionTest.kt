@@ -70,7 +70,8 @@ class AppleMusic7001613ProfileRegressionTest {
     @Test
     fun `lyrics owners and binding fields use the 1613 binary names`() {
         val menu = target(AppleMusicHookPoint.LYRICS_SOURCE_MENU_CLICK_LISTENER)
-        assertEquals("com.apple.android.music.player.fragment.b0", menu.className)
+        // b0 only toggles the action row; a0 builds popup_menu_lyrics_translations.
+        assertEquals("com.apple.android.music.player.fragment.a0", menu.className)
         listOf(
             AppleMusicHookPoint.LYRICS_TRANSLATION_PREFERENCE to "n",
             AppleMusicHookPoint.LYRICS_PRONUNCIATION_PREFERENCE to "m",

@@ -2341,6 +2341,13 @@ internal object AppleMusicHookProfiles {
                     className = "com.airbnb.epoxy.K",
                 ),
             ),
+            // b0 only toggles the lyrics action row in 1613; a0 inflates
+            // popup_menu_lyrics_translations and its menu_item_lyrics_translations rows.
+            AppleMusicHookPoint.LYRICS_SOURCE_MENU_CLICK_LISTENER to listOf(
+                target(AppleMusicHookPoint.LYRICS_SOURCE_MENU_CLICK_LISTENER).copy(
+                    className = "com.apple.android.music.player.fragment.a0",
+                ),
+            ),
             // g1 is the abstract adapter base; x is the word adapter and S0 the active line adapter.
             AppleMusicHookPoint.LYRICS_WORD_RENDER_ADAPTER to listOf(
                 target(AppleMusicHookPoint.LYRICS_WORD_RENDER_ADAPTER).copy(

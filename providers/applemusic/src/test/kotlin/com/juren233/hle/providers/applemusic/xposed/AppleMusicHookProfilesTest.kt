@@ -716,10 +716,10 @@ class AppleMusicHookProfilesTest {
         )
         assertEquals(
             listOf(
+                "com.apple.android.music.player.fragment.a0",
                 "com.apple.android.music.player.fragment.b0",
                 "com.apple.android.music.player.fragment.d0",
                 "com.apple.android.music.player.fragment.e0",
-                "com.apple.android.music.player.fragment.a0",
             ),
             AppleMusicHookProfiles.candidates(
                 version,
