@@ -13,6 +13,6 @@
     {"id":"musicfree","displayName":"MusicFree","targetPackages":["fun.upup.musicfree"],"available":false},
     {"id":"gramophone","displayName":"Gramophone","targetPackages":["org.akanework.gramophone"],"available":false},
     {"id":"symfonium","displayName":"Symfonium","targetPackages":["app.symfonik.music.player"],"available":false},
-    {"id":"applemusic","displayName":"Apple Music","targetPackages":["com.apple.android.music"],"available":false,"releases":[{"versionCode":1,"versionName":"1.0.0","pluginApiVersion":3,"minCoreVersionCode":230029,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/applemusic-v1.0.0/applemusic-1.0.0.hlp","sha256":"f128d2b02ec88fdae9702ede46f291b701b2039d2a87ee008915b2bbdcb791bd"}]}
+    {"id":"applemusic","displayName":"Apple Music","targetPackages":["com.apple.android.music"],"available":false,"releases":[{"versionCode":2,"versionName":"1.0.1","pluginApiVersion":3,"minCoreVersionCode":230029,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/applemusic-v1.0.1/applemusic-1.0.1.hlp","sha256":"29ae6d8f89e60cbb79974da3203d1dcaa98305da826cf562ba98f3f350635383"},{"versionCode":1,"versionName":"1.0.0","pluginApiVersion":3,"minCoreVersionCode":230029,"assetUrl":"https://github.com/juren233/HLE-Providers/releases/download/applemusic-v1.0.0/applemusic-1.0.0.hlp","sha256":"f128d2b02ec88fdae9702ede46f291b701b2039d2a87ee008915b2bbdcb791bd"}]}
   ]
 }
