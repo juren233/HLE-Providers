@@ -89,12 +89,13 @@ internal class AppleHookRegistrar(
 
     fun installArgumentRewriteHook(
         executable: Executable,
+        gated: Boolean = true,
         rewrite: (OfficialProviderCall) -> Array<Any?>?,
-    ) = installHooker(executable, ArgumentRewriteHook(rewrite))
+    ) = installHooker(executable, ArgumentRewriteHook(rewrite), gated = gated)
 
     private fun installHooker(executable: Executable, hooker: OfficialProviderInterceptor, gated: Boolean = true) {
         val moduleId = activeModuleId.get() ?: "unscoped"
-        // 入口关闭时功能 Hook 一律让位给原生实现；安装本身保留，重新打开入口后立即恢复。
+        // 入口关闭时体验优化 Hook 让位；歌词/播放数据路径显式 gated=false 保持运行。
         val effectiveHooker = if (gated) EntryGatedHooker(hooker) else hooker
         var current = executable
         var retried = false

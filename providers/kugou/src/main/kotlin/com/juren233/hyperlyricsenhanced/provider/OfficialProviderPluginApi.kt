@@ -191,6 +191,9 @@ interface OfficialProviderHost {
     /** 当前主程序 versionCode，Pack 可据此区分 DexKit 缓存等与版本相关的行为。 */
     val coreVersionCode: Int get() = 0
 
+    /** 当前 Provider Pack 的 versionCode，与主程序版本独立；旧主程序返回 0。 */
+    val pluginVersionCode: Int get() = 0
+
     /**
      * 主模块 APK 路径；Pack 读取模块 assets 中的共享资源（如繁简字典）时使用。
      *

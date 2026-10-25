@@ -3,9 +3,9 @@
   "pluginApiVersion": 3,
   "pluginId": "applemusic",
   "displayName": "Apple Music",
-  "versionName": "1.0.2",
-  "versionCode": 3,
-  "minCoreVersionCode": 230029,
+  "versionName": "1.0.3",
+  "versionCode": 4,
+  "minCoreVersionCode": 230037,
   "entryClass": "com.juren233.hle.providers.applemusic.AppleMusicPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.applemusic",
   "targetPackages": [

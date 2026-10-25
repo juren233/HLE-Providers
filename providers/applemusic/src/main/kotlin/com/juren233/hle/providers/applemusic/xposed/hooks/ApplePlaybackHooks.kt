@@ -144,6 +144,8 @@ internal class ApplePlaybackHooks(
     }
 
     fun installExoMediaPlayer() {
+        // 播放/歌词数据路径不参与入口门控：入口关闭只停体验优化，
+        // 超级岛与 AOD 仍需播放状态、元数据和歌词供给。
         val resolvedExo = runtime.hookResolver.resolveClass(AppleMusicHookPoint.EXO_MEDIA_PLAYER)
         exoTarget = resolvedExo.target
         val exoPlayerClass = resolvedExo.clazz
@@ -154,7 +156,7 @@ internal class ApplePlaybackHooks(
                     source = "ExoMediaPlayer.<init>",
                     replace = false,
                 )
-            })
+            }, gated = false)
         }
         val playerStateTarget = runtime.hookResolver.resolveMethod(
             AppleMusicHookPoint.EXO_PLAYER_STATE_CHANGED
@@ -164,7 +166,7 @@ internal class ApplePlaybackHooks(
             val playWhenReady = chain.args.getOrNull(0) as? Boolean ?: return@installHook
             val state = chain.args.getOrNull(1) as? Int ?: return@installHook
             onExoPlayerStateChanged(player, playWhenReady, state)
-        })
+        }, gated = false)
         ProviderLogger.info(
             "Apple Music Exo 播放意图 Hook 已安装: " +
                 "${playerStateTarget.method.declaringClass.name}#" +
@@ -199,7 +201,7 @@ internal class ApplePlaybackHooks(
                 )
             }
             if (playing) remotePlayer?.seekTo(position)
-        })
+        }, gated = false)
 
         val stateMethod = runtime.hookResolver.resolveMethod(
             AppleMusicHookPoint.LOCAL_MEDIA_PLAYER_CONTROLLER_STATE
@@ -237,7 +239,7 @@ internal class ApplePlaybackHooks(
                     }
                 }
             }
-        })
+        }, gated = false)
     }
 
     fun isPlaying(): Boolean = playing
@@ -295,7 +297,7 @@ internal class ApplePlaybackHooks(
             )
             refreshCurrentQueueItem(chain.thisObject, "ExoMediaPlayer.play")
             startSyncAction()
-        })
+        }, gated = false)
 
         listOf(
             AppleMusicRuntimeMember.EXO_PAUSE_METHOD,
@@ -333,6 +335,7 @@ internal class ApplePlaybackHooks(
                         }
                     }
                 },
+                gated = false,
             )
         }
         ProviderLogger.info("Apple Music 播放生命周期 Hook 已安装")
@@ -508,7 +511,8 @@ internal class ApplePlaybackHooks(
             "setPlaybackState",
             AndroidPlaybackState::class.java,
         )
-        runtime.hookRegistrar.installArgumentRewriteHook(method) { chain ->
+        // 播放态纠偏属于时间线数据路径：入口关闭时仍要避免假暂停中断超级岛/AOD。
+        runtime.hookRegistrar.installArgumentRewriteHook(method, gated = false) { chain ->
             val incoming = chain.args.firstOrNull() as? AndroidPlaybackState
                 ?: return@installArgumentRewriteHook null
             val activePlayer = activePlaybackPlayer

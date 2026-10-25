@@ -18,6 +18,7 @@ internal class ApplePlaybackMetadataHooks(
         val metadataUpdated = runtime.hookResolver.resolveMethod(
             AppleMusicHookPoint.LOCAL_MEDIA_PLAYER_METADATA_UPDATED,
         )
+        // 播放元数据是超级岛/AOD 的数据源，不参与体验优化入口门控。
         runtime.hookRegistrar.installHook(metadataUpdated.method, after = { chain, _ ->
             val mediaPlayer = chain.args.firstOrNull()
             val activePlayer = playbackHooks().activePlayer()
@@ -61,7 +62,7 @@ internal class ApplePlaybackMetadataHooks(
                 publishAsCurrent = publishAsCurrent,
                 refreshPlaybackMetadata = refreshPlaybackMetadata,
             )
-        })
+        }, gated = false)
 
         val indexChanged = runtime.hookResolver.resolveMethod(
             AppleMusicHookPoint.LOCAL_MEDIA_PLAYER_INDEX_CHANGED,
@@ -71,7 +72,7 @@ internal class ApplePlaybackMetadataHooks(
                 chain.args.firstOrNull(),
                 "onPlaybackIndexChanged",
             )
-        })
+        }, gated = false)
         ProviderLogger.info(
             "Apple 播放元数据 Hook 已安装: " +
                 "metadata=${metadataUpdated.target.className}#" +

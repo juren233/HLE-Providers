@@ -156,21 +156,34 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                 activePlayerFn = {
                     if (this::playbackHooks.isInitialized) playbackHooks.activePlayer() else null
                 },
-                configuredContentUiLanguageFn = { catalogLanguage.configuredContentUiLanguage() },
+                configuredContentUiLanguageFn = {
+                    if (AppleMusicOptimizationGate.isEnabled()) {
+                        catalogLanguage.configuredContentUiLanguage()
+                    } else {
+                        AppleMusicPreferenceKeys.APPLE_MUSIC_CONTENT_UI_LANGUAGE_NONE
+                    }
+                },
                 shouldOverrideAccountLanguageFn = { selection ->
-                    catalogLanguage.shouldOverrideAccountLanguage(selection)
+                    AppleMusicOptimizationGate.isEnabled() &&
+                        catalogLanguage.shouldOverrideAccountLanguage(selection)
                 },
                 shouldRestoreCjkOriginalMetadataFn = { metadata ->
-                    catalogLanguage.shouldRestoreCjkOriginalMetadata(metadata)
+                    AppleMusicOptimizationGate.isEnabled() &&
+                        catalogLanguage.shouldRestoreCjkOriginalMetadata(metadata)
                 },
                 ensureContentItemMetadataHooksFn = { contentItemClass ->
-                    inAppMetadata().ensureContentItemMetadataHooks(contentItemClass)
+                    if (AppleMusicOptimizationGate.isEnabled()) {
+                        inAppMetadata().ensureContentItemMetadataHooks(contentItemClass)
+                    }
                 },
                 setMetadataPlaybackMediaIdFn = { mediaId ->
                     inAppMetadata().setMetadataPlaybackMediaId(mediaId)
                 },
                 onCurrentPlaybackItemFn = { mediaId, playbackItem, queueId ->
-                    if (this::missingLyricsHooks.isInitialized) {
+                    if (
+                        AppleMusicOptimizationGate.isEnabled() &&
+                        this::missingLyricsHooks.isInitialized
+                    ) {
                         missingLyricsHooks.onCurrentPlaybackItem(
                             contentSongId = mediaId,
                             item = playbackItem,
@@ -179,19 +192,25 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                     }
                 },
                 effectiveMetadataAliasFn = { mediaId ->
-                    inAppMetadata().effectiveMetadataAlias(mediaId)
+                    if (AppleMusicOptimizationGate.isEnabled()) {
+                        inAppMetadata().effectiveMetadataAlias(mediaId)
+                    } else {
+                        null
+                    }
                 },
                 applyPlaybackMetadataOverrideFn = {
                     mediaId, alias, rememberLocalizedArtist, originalMetadata,
                     originalMetadataConfirmed,
                     ->
-                    inAppMetadata().applyPlaybackMetadataOverride(
-                        mediaId = mediaId,
-                        alias = alias,
-                        rememberLocalizedArtist = rememberLocalizedArtist,
-                        originalMetadata = originalMetadata,
-                        originalMetadataConfirmed = originalMetadataConfirmed,
-                    )
+                    if (AppleMusicOptimizationGate.isEnabled()) {
+                        inAppMetadata().applyPlaybackMetadataOverride(
+                            mediaId = mediaId,
+                            alias = alias,
+                            rememberLocalizedArtist = rememberLocalizedArtist,
+                            originalMetadata = originalMetadata,
+                            originalMetadataConfirmed = originalMetadataConfirmed,
+                        )
+                    }
                 },
                 logMetadataIdentityFn = { event, details ->
                     inAppMetadata().logMetadataIdentity(
@@ -200,19 +219,25 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                     )
                 },
                 shouldShareOriginalSongLanguageFn = { localizedTitle, localizedArtist, alias ->
-                    inAppMetadata().shouldShareOriginalSongLanguage(
-                        localizedTitle = localizedTitle,
-                        localizedArtist = localizedArtist,
-                        alias = alias,
-                    )
+                    AppleMusicOptimizationGate.isEnabled() &&
+                        inAppMetadata().shouldShareOriginalSongLanguage(
+                            localizedTitle = localizedTitle,
+                            localizedArtist = localizedArtist,
+                            alias = alias,
+                        )
                 },
                 rememberOriginalLanguageForArtistFn = { mediaId, language ->
-                    inAppMetadata().rememberOriginalLanguageForArtist(
-                        mediaId,
-                        language,
-                    )
+                    if (AppleMusicOptimizationGate.isEnabled()) {
+                        inAppMetadata().rememberOriginalLanguageForArtist(
+                            mediaId,
+                            language,
+                        )
+                    }
                 },
-                isRestoreOriginalMetadataEnabledFn = { catalogLanguage.isRestoreCjkOriginalMetadataEnabled() },
+                isRestoreOriginalMetadataEnabledFn = {
+                    AppleMusicOptimizationGate.isEnabled() &&
+                        catalogLanguage.isRestoreCjkOriginalMetadataEnabled()
+                },
             ),
         )
         debugNetworkHooks = AppleDebugNetworkHooks(runtime)

@@ -110,6 +110,7 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
     appleLyricsLoadMethod = load.method
     hookRegistrar.installHook(load.method, before = { chain ->
         val item = chain.args.firstOrNull() ?: return@installHook
+        val optimizationEnabled = AppleMusicOptimizationGate.isEnabled()
         val requester = lyricRequester()
         val requestSource = if (requester.ownsViewModel(chain.thisObject)) {
             APPLE_LYRICS_REQUEST_SOURCE_MODULE
@@ -126,7 +127,7 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
         val tracksNativeRequest = requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE ||
             (requestSource == APPLE_LYRICS_REQUEST_SOURCE_MODULE &&
                 !loadedSongId.isNullOrBlank() && loadedSongId == moduleRequestSongId)
-        if (tracksNativeRequest) {
+        if (optimizationEnabled && tracksNativeRequest) {
             missingLyricsSupplement().onNativeLyricsRequestStarted(loadedSongId)
             chain.thisObject?.let { viewModel ->
                 loadedSongId?.let { songId ->
@@ -146,8 +147,10 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
                 presentationBinding.selectSong(loadedSongId)
             }
             playbackBinding.rememberLoad(chain.thisObject, item)
-            missingLyricsSupplement().onLyricsItem(item)
-        } else {
+            if (optimizationEnabled) {
+                missingLyricsSupplement().onLyricsItem(item)
+            }
+        } else if (optimizationEnabled) {
             // 旧版缓存没有 lyricsSource；若模块请求后 Apple 原生链仍未产出，延迟迁移为补充歌词。
             loadedSongId?.takeIf(String::isNotBlank)?.let { songId ->
                 scheduleLegacyModuleCachePromotion(songId)
@@ -174,7 +177,7 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
             "loadLyrics：source=$requestSource, id=$loadedSongId, queueId=$queueId, " +
                 "language=$language, nativeTracked=$tracksNativeRequest"
         )
-    })
+    }, gated = false)
 
     val buildMethod = hookResolver.resolveMethod(
         AppleMusicHookPoint.LYRICS_VIEW_MODEL_BUILD
@@ -187,8 +190,10 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
                 pointer,
                 AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD,
             ) ?: return@installHook
-            ensureAppleLyricTextHooks(songNative)
-            applyAppleNativeSupplementSelection(songNative)
+            if (AppleMusicOptimizationGate.isEnabled()) {
+                ensureAppleLyricTextHooks(songNative)
+                applyAppleNativeSupplementSelection(songNative)
+            }
             logApplePronunciationModelState(
                 stage = "build_before",
                 viewModel = chain.thisObject,
@@ -202,6 +207,7 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
                 pointer,
                 AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD,
             )
+            val optimizationEnabled = AppleMusicOptimizationGate.isEnabled()
             val requester = lyricRequester()
             val requestSource = if (requester.ownsViewModel(chain.thisObject)) {
                 APPLE_LYRICS_REQUEST_SOURCE_MODULE
@@ -266,6 +272,7 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
                     trigger = "build",
                 )
                 if (
+                    optimizationEnabled &&
                     requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE &&
                     !resolvedSongId.isNullOrBlank() &&
                     resolvedSongId == currentAppleLyricsSongId
@@ -273,7 +280,9 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
                     onlineSourceMenuHooks().refreshActiveMenu(resolvedSongId)
                 }
             }
-            applyConfiguredContentUiLanguageCallback()
+            if (optimizationEnabled) {
+                applyConfiguredContentUiLanguageCallback()
+            }
             val onlineTranslation = resolvedSongId?.let(::hasAnyOnlineTranslation) == true
             val onlinePronunciation =
                 resolvedSongId?.let(nativeOnlineTranslationStore::hasPronunciation) == true
@@ -282,6 +291,7 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
             // 补充歌词有自己的 requestMissingLyricsPresentationRefresh 收尾；
             // Apple 的 R2 轨道刷新会反复重绑 adapter 并引起歌词页抽搐。
             if (
+                optimizationEnabled &&
                 !supplementPointer &&
                 ApplePronunciationPolicy.shouldRefreshPresentationAfterBuild(
                     sourceIsApple = contentSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE,
@@ -300,7 +310,8 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
                 )
                 refreshAppleLyricsSupplementPresentation(resolvedSongId)
             }
-        }
+        },
+        gated = false,
     )
     ProviderLogger.debug("歌词构建 Hook 已安装")
 }

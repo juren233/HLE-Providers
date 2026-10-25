@@ -74,7 +74,7 @@ internal object AppleMusicProviderOrchestrator {
             ProviderLogger.info("Apple Music 内置歌词提供器生命周期 Hook 已存在")
             return
         }
-        AppleProviderEnvironment.attach(host)
+        AppleProviderEnvironment.attach(host, host.pluginVersionCode)
         runCatching { ChineseUtils.setModuleApkPath(host.moduleApkPath) }
             .onFailure { ProviderLogger.error("繁简字典路径初始化失败", it) }
         runtime = AppleMusicProviderRuntime(host, classLoader)

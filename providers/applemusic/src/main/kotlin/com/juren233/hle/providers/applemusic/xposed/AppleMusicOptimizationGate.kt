@@ -14,8 +14,8 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * Apple Music 体验优化入口的运行时门控。
  *
- * 入口关闭时，Apple Music 内的功能 Hook 回调一律让位给原生实现（等价于未安装），
- * 但功能自身的设置原样保留，重新打开入口后立即恢复，不会丢失关闭前的配置。
+ * 只门控体验优化 Hook：播放、元数据和歌词数据路径显式 `gated = false`，
+ * 入口关闭时仍向超级岛/AOD 供给内容；功能自身的设置原样保留，重新打开入口后立即恢复。
  */
 internal object AppleMusicOptimizationGate {
     /** 缓存的入口状态：Hook 回调位于歌词热路径，不逐次读取远程偏好。 */
