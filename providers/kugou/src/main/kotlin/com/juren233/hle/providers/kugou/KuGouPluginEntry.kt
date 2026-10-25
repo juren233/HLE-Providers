@@ -17,8 +17,6 @@ import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodQuery
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexMethodsCallback
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeReference
-import com.juren233.hyperlyricsenhanced.provider.OfficialProviderDexTypeSource
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderHost
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMetadataCallback
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderMethodCallback
@@ -99,9 +97,17 @@ object KuGouPluginEntry : OfficialProviderPlugin {
             currentRuntime.start()
             currentRuntime.scheduleLyricFileHookRegistration()
             runCatching {
+                val versionCode = installedVersionCode(application, host.packageName)
+                if (host.packageName == FULL_PACKAGE) {
+                    Log.i(
+                        TAG,
+                        "酷狗下一首档案: versionCode=$versionCode " +
+                            "verifiedAgainst=${KuGouNextTrackProfiles.fullProfileFor(versionCode).verifiedAgainst}",
+                    )
+                }
                 host.resolveDexMethods(
                     application = application,
-                    queries = nextTrackQueriesFor(host.packageName),
+                    queries = nextTrackQueriesFor(host.packageName, versionCode),
                     callback = OfficialProviderDexMethodsCallback { targets ->
                         currentRuntime.installNextTrackResolver(targets)
                     },
@@ -128,67 +134,21 @@ object KuGouPluginEntry : OfficialProviderPlugin {
         )
     }
 
-    internal fun nextTrackQueriesFor(packageName: String): List<OfficialProviderDexMethodQuery> {
+    internal fun nextTrackQueriesFor(
+        packageName: String,
+        versionCode: Long?,
+    ): List<OfficialProviderDexMethodQuery> {
         val full = packageName == FULL_PACKAGE
         require(full || packageName == LITE_PACKAGE) { "Unsupported KuGou package: $packageName" }
-        val managerClass = "com.kugou.framework.service.KGPlayerManager"
-        val queueManagerClass = "com.kugou.common.player.manager.QueuePlayerManager"
-        val mediaInterface = "com.kugou.common.player.manager.IMedia"
-        val managerType = OfficialProviderDexTypeReference(
-            queryCacheKey = if (full) "kugou-full-player-singleton-v3" else
-                "kugou-lite-player-singleton-v3",
-            source = OfficialProviderDexTypeSource.RETURN_TYPE,
-        )
-        val nextMediaQuery = if (full) {
-            // KuGou full 20.7.5 DEX: QueuePlayerManager.k() -> IMedia reads the next
-            // item through PlayQueue.w():int and PlayQueue.v(int):Object. Unlike Lite,
-            // the full APK defines no method named getNextMedia in any classes*.dex,
-            // so the Lite caller anchor must never be reused here.
-            OfficialProviderDexMethodQuery(
-                cacheKey = "kugou-full-next-media-v2",
-                preferredTarget = OfficialProviderMethodTarget(
-                    className = queueManagerClass,
-                    methodName = "k",
-                    returnTypeName = mediaInterface,
-                    isStatic = false,
-                ),
-                declaringClassName = queueManagerClass,
-                requiredInvokedMethodNames = listOf("w", "v"),
-                parameterTypeNames = emptyList(),
-                returnTypeName = mediaInterface,
-                isStatic = false,
-            )
-        } else {
-            // Original KuGou Lite 5.2.4 DEX proves k() reads the current item through
-            // PlayQueue.n(). The real next implementation is currently P0(), but its
-            // stable bridge getNextMedia() calls it. Resolve by that caller relationship
-            // so a future obfuscation rename cannot silently turn the current item into next.
-            OfficialProviderDexMethodQuery(
-                cacheKey = "kugou-lite-next-media-v2",
-                declaringClassName = queueManagerClass,
-                requiredCallerMethodNames = listOf("getNextMedia"),
-                parameterTypeNames = emptyList(),
-                returnTypeName = mediaInterface,
-                isStatic = false,
-            )
-        }
-        return listOf(
-            OfficialProviderDexMethodQuery(
-                cacheKey = managerType.queryCacheKey,
-                preferredTarget = OfficialProviderMethodTarget(
-                    className = managerClass,
-                    methodName = if (full) "K4" else "c4",
-                    returnTypeName = managerClass,
-                    isStatic = true,
-                ),
-                declaringClassName = managerClass,
-                parameterTypeNames = emptyList(),
-                returnTypeName = managerClass,
-                isStatic = true,
-            ),
-            nextMediaQuery,
-        )
+        return KuGouNextTrackProfiles.queriesFor(full = full, versionCode = versionCode)
     }
+
+    private fun installedVersionCode(application: Application, packageName: String): Long? =
+        runCatching {
+            application.packageManager.getPackageInfo(packageName, 0).longVersionCode
+        }.onFailure { error ->
+            Log.w(TAG, "读取酷狗版本号失败，下一首查询按最新档案: package=$packageName", error)
+        }.getOrNull()
 
     internal fun lyricFileQuery(): OfficialProviderDexMethodQuery = OfficialProviderDexMethodQuery(
         cacheKey = "kugou-lyric-file-load-v1",
@@ -439,8 +399,10 @@ object KuGouPluginEntry : OfficialProviderPlugin {
                 mainHandler.removeCallbacks(periodicNextTrackCapture)
                 nextTrackResolver = null
                 nextTrackValidation.reset()
-                nextTrackValidationKeys = nextTrackQueriesFor(host.packageName)
-                    .map { it.cacheKey }
+                nextTrackValidationKeys = nextTrackQueriesFor(
+                    host.packageName,
+                    installedVersionCode(application, host.packageName),
+                ).map { it.cacheKey }
                 val resolver = runCatching {
                     KuGouNextTrackResolver.create(application, targets)
                 }.onFailure { error ->
