@@ -1,0 +1,40 @@
+name: Pairing Result
+
+# 检查跑完后，把结果（通过 / 失败 / 运行中，失败时附固定的修复提示）写进 PR 上那条机器人评论。
+# workflow_run 在默认分支上运行，可带 Secret 和写评论的令牌，所以必须遵守：
+#   1. 不检出、不运行 PR 里的任何代码（本工作流不检出本仓库，只取核心仓库 main 上的脚本）；
+#   2. 评论里不转载检查日志或注释里的文本，只用 GitHub 返回的状态和脚本里的固定文案；
+#   3. 触发运行的分支名、提交号只当数据，通过环境变量交给脚本。
+# 逻辑集中在核心仓库的 scripts/pairing_notify.py，两个仓库的工作流运行的是同一份脚本。
+on:
+  workflow_run:
+    # 名称需与 pr-check.yml 的 name 一致，并与脚本里 SIDES["providers"]["checks"] 保持同步
+    workflows: ["PR Check"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+# 与 pairing-notify.yml 同组，保证同一提交上的评论更新依次执行。
+concurrency:
+  group: pairing-comment-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch notifier script from core repository
+        run: git clone --quiet --depth 1 https://github.com/juren233/HyperLyrics-Enhanced.git "$RUNNER_TEMP/core"
+      - name: Update the result in the PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+        run: python3 "$RUNNER_TEMP/core/scripts/pairing_notify.py" --side providers --event workflow_run

@@ -1,0 +1,12 @@
+* @juren233
+
+# 影响签名、发布与目录
+/.github/ @juren233
+/keys/ @juren233
+/scripts/ @juren233
+/catalog/ @juren233
+
+# 核心仓库的共享副本
+/providers/*/src/main/kotlin/com/juren233/hyperlyricsenhanced/provider/OfficialProviderPluginApi.kt @juren233
+/providers/applemusic/src/main/kotlin/com/juren233/hyperlyricsenhanced/ @juren233
+/providers/applemusic/src/main/aidl/com/juren233/hyperlyricsenhanced/ @juren233
