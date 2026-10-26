@@ -11,13 +11,19 @@ android {
         applicationId = "com.juren233.hle.providers.pack.applemusic"
         minSdk = 33
         targetSdk = 37
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.0.4"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            // AGP rejects the non-optimize default file; optimization itself is turned off
+            // by -dontoptimize in proguard-rules.pro.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 

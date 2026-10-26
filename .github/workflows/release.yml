@@ -119,6 +119,19 @@ jobs:
           gh release edit "$release_tag" \
             --title "$display_name Provider $version_name" \
             --notes "HyperLyrics Enhanced 官方 $display_name Provider 插件包。"
+      # R8 开启后 Pack 的栈追踪是混淆的；mapping.txt 只对产出它的那次构建有效，随 Release 留存。
+      - name: Attach R8 mapping to the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          provider='${{ steps.pack.outputs.provider }}'
+          version_name='${{ steps.pack.outputs.version_name }}'
+          release_tag='${{ steps.pack.outputs.release_tag }}'
+          mapping="providers/$provider/build/outputs/mapping/release/mapping.txt"
+          if [ -f "$mapping" ]; then
+            cp "$mapping" "mapping-$provider-$version_name.txt"
+            gh release upload "$release_tag" "mapping-$provider-$version_name.txt" --clobber
+          fi
       - name: Update signed provider catalog
         run: |
           provider='${{ steps.pack.outputs.provider }}'
