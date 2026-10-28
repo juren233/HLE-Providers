@@ -663,6 +663,16 @@ internal class AppleMissingLyricsStore {
     fun sourceInfo(songId: String?): AppleMissingLyricsSourceInfo? =
         content?.takeIf { it.songId == songId }?.sourceInfo
 
+    /** 仅诊断：翻译查询未命中时，说明当前内容是否存在、有多少行带翻译、最接近的行。 */
+    fun translationMissDiagnostic(songId: String?, begin: Long, end: Long): String {
+        val current = content ?: return "无补充内容"
+        if (current.songId != songId) return "内容歌曲=${current.songId}与请求不符"
+        val translated = current.lines.count { !it.translation.isNullOrBlank() }
+        val nearest = current.lines.minByOrNull { kotlin.math.abs(it.begin - begin) }
+        return "内容行=${current.lines.size}, 带翻译=$translated, 翻译来源=${current.translationSource}, " +
+            "最近行=${nearest?.begin}-${nearest?.end}(翻译=${!nearest?.translation.isNullOrBlank()})"
+    }
+
     private fun Content.debugFingerprint(): String =
         "lines=${lines.size},words=${lines.sumOf { it.words.size }}," +
             "base=${lines.baseFingerprint()},word=${lines.wordFingerprint()}," +

@@ -42,7 +42,26 @@ internal fun AppleMissingLyricsHooks.translationForLine(
     begin: Long,
     end: Long,
     text: String?,
-): String? = store.translation(resolveSupplementContentId(songId), begin, end, text)
+): String? {
+    val contentId = resolveSupplementContentId(songId)
+    val translation = store.translation(contentId, begin, end, text)
+    if (AppleProviderEnvironment.diagnosticsEnabled) {
+        val outcome = if (translation.isNullOrBlank()) "miss" else "hit"
+        val seen = translationQueryDiagnostics.getOrPut("$contentId:$outcome") { java.util.concurrent.atomic.AtomicInteger() }
+        // 每首歌、每种结果只记前 3 次，避免逐行刷屏。
+        if (seen.incrementAndGet() <= 3) {
+            ProviderLogger.diagnostic(
+                "补充翻译查询: id=$songId, 内容id=$contentId, 结果=$outcome, 请求=$begin-$end, " +
+                    "文本长度=${text?.length ?: 0}" +
+                    if (outcome == "miss") ", ${store.translationMissDiagnostic(contentId, begin, end)}" else ""
+            )
+        }
+    }
+    return translation
+}
+
+private val translationQueryDiagnostics =
+    java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
 
 internal fun AppleMissingLyricsHooks.sourceInfo(songId: String?): AppleMissingLyricsSourceInfo? {
     songId?.takeIf(String::isNotBlank)?.let(::restoreCachedSupplement)
@@ -57,6 +76,14 @@ internal fun AppleMissingLyricsHooks.availableLyricsSources(songId: String?): Li
     val contentSongId = songId?.takeIf(String::isNotBlank) ?: return emptyList()
     val info = sourceInfo(contentSongId) ?: return emptyList()
     val ttmlCatalogAvailable = hasTtmlCatalogSource(contentSongId)
+    val nativeStats = nativeLyricsTimingStats(contentSongId)
+    ProviderLogger.diagnostic(
+        "歌词来源菜单候选: id=$contentSongId, 来源状态=${info.statuses.joinToString(";") { 
+            "${it.source}:searched=${it.searched},found=${it.found},wordTimed=${it.wordTimed},lines=${it.lineCount}"
+        }}, 目录源可用=$ttmlCatalogAvailable, 原生逐字=${nativeStats?.isWordTimed}, " +
+            "原生行数=${nativeStats?.lineCount}, 原生逐字行数=${nativeStats?.wordTimedLineCount}, " +
+            "开关=${isLineToWordLyricsEnabled()}"
+    )
     val foundSources = info.statuses
         .filter { status ->
             status.found && (!Source.isTtmlCatalogName(status.source) || ttmlCatalogAvailable)
