@@ -237,7 +237,7 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
                     nativeStore = isNativeOnlineTranslationEnabled() &&
                         nativeOnlineTranslationStore.hasTranslation(songId),
                     supplement = missingLyricsSupplement().hasTranslation(songId),
-                    lunaBeat = missingLyricsSupplement().hasLunaBeatSource(songId),
+                    ttmlCatalog = missingLyricsSupplement().hasTtmlCatalogSource(songId),
                     resolved = resolved,
                     songNative = chain.thisObject,
                 )

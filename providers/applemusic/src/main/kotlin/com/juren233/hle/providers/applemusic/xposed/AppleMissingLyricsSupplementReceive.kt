@@ -16,6 +16,7 @@ import com.juren233.hyperlyricsenhanced.contract.AppleMusicPreferenceKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceInfo
 import com.juren233.hyperlyricsenhanced.common.lyric.ChineseLyricsPolicy
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.online.model.Source
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderCall
 import com.juren233.hle.providers.applemusic.xposed.internal.ThreadLocalStack
 import java.lang.ref.WeakReference
@@ -31,8 +32,8 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
     val receiveStartedAtNanos = SystemClock.elapsedRealtimeNanos()
     val incomingLines = song.lyrics.orEmpty()
     val incomingWordLines = incomingLines.count { it.words.orEmpty().size >= 2 }
-    val lunaBeatSupplement = isLunaBeatSupplement(song) &&
-        isLunaBeatEligibleForSong(
+    val ttmlCatalogSupplement = isTtmlCatalogSupplement(song) &&
+        isTtmlCatalogEligibleForSong(
             songId = songId,
             sourceInfo = song.metadata?.let { metadata ->
                 com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceMetadata.decode(
@@ -59,7 +60,7 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
         details = "wordLines=$incomingWordLines,thread=${Thread.currentThread().name}",
     )
     nativeTakeoverGate.observe(songId)
-    if (hasKnownNativeLyrics(songId) && !lunaBeatSupplement) {
+    if (hasKnownNativeLyrics(songId) && !ttmlCatalogSupplement) {
         ProviderLogger.info(
             "Apple Music 无歌词补充被原生歌词拒绝: id=$songId, " +
                 "reason=native_lyrics_present"
@@ -67,7 +68,7 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
         discardSupplementForConfirmedNativeLyrics(songId)
         return
     }
-    if (lunaBeatSupplement) {
+    if (ttmlCatalogSupplement) {
         candidates.accept(songId)
     }
     val storeUpdateStartedAtNanos = SystemClock.elapsedRealtimeNanos()
@@ -230,10 +231,11 @@ internal fun AppleMissingLyricsHooks.restoreCachedSupplement(songId: String) {
     }
     // 全中文翻译门禁同样适用于磁盘恢复：旧版本构建写入的缓存可能携带在线假翻译。
     val cached = stripFullyChineseTranslations(loaded)
-    val cachedIsLunaBeat = cached.metadata
-        ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE) ==
-        AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT
-    val cachedLunaBeatEligible = cachedIsLunaBeat && isLunaBeatEligibleForSong(
+    val cachedIsTtmlCatalog = Source.isTtmlCatalogName(
+        cached.metadata
+            ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE)
+    )
+    val cachedTtmlCatalogEligible = cachedIsTtmlCatalog && isTtmlCatalogEligibleForSong(
         songId = songId,
         sourceInfo = cached.metadata?.let { metadata ->
             com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceMetadata.decode(
@@ -247,7 +249,7 @@ internal fun AppleMissingLyricsHooks.restoreCachedSupplement(songId: String) {
         },
         lineCountOverride = cached.lyrics.orEmpty().size,
     )
-    if (hasKnownNativeLyrics(songId) && !cachedLunaBeatEligible) {
+    if (hasKnownNativeLyrics(songId) && !cachedTtmlCatalogEligible) {
         DiskSongManager.deleteMissingLyrics(songId)
         ProviderLogger.debug(
             "Apple Music 无歌词补充磁盘缓存被原生歌词拒绝: id=$songId"
@@ -256,7 +258,7 @@ internal fun AppleMissingLyricsHooks.restoreCachedSupplement(songId: String) {
     }
     nativeTakeoverGate.observe(songId)
     if (!store.update(cached)) return
-    if (cachedLunaBeatEligible) candidates.accept(songId)
+    if (cachedTtmlCatalogEligible) candidates.accept(songId)
     ProviderLogger.info(
         "Apple Music 无歌词补充已从磁盘恢复: id=$songId, " +
             "lines=${cached.lyrics.orEmpty().size}"
@@ -267,9 +269,10 @@ internal fun AppleMissingLyricsHooks.restoreCachedSupplement(songId: String) {
 internal fun AppleMissingLyricsHooks.onPreferenceChanged() {
     candidates.resetRestoreAttempts()
     val currentSongId = currentPlaybackQueueMediaId()
-    val currentIsLunaBeat = store.sourceInfo(store.contentSongId())
-        ?.selectedSource == AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT
-    if (!isLunaBeatWordLyricsEnabled() && currentIsLunaBeat) {
+    val currentIsTtmlCatalog = Source.isTtmlCatalogName(
+        store.sourceInfo(store.contentSongId())?.selectedSource
+    )
+    if (!isLineToWordLyricsEnabled() && currentIsTtmlCatalog) {
         currentSongId?.let {
             lyricsSourceSelection.remove(it)
             candidates.revokeAcceptance(it)
@@ -389,7 +392,7 @@ internal fun AppleMissingLyricsHooks.buildNativeLyricsModel(key: AppleMissingLyr
     if (!isEnabled() || key.contentRevision != store.revision()) return
     if (!candidates.isAccepted(songId)) return
     if (!store.isCurrentIdentity(identity)) return
-    if (hasKnownNativeLyrics(songId, identity.adamId) && !shouldPreferLunaBeat(songId)) {
+    if (hasKnownNativeLyrics(songId, identity.adamId) && !shouldPreferTtmlCatalog(songId)) {
         ProviderLogger.debug(
             "Apple Music 无歌词补充跳过原生模型构建: reason=native_lyrics_present"
         )
@@ -403,7 +406,7 @@ internal fun AppleMissingLyricsHooks.buildNativeLyricsModel(key: AppleMissingLyr
     val ttml = nativeTtml.content
     AppleSourceSwitchPerformanceDiagnostics.record(
         songId = songId,
-        event = if (nativeTtml.kind == AppleMissingLyricsNativeTtmlKind.LUNA_BEAT_RAW) {
+        event = if (nativeTtml.kind == AppleMissingLyricsNativeTtmlKind.TTML_CATALOG_RAW) {
             "raw_ttml_selected"
         } else {
             "ttml_build"

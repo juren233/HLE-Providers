@@ -71,7 +71,7 @@ internal fun AppleMissingLyricsHooks.recordAppleNativePresentationResult(pointer
 
 /**
  * 原生歌词模型入参改写（I2 结果消费与 buildTimeRangeToLyricsMap 共用）：
- * 普通补充仅在 Apple 没有原生歌词时改写；LunaBeat 被选中时允许用其逐字模型
+ * 普通补充仅在 Apple 没有原生歌词时改写；TtmlCatalog 被选中时允许用其逐字模型
  * 替换 Apple 原生模型，并保留原生指针供用户临时切回。
  */
 internal fun AppleMissingLyricsHooks.rewriteNativeModelArgs(chain: OfficialProviderCall): Array<Any?>? {
@@ -80,7 +80,7 @@ internal fun AppleMissingLyricsHooks.rewriteNativeModelArgs(chain: OfficialProvi
     val songId = currentPlaybackQueueMediaId()?.takeIf(String::isNotBlank)
         ?: currentSupplementSongId()
     if (isSupplementPointer(originalPointer)) {
-        if (shouldPreferLunaBeat(songId)) return null
+        if (shouldPreferTtmlCatalog(songId)) return null
         val nativePointer = songId?.let { nativeAlternatives.pointer(it) }
             ?.takeIf { readNativeLineCount(it) > 0 }
             ?: return null
@@ -94,8 +94,8 @@ internal fun AppleMissingLyricsHooks.rewriteNativeModelArgs(chain: OfficialProvi
     if (hasNativeLyrics && !songId.isNullOrBlank()) {
         nativeAlternatives.rememberPointer(songId, requireNotNull(originalPointer))
     }
-    // LunaBeat 被临时选择时允许替换 Apple 原生模型；其他补充来源仍只服务无歌词歌曲。
-    if (hasNativeLyrics && !shouldPreferLunaBeat(songId)) return null
+    // TTML 目录源被临时选择时允许替换 Apple 原生模型；其他补充来源仍只服务无歌词歌曲。
+    if (hasNativeLyrics && !shouldPreferTtmlCatalog(songId)) return null
     val supplementPointer = supplementPointerForInjection() ?: return null
     ProviderLogger.debug(
         "Apple Music 无歌词补充注入原生模型: " +
@@ -111,7 +111,7 @@ internal fun AppleMissingLyricsHooks.supplementPointerForInjection(): Any? {
         ?: return null
     if (!candidates.isAccepted(songId)) return null
     val identity = store.playbackIdentity(songId) ?: return null
-    if (hasKnownNativeLyrics(songId, identity.adamId) && !shouldPreferLunaBeat(songId)) return null
+    if (hasKnownNativeLyrics(songId, identity.adamId) && !shouldPreferTtmlCatalog(songId)) return null
     val pointer = store.nativeSongInfoPointer(songId) ?: return null
     if (!store.hasContent(songId)) return null
     return pointer

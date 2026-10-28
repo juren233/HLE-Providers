@@ -230,7 +230,8 @@ internal fun AppleOnlineSourceMenuHooks.requestOnlineSourceSwitch(
 
 internal fun AppleOnlineSourceMenuHooks.sourceMenuSourceName(source: String): String = when (source) {
     APPLE_NATIVE_SOURCE -> "Apple Music 原生歌词"
-    LUNA_BEAT_SOURCE -> "LunaBeat TTML歌词站"
+    "LB" -> "LunaBeat"
+    "AMLL" -> "AMLL"
     "NE" -> "网易云音乐"
     "QM" -> "QQ音乐"
     "KUWO" -> "酷我音乐"
@@ -509,6 +510,5 @@ internal fun AppleOnlineSourceMenuHooks.debugViewTree(root: View?): String {
     internal const val ONLINE_SOURCE_SWITCH_TIMEOUT_MS = 15_000L
     internal const val ONLINE_SOURCE_SWITCH_FAILURE_FEEDBACK_MS = 2_000L
     internal const val APPLE_NATIVE_SOURCE = "APPLE"
-    internal const val LUNA_BEAT_SOURCE = "LB"
     internal val DEFAULT_SOURCE_ORDER = listOf("NE", "QM", "KUWO", "KUGOU")
     internal val SOURCE_ORDER = DEFAULT_SOURCE_ORDER

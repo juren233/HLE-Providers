@@ -25,9 +25,11 @@ object LyricMetadataKeys {
     const val APPLE_MISSING_LYRICS_SUPPLEMENT = "appleMissingLyricsSupplement"
     const val APPLE_MISSING_LYRICS_SOURCE = "appleMissingLyricsSource"
     const val APPLE_MISSING_LYRICS_SOURCE_STATUSES = "appleMissingLyricsSourceStatuses"
-    const val LUNA_BEAT_RAW_TTML = "lunaBeatRawTtml"
-    const val LUNA_BEAT_HUB_ID = "lunaBeatHubId"
-    const val LUNA_BEAT_TTML_SHA256 = "lunaBeatTtmlSha256"
+    // The wire values predate AMLL and still read "lunaBeat*": songs cached by earlier builds
+    // carry them, so only the Kotlin names are source-neutral.
+    const val TTML_SOURCE_RAW = "lunaBeatRawTtml"
+    const val TTML_SOURCE_LYRIC_ID = "lunaBeatHubId"
+    const val TTML_SOURCE_SHA256 = "lunaBeatTtmlSha256"
     const val GROUP_VOCALS = "groupVocals"
     const val BACKGROUND_VOCALS_TRANSLATION = "backgroundVocalsTranslation"
     const val CONCURRENT_SECONDARY_ALIGNED_RIGHT = "concurrentSecondaryAlignedRight"

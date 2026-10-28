@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    参数，把补充歌词的 SongInfo 塞进 Apple Music 自己的歌词显示链路，
  *    由原生适配器完成滚动、逐字点亮、模糊与样式渲染。
  *
- * 普通三方补充只服务无原生歌词歌曲；启用 LunaBeat 实验来源并精确命中逐字
+ * 普通三方补充只服务无原生歌词歌曲；启用逐行转逐字并精确命中 TTML 目录源（AMLL、LunaBeat）的逐字
  * TTML 时，可在保留 Apple 原生模型的同时临时切换两者。
  */
 
@@ -51,7 +51,6 @@ internal class AppleMissingLyricsHooks(
 
         object SourceName {
             const val APPLE_NATIVE = "APPLE"
-            const val LUNA_BEAT = "LB"
         }
     }
 
@@ -265,7 +264,7 @@ internal class AppleMissingLyricsHooks(
         val songId = currentSupplementSongId() ?: return
         if (!shouldPresentSupplementOnLyricsPageResume(
                 hasKnownNativeLyrics = hasKnownNativeLyrics(songId),
-                shouldPreferLunaBeat = shouldPreferLunaBeat(songId),
+                shouldPreferTtmlCatalog = shouldPreferTtmlCatalog(songId),
             )
         ) {
             return
@@ -287,7 +286,7 @@ internal class AppleMissingLyricsHooks(
         requestPresentationRefresh(pointer, fragment, currentPlaybackItem(songId))
     }
 
-    fun isEnabled(): Boolean = isFillMissingLyricsEnabled() || isLunaBeatWordLyricsEnabled()
+    fun isEnabled(): Boolean = isFillMissingLyricsEnabled() || isLineToWordLyricsEnabled()
 
     private fun isFillMissingLyricsEnabled(): Boolean =
         preferences()?.getBoolean(
@@ -295,10 +294,10 @@ internal class AppleMissingLyricsHooks(
             AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS,
         ) == true
 
-    internal fun isLunaBeatWordLyricsEnabled(): Boolean =
+    internal fun isLineToWordLyricsEnabled(): Boolean =
         preferences()?.getBoolean(
-            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS,
-            AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS,
+            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LINE_TO_WORD_LYRICS,
+            AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LINE_TO_WORD_LYRICS,
         ) == true
 
     /**
@@ -374,8 +373,8 @@ internal class AppleMissingLyricsHooks(
     }
 
     internal fun takeoverDecision(songId: String): AppleNativeLyricsTakeoverDecision =
-        if (shouldPreferLunaBeat(songId)) {
-            AppleNativeLyricsTakeoverDecision(true, "lunabeat_selected")
+        if (shouldPreferTtmlCatalog(songId)) {
+            AppleNativeLyricsTakeoverDecision(true, "ttml_catalog_selected")
         } else if (hasKnownNativeLyrics(songId)) {
             AppleNativeLyricsTakeoverDecision(false, "native_lyrics_present")
         } else {

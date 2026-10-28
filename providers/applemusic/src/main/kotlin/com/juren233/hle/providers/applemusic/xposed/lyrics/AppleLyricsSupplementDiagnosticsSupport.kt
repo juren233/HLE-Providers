@@ -61,11 +61,11 @@ internal fun AppleLyricsSupplementHooks.logTranslationAvailabilityOverride(
     original: Boolean,
     nativeStore: Boolean,
     supplement: Boolean,
-    lunaBeat: Boolean,
+    ttmlCatalog: Boolean,
     resolved: Boolean,
     songNative: Any?,
 ) {
-    val key = "$method:$songId:$original:$nativeStore:$supplement:$lunaBeat:$resolved"
+    val key = "$method:$songId:$original:$nativeStore:$supplement:$ttmlCatalog:$resolved"
     if (!loggedTranslationAvailabilityKeys.add(key)) return
     if (loggedTranslationAvailabilityKeys.size > 64) loggedTranslationAvailabilityKeys.clear()
     val officialLanguages = songNative?.let { native ->
@@ -81,7 +81,7 @@ internal fun AppleLyricsSupplementHooks.logTranslationAvailabilityOverride(
     ProviderLogger.diagnostic(
         "Apple Music 原生翻译可用性覆盖: method=$method, songId=$songId, " +
             "original=$original, nativeStore=$nativeStore, supplement=$supplement, " +
-            "lunaBeat=$lunaBeat, officialLanguages=$officialLanguages, resolved=$resolved"
+            "ttmlCatalog=$ttmlCatalog, officialLanguages=$officialLanguages, resolved=$resolved"
     )
 }
 

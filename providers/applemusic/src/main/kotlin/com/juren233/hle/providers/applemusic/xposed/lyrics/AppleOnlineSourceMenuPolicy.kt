@@ -81,6 +81,7 @@ internal fun sourceMenuLabel(
         "KUWO" -> "酷我"
         "KUGOU" -> "酷狗"
         "LB" -> "LB"
+        "AMLL" -> "AMLL"
         "APPLE" -> "Apple Music原生"
         else -> "网易"
     }

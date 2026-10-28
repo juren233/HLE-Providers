@@ -33,37 +33,37 @@ import org.junit.Test
 class AppleMissingLyricsStoreTest {
 
     @Test
-    fun `LunaBeat remains preferred when Apple native timing is unknown`() {
+    fun `TtmlCatalog remains preferred when Apple native timing is unknown`() {
         assertTrue(
-            shouldUseLunaBeatOverAppleNativeLyrics(
+            shouldUseTtmlCatalogOverAppleNativeLyrics(
                 nativeStats = null,
-                lunaBeatLineCount = 55,
+                ttmlCatalogLineCount = 55,
             )
         )
     }
 
     @Test
-    fun `LunaBeat remains preferred when Apple native lyrics are line timed`() {
+    fun `TtmlCatalog remains preferred when Apple native lyrics are line timed`() {
         assertTrue(
-            shouldUseLunaBeatOverAppleNativeLyrics(
+            shouldUseTtmlCatalogOverAppleNativeLyrics(
                 nativeStats = AppleNativeLyricsTimingStats(
                     lineCount = 55,
                     wordTimedLineCount = 0,
                 ),
-                lunaBeatLineCount = 55,
+                ttmlCatalogLineCount = 55,
             )
         )
     }
 
     @Test
-    fun `LunaBeat remains preferred when both are word timed but line counts differ`() {
+    fun `TtmlCatalog remains preferred when both are word timed but line counts differ`() {
         assertTrue(
-            shouldUseLunaBeatOverAppleNativeLyrics(
+            shouldUseTtmlCatalogOverAppleNativeLyrics(
                 nativeStats = AppleNativeLyricsTimingStats(
                     lineCount = 87,
                     wordTimedLineCount = 67,
                 ),
-                lunaBeatLineCount = 55,
+                ttmlCatalogLineCount = 55,
             )
         )
     }
@@ -71,32 +71,32 @@ class AppleMissingLyricsStoreTest {
     @Test
     fun `Apple native wins when both are word timed with the same line count`() {
         assertFalse(
-            shouldUseLunaBeatOverAppleNativeLyrics(
+            shouldUseTtmlCatalogOverAppleNativeLyrics(
                 nativeStats = AppleNativeLyricsTimingStats(
                     lineCount = 55,
                     wordTimedLineCount = 55,
                 ),
-                lunaBeatLineCount = 55,
+                ttmlCatalogLineCount = 55,
             )
         )
     }
 
     @Test
-    fun `lyrics page resume re-presents selected LunaBeat over Apple native lyrics`() {
+    fun `lyrics page resume re-presents selected TtmlCatalog over Apple native lyrics`() {
         assertTrue(
             shouldPresentSupplementOnLyricsPageResume(
                 hasKnownNativeLyrics = true,
-                shouldPreferLunaBeat = true,
+                shouldPreferTtmlCatalog = true,
             )
         )
     }
 
     @Test
-    fun `lyrics page resume keeps Apple native lyrics when LunaBeat is not preferred`() {
+    fun `lyrics page resume keeps Apple native lyrics when TtmlCatalog is not preferred`() {
         assertFalse(
             shouldPresentSupplementOnLyricsPageResume(
                 hasKnownNativeLyrics = true,
-                shouldPreferLunaBeat = false,
+                shouldPreferTtmlCatalog = false,
             )
         )
     }
@@ -106,30 +106,30 @@ class AppleMissingLyricsStoreTest {
         assertTrue(
             shouldPresentSupplementOnLyricsPageResume(
                 hasKnownNativeLyrics = false,
-                shouldPreferLunaBeat = false,
+                shouldPreferTtmlCatalog = false,
             )
         )
     }
 
     @Test
-    fun `manual LunaBeat switch presents the existing native pointer instead of rebuilding`() {
+    fun `manual TtmlCatalog switch presents the existing native pointer instead of rebuilding`() {
         assertEquals(
-            AppleLyricsSourcePresentationAction.PRESENT_LUNA_BEAT,
+            AppleLyricsSourcePresentationAction.PRESENT_TTML_CATALOG,
             appleLyricsSourcePresentationAction(
                 source = "LB",
-                hasLunaBeatPointer = true,
+                hasTtmlCatalogPointer = true,
                 hasAppleNativePointer = true,
             )
         )
     }
 
     @Test
-    fun `manual LunaBeat switch builds a pointer only when none exists`() {
+    fun `manual TtmlCatalog switch builds a pointer only when none exists`() {
         assertEquals(
-            AppleLyricsSourcePresentationAction.BUILD_LUNA_BEAT,
+            AppleLyricsSourcePresentationAction.BUILD_TTML_CATALOG,
             appleLyricsSourcePresentationAction(
                 source = "LB",
-                hasLunaBeatPointer = false,
+                hasTtmlCatalogPointer = false,
                 hasAppleNativePointer = true,
             )
         )
@@ -141,7 +141,7 @@ class AppleMissingLyricsStoreTest {
             AppleLyricsSourcePresentationAction.PRESENT_APPLE_NATIVE,
             appleLyricsSourcePresentationAction(
                 source = "APPLE",
-                hasLunaBeatPointer = true,
+                hasTtmlCatalogPointer = true,
                 hasAppleNativePointer = true,
             )
         )
@@ -153,17 +153,17 @@ class AppleMissingLyricsStoreTest {
             AppleLyricsSourcePresentationAction.REFRESH_ONLY,
             appleLyricsSourcePresentationAction(
                 source = "APPLE",
-                hasLunaBeatPointer = true,
+                hasTtmlCatalogPointer = true,
                 hasAppleNativePointer = false,
             )
         )
     }
 
     @Test
-    fun `Apple native presentation retains an enabled LunaBeat alternative`() {
+    fun `Apple native presentation retains an enabled TtmlCatalog alternative`() {
         assertTrue(
-            shouldRetainLunaBeatAlternativeAfterNativePresentation(
-                lunaBeatEnabled = true,
+            shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
+                ttmlCatalogEnabled = true,
                 storedSourceInfo = AppleMissingLyricsSourceInfo(
                     selectedSource = "LB",
                     statuses = listOf(
@@ -183,8 +183,8 @@ class AppleMissingLyricsStoreTest {
     @Test
     fun `Apple native presentation clears an ordinary missing lyrics supplement`() {
         assertFalse(
-            shouldRetainLunaBeatAlternativeAfterNativePresentation(
-                lunaBeatEnabled = true,
+            shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
+                ttmlCatalogEnabled = true,
                 storedSourceInfo = AppleMissingLyricsSourceInfo(
                     selectedSource = "NE",
                     statuses = listOf(
@@ -202,10 +202,10 @@ class AppleMissingLyricsStoreTest {
     }
 
     @Test
-    fun `Apple native presentation clears LunaBeat after the feature is disabled`() {
+    fun `Apple native presentation clears TtmlCatalog after the feature is disabled`() {
         assertFalse(
-            shouldRetainLunaBeatAlternativeAfterNativePresentation(
-                lunaBeatEnabled = false,
+            shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
+                ttmlCatalogEnabled = false,
                 storedSourceInfo = AppleMissingLyricsSourceInfo(
                     selectedSource = "LB",
                     statuses = listOf(
@@ -223,11 +223,11 @@ class AppleMissingLyricsStoreTest {
     }
 
     @Test
-    fun `stored LunaBeat remains visible in the source menu while Apple is active`() {
+    fun `stored TtmlCatalog remains visible in the source menu while Apple is active`() {
         assertTrue(
             shouldShowStoredSupplementSourceMenu(
                 normalSupplementMenu = false,
-                lunaBeatEnabled = true,
+                ttmlCatalogEnabled = true,
                 storedSourceInfo = AppleMissingLyricsSourceInfo(
                     selectedSource = "LB",
                     statuses = listOf(
@@ -249,7 +249,7 @@ class AppleMissingLyricsStoreTest {
         assertFalse(
             shouldShowStoredSupplementSourceMenu(
                 normalSupplementMenu = false,
-                lunaBeatEnabled = true,
+                ttmlCatalogEnabled = true,
                 storedSourceInfo = AppleMissingLyricsSourceInfo(
                     selectedSource = "NE",
                     statuses = listOf(
@@ -271,7 +271,7 @@ class AppleMissingLyricsStoreTest {
         assertTrue(
             shouldShowStoredSupplementSourceMenu(
                 normalSupplementMenu = true,
-                lunaBeatEnabled = false,
+                ttmlCatalogEnabled = false,
                 storedSourceInfo = null,
             )
         )
@@ -1125,7 +1125,7 @@ class AppleMissingLyricsStoreTest {
         assertEquals(0, store.lines("song-B").size)
     }
     @Test
-    fun `LunaBeat raw TTML survives transport and is selected unchanged`() {
+    fun `TtmlCatalog raw TTML survives transport and is selected unchanged`() {
         val rawTtml = """<tt xmlns="http://www.w3.org/ns/ttml"
             xmlns:itunes="http://music.apple.com/lyric-ttml-internal"
             xmlns:ttm="http://www.w3.org/ns/ttml#metadata" itunes:timing="Word">
@@ -1136,9 +1136,9 @@ class AppleMissingLyricsStoreTest {
             duration = 3_000L,
             metadata = lyricMetadataOf(
                 LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE to "LB",
-                LyricMetadataKeys.LUNA_BEAT_RAW_TTML to rawTtml,
-                LyricMetadataKeys.LUNA_BEAT_HUB_ID to "hub-id",
-                LyricMetadataKeys.LUNA_BEAT_TTML_SHA256 to sha256(rawTtml),
+                LyricMetadataKeys.TTML_SOURCE_RAW to rawTtml,
+                LyricMetadataKeys.TTML_SOURCE_LYRIC_ID to "hub-id",
+                LyricMetadataKeys.TTML_SOURCE_SHA256 to sha256(rawTtml),
             ),
             lyrics = listOf(
                 RichLyricLine(
@@ -1163,7 +1163,7 @@ class AppleMissingLyricsStoreTest {
         assertTrue(store.update(transported))
         val selected = requireNotNull(store.nativeTtml("lb-raw"))
 
-        assertEquals(AppleMissingLyricsNativeTtmlKind.LUNA_BEAT_RAW, selected.kind)
+        assertEquals(AppleMissingLyricsNativeTtmlKind.TTML_CATALOG_RAW, selected.kind)
         assertEquals(rawTtml, selected.content)
         assertTrue(selected.content.contains("xml:id=\"v1\""))
         assertTrue(selected.content.contains("xml:id=\"v2\""))
@@ -1178,7 +1178,7 @@ class AppleMissingLyricsStoreTest {
     }
 
     @Test
-    fun `non LunaBeat sources still use generated TTML`() {
+    fun `non TtmlCatalog sources still use generated TTML`() {
         val rawTtml = "<tt><body>must not be used</body></tt>"
         val store = AppleMissingLyricsStore()
         assertTrue(
@@ -1188,8 +1188,8 @@ class AppleMissingLyricsStoreTest {
                     duration = 2_000L,
                     metadata = lyricMetadataOf(
                         LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE to "NE",
-                        LyricMetadataKeys.LUNA_BEAT_RAW_TTML to rawTtml,
-                        LyricMetadataKeys.LUNA_BEAT_TTML_SHA256 to sha256(rawTtml),
+                        LyricMetadataKeys.TTML_SOURCE_RAW to rawTtml,
+                        LyricMetadataKeys.TTML_SOURCE_SHA256 to sha256(rawTtml),
                     ),
                     lyrics = listOf(
                         RichLyricLine(begin = 0L, end = 1_000L, text = "普通歌词")

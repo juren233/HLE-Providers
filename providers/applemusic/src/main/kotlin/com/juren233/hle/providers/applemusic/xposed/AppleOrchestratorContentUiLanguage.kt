@@ -82,7 +82,7 @@ internal fun AppleMusicProviderOrchestrator.initializeContentUiLanguage() {
                 }
             }
             AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS,
-            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LUNABEAT_WORD_LYRICS ->
+            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LINE_TO_WORD_LYRICS ->
                 lyricsPlayback.missingLyricsHooks.onPreferenceChanged()
             AppleMusicPreferenceKeys.KEY_HOOK_ENABLE_AOD_LYRICS -> {
                 lyricsPlayback.playbackHooks.onAodPreferenceChanged()

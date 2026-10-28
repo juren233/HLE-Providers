@@ -9,6 +9,7 @@ package com.juren233.hle.providers.applemusic.xposed
 import com.juren233.hyperlyricsenhanced.contract.AppleSourceSwitchPerformanceDiagnostics
 
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.online.model.Source
 import com.juren233.hyperlyricsenhanced.lyric.model.RichLyricLine
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceInfo
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceMetadata
@@ -46,7 +47,7 @@ internal enum class AppleMissingLyricsUpdateKind {
 }
 
 internal enum class AppleMissingLyricsNativeTtmlKind {
-    LUNA_BEAT_RAW,
+    TTML_CATALOG_RAW,
     GENERATED,
 }
 
@@ -154,16 +155,16 @@ internal class AppleMissingLyricsStore {
             encodedStatuses = song.metadata
                 ?.getString(LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE_STATUSES),
         )
-        val isLunaBeat = sourceInfo?.selectedSource == "LB"
-        val rawAppleTtml = validatedLunaBeatRawTtml(song, previousContent, isLunaBeat)
+        val isTtmlCatalog = Source.isTtmlCatalogName(sourceInfo?.selectedSource)
+        val rawAppleTtml = validatedTtmlCatalogRawTtml(song, previousContent, isTtmlCatalog)
         val sourceLyricId = if (rawAppleTtml != null) {
-            song.metadata?.getString(LyricMetadataKeys.LUNA_BEAT_HUB_ID)
+            song.metadata?.getString(LyricMetadataKeys.TTML_SOURCE_LYRIC_ID)
                 ?: previousContent?.sourceLyricId
         } else {
             null
         }
         val sourceLyricSha256 = if (rawAppleTtml != null) {
-            song.metadata?.getString(LyricMetadataKeys.LUNA_BEAT_TTML_SHA256)
+            song.metadata?.getString(LyricMetadataKeys.TTML_SOURCE_SHA256)
                 ?.lowercase()
                 ?: previousContent?.sourceLyricSha256
         } else {
@@ -171,7 +172,7 @@ internal class AppleMissingLyricsStore {
         }
         val lines = song.lyrics.orEmpty().mapNotNull { line ->
             val sourceText = line.text.orEmpty()
-            val text = if (isLunaBeat) {
+            val text = if (isTtmlCatalog) {
                 sourceText
             } else {
                 val trimmedText = sourceText.trim()
@@ -180,7 +181,7 @@ internal class AppleMissingLyricsStore {
             if (text.isBlank() || line.begin < 0L || line.end <= line.begin) {
                 return@mapNotNull null
             }
-            val words = if (isLunaBeat) {
+            val words = if (isTtmlCatalog) {
                 line.words.orEmpty().mapNotNull { word ->
                     val wordText = word.text.orEmpty()
                     if (wordText.isEmpty() || word.begin < 0L || word.end <= word.begin) {
@@ -287,17 +288,17 @@ internal class AppleMissingLyricsStore {
         return AppleMissingLyricsUpdateResult(AppleMissingLyricsUpdateKind.LYRICS)
     }
 
-    private fun validatedLunaBeatRawTtml(
+    private fun validatedTtmlCatalogRawTtml(
         song: Song,
         previousContent: Content?,
-        isLunaBeat: Boolean,
+        isTtmlCatalog: Boolean,
     ): String? {
-        if (!isLunaBeat) return null
-        val incomingRaw = song.metadata?.getString(LyricMetadataKeys.LUNA_BEAT_RAW_TTML)
+        if (!isTtmlCatalog) return null
+        val incomingRaw = song.metadata?.getString(LyricMetadataKeys.TTML_SOURCE_RAW)
         if (incomingRaw == null) return previousContent?.rawAppleTtml
         if (incomingRaw.isEmpty()) return null
         val expectedSha256 = song.metadata
-            ?.getString(LyricMetadataKeys.LUNA_BEAT_TTML_SHA256)
+            ?.getString(LyricMetadataKeys.TTML_SOURCE_SHA256)
             ?.lowercase()
             ?: return null
         if (!expectedSha256.matches(Regex("[0-9a-f]{64}"))) return null
@@ -604,7 +605,7 @@ internal class AppleMissingLyricsStore {
         current.rawAppleTtml?.let { rawTtml ->
             return AppleMissingLyricsNativeTtml(
                 content = rawTtml,
-                kind = AppleMissingLyricsNativeTtmlKind.LUNA_BEAT_RAW,
+                kind = AppleMissingLyricsNativeTtmlKind.TTML_CATALOG_RAW,
             )
         }
         if (current.lines.isEmpty()) return null

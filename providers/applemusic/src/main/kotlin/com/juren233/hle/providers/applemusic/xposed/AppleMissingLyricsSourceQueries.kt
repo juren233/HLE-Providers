@@ -16,6 +16,7 @@ import com.juren233.hyperlyricsenhanced.contract.AppleMusicPreferenceKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceInfo
 import com.juren233.hyperlyricsenhanced.common.lyric.ChineseLyricsPolicy
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.online.model.Source
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderCall
 import com.juren233.hle.providers.applemusic.xposed.internal.ThreadLocalStack
 import java.util.concurrent.ConcurrentHashMap
@@ -55,14 +56,15 @@ internal fun AppleMissingLyricsHooks.sourceInfo(songId: String?): AppleMissingLy
 internal fun AppleMissingLyricsHooks.availableLyricsSources(songId: String?): List<String> {
     val contentSongId = songId?.takeIf(String::isNotBlank) ?: return emptyList()
     val info = sourceInfo(contentSongId) ?: return emptyList()
-    val lunaBeatAvailable = hasLunaBeatSource(contentSongId)
+    val ttmlCatalogAvailable = hasTtmlCatalogSource(contentSongId)
     val foundSources = info.statuses
         .filter { status ->
-            status.found && (status.source != AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT || lunaBeatAvailable)
+            status.found && (!Source.isTtmlCatalogName(status.source) || ttmlCatalogAvailable)
         }
         .mapTo(linkedSetOf()) { it.source }
-    if (AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT in foundSources && hasKnownNativeLyrics(contentSongId)) {
-        return listOf(AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE, AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT)
+    if (foundSources.any(Source::isTtmlCatalogName) && hasKnownNativeLyrics(contentSongId)) {
+        return listOf(AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE) +
+            foundSources.filter(Source::isTtmlCatalogName)
     }
     return buildList {
         if (hasKnownNativeLyrics(contentSongId)) add(AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE)
@@ -70,33 +72,33 @@ internal fun AppleMissingLyricsHooks.availableLyricsSources(songId: String?): Li
     }
 }
 
-internal fun AppleMissingLyricsHooks.hasLunaBeatSource(songId: String?): Boolean {
+internal fun AppleMissingLyricsHooks.hasTtmlCatalogSource(songId: String?): Boolean {
     val contentSongId = resolveStoredSupplementContentId(songId) ?: return false
     val info = store.sourceInfo(contentSongId) ?: return false
-    return isLunaBeatEligibleForSong(contentSongId, info)
+    return isTtmlCatalogEligibleForSong(contentSongId, info)
 }
 
-internal fun AppleMissingLyricsHooks.isLunaBeatEligibleForSong(
+internal fun AppleMissingLyricsHooks.isTtmlCatalogEligibleForSong(
     songId: String,
     sourceInfo: AppleMissingLyricsSourceInfo? = store.sourceInfo(songId),
     lineCountOverride: Int? = null,
 ): Boolean {
-    if (!isLunaBeatWordLyricsEnabled()) return false
+    if (!isLineToWordLyricsEnabled()) return false
     val status = sourceInfo?.statuses.orEmpty().firstOrNull {
-        it.source == AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT && it.found && it.wordTimed
+        Source.isTtmlCatalogName(it.source) && it.found && it.wordTimed
     }
-    val lunaBeatLineCount = lineCountOverride ?: status?.lineCount ?: return false
-    return shouldUseLunaBeatOverAppleNativeLyrics(
+    val ttmlCatalogLineCount = lineCountOverride ?: status?.lineCount ?: return false
+    return shouldUseTtmlCatalogOverAppleNativeLyrics(
         nativeStats = nativeLyricsTimingStats(songId),
-        lunaBeatLineCount = lunaBeatLineCount,
+        ttmlCatalogLineCount = ttmlCatalogLineCount,
     )
 }
 
-internal fun AppleMissingLyricsHooks.eligibleLunaBeatSourceInfo(
+internal fun AppleMissingLyricsHooks.eligibleTtmlCatalogSourceInfo(
     songId: String,
     sourceInfo: AppleMissingLyricsSourceInfo?,
 ): AppleMissingLyricsSourceInfo? = sourceInfo?.takeIf {
-    isLunaBeatEligibleForSong(songId, it)
+    isTtmlCatalogEligibleForSong(songId, it)
 }
 
 internal fun AppleMissingLyricsHooks.nativeLyricsTimingStats(songId: String): AppleNativeLyricsTimingStats? {
@@ -105,18 +107,19 @@ internal fun AppleMissingLyricsHooks.nativeLyricsTimingStats(songId: String): Ap
     return identity?.adamId?.toString()?.let({ nativeAlternatives.timing(it) })
 }
 
-internal fun AppleMissingLyricsHooks.isLunaBeatSupplement(song: Song): Boolean =
-    song.metadata
-        ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE) ==
-        AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT
+internal fun AppleMissingLyricsHooks.isTtmlCatalogSupplement(song: Song): Boolean =
+    Source.isTtmlCatalogName(
+        song.metadata
+            ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE)
+    )
 
-internal fun AppleMissingLyricsHooks.shouldPreferLunaBeat(songId: String?): Boolean {
+internal fun AppleMissingLyricsHooks.shouldPreferTtmlCatalog(songId: String?): Boolean {
     val contentSongId = songId?.takeIf(String::isNotBlank) ?: return false
-    if (!isLunaBeatWordLyricsEnabled() || !store.hasContent(contentSongId)) return false
+    if (!isLineToWordLyricsEnabled() || !store.hasContent(contentSongId)) return false
     val selectedSource = lyricsSourceSelection.selected(contentSongId)
         ?: store.sourceInfo(contentSongId)?.selectedSource
-    return selectedSource == AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT &&
-        isLunaBeatEligibleForSong(contentSongId)
+    return Source.isTtmlCatalogName(selectedSource) &&
+        isTtmlCatalogEligibleForSong(contentSongId)
 }
 
 internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
@@ -125,15 +128,15 @@ internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
     successful: Boolean,
 ): String? {
     val contentSongId = songId?.takeIf(String::isNotBlank) ?: return null
-    if (!successful || source !in setOf(AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE, AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT)) {
+    if (!successful || (source != AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE && !Source.isTtmlCatalogName(source))) {
         return null
     }
     val effectiveSource = if (
-        source == AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT && !isLunaBeatEligibleForSong(contentSongId)
+        Source.isTtmlCatalogName(source) && !isTtmlCatalogEligibleForSong(contentSongId)
     ) {
         if (AppleProviderEnvironment.diagnosticsEnabled) {
             ProviderLogger.diagnostic(
-                "Apple Music LunaBeat 来源切换被原生逐字歌词拒绝: id=$contentSongId"
+                "Apple Music TTML 目录源切换被原生逐字歌词拒绝: id=$contentSongId"
             )
         }
         AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE
@@ -142,24 +145,24 @@ internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
     }
     lyricsSourceSelection.select(contentSongId, effectiveSource)
 
-    val lunaBeatPointer = store.nativeSongInfoPointer(contentSongId)
+    val ttmlCatalogPointer = store.nativeSongInfoPointer(contentSongId)
     val appleNativePointer = nativeAlternatives.pointer(contentSongId)
         ?.takeIf { readNativeLineCount(it) > 0 }
     val action = appleLyricsSourcePresentationAction(
         source = effectiveSource,
-        hasLunaBeatPointer = lunaBeatPointer != null,
+        hasTtmlCatalogPointer = ttmlCatalogPointer != null,
         hasAppleNativePointer = appleNativePointer != null,
     )
     when (action) {
-        AppleLyricsSourcePresentationAction.PRESENT_LUNA_BEAT -> {
+        AppleLyricsSourcePresentationAction.PRESENT_TTML_CATALOG -> {
             candidates.accept(contentSongId)
             requestLyricsSourcePresentation(
                 songId = contentSongId,
-                source = AppleMissingLyricsHooks.Companion.SourceName.LUNA_BEAT,
-                pointer = requireNotNull(lunaBeatPointer),
+                source = effectiveSource,
+                pointer = requireNotNull(ttmlCatalogPointer),
             )
         }
-        AppleLyricsSourcePresentationAction.BUILD_LUNA_BEAT -> {
+        AppleLyricsSourcePresentationAction.BUILD_TTML_CATALOG -> {
             candidates.accept(contentSongId)
             scheduleNativeLyricsModel(contentSongId)
         }
@@ -251,8 +254,8 @@ internal fun AppleMissingLyricsHooks.hasSupplementContent(songId: String?): Bool
     } == true
     return shouldShowStoredSupplementSourceMenu(
         normalSupplementMenu = normalSupplementMenu,
-        lunaBeatEnabled = isLunaBeatWordLyricsEnabled(),
-        storedSourceInfo = eligibleLunaBeatSourceInfo(
+        ttmlCatalogEnabled = isLineToWordLyricsEnabled(),
+        storedSourceInfo = eligibleTtmlCatalogSourceInfo(
             songId = storedSongId,
             sourceInfo = store.sourceInfo(storedSongId),
         ),
@@ -304,27 +307,27 @@ internal fun AppleMissingLyricsHooks.onNativeLyricsState(songId: String?, hasLin
         if (songId != contentSongId) {
             nativeTakeoverGate.onNativeResult(songId, hasLyrics = true)
         }
-        if (shouldPreferLunaBeat(contentSongId)) {
+        if (shouldPreferTtmlCatalog(contentSongId)) {
             candidates.accept(contentSongId)
             scheduleNativeLyricsModel(contentSongId)
             mainHandler.post { refreshNowPlaying(contentSongId) }
         } else {
-            val storedSourceInfo = eligibleLunaBeatSourceInfo(
+            val storedSourceInfo = eligibleTtmlCatalogSourceInfo(
                 songId = contentSongId,
                 sourceInfo = store.sourceInfo(contentSongId),
             )
-            val retainLunaBeatAlternative =
-                shouldRetainLunaBeatAlternativeAfterNativePresentation(
-                    lunaBeatEnabled = isLunaBeatWordLyricsEnabled(),
+            val retainTtmlCatalogAlternative =
+                shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
+                    ttmlCatalogEnabled = isLineToWordLyricsEnabled(),
                     storedSourceInfo = storedSourceInfo,
                 )
             candidates.revokeAcceptance(contentSongId)
             candidates.revokeAvailability(contentSongId)
             takeoverRechecks.remove(contentSongId)
-            if (retainLunaBeatAlternative) {
+            if (retainTtmlCatalogAlternative) {
                 if (AppleProviderEnvironment.diagnosticsEnabled) {
                     ProviderLogger.diagnostic(
-                        "Apple Music 原生歌词已呈现，保留 LunaBeat 备选: " +
+                        "Apple Music 原生歌词已呈现，保留 TTML 目录源备选: " +
                             "id=$contentSongId, selected=${lyricsSourceSelection.selected(contentSongId)}, " +
                             "stored=$storedSourceInfo"
                     )

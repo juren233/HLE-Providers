@@ -14,6 +14,7 @@ import com.juren233.hyperlyricsenhanced.contract.AppleMusicPreferenceKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceInfo
 import com.juren233.hyperlyricsenhanced.common.lyric.ChineseLyricsPolicy
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.online.model.Source
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderCall
 import com.juren233.hle.providers.applemusic.xposed.internal.ThreadLocalStack
 import java.lang.ref.WeakReference
@@ -67,32 +68,32 @@ internal fun shouldRunSupplementActivationSideEffects(
 
 /**
  * 歌词页恢复可见时，普通补充仍需 Apple 原生歌词不存在；当前明确选择且符合资格的
- * LunaBeat 则必须重新呈现，否则切歌期间在未 resumed Fragment 上完成的首次注入会留下
+ * TtmlCatalog 则必须重新呈现，否则切歌期间在未 resumed Fragment 上完成的首次注入会留下
  * 上一首歌曲的 Adapter。
  */
 internal fun shouldPresentSupplementOnLyricsPageResume(
     hasKnownNativeLyrics: Boolean,
-    shouldPreferLunaBeat: Boolean,
-): Boolean = !hasKnownNativeLyrics || shouldPreferLunaBeat
+    shouldPreferTtmlCatalog: Boolean,
+): Boolean = !hasKnownNativeLyrics || shouldPreferTtmlCatalog
 
 internal enum class AppleLyricsSourcePresentationAction {
-    PRESENT_LUNA_BEAT,
-    BUILD_LUNA_BEAT,
+    PRESENT_TTML_CATALOG,
+    BUILD_TTML_CATALOG,
     PRESENT_APPLE_NATIVE,
     REFRESH_ONLY,
 }
 
 internal fun appleLyricsSourcePresentationAction(
     source: String,
-    hasLunaBeatPointer: Boolean,
+    hasTtmlCatalogPointer: Boolean,
     hasAppleNativePointer: Boolean,
-): AppleLyricsSourcePresentationAction = when (source) {
-    "LB" -> if (hasLunaBeatPointer) {
-        AppleLyricsSourcePresentationAction.PRESENT_LUNA_BEAT
+): AppleLyricsSourcePresentationAction = when {
+    Source.isTtmlCatalogName(source) -> if (hasTtmlCatalogPointer) {
+        AppleLyricsSourcePresentationAction.PRESENT_TTML_CATALOG
     } else {
-        AppleLyricsSourcePresentationAction.BUILD_LUNA_BEAT
+        AppleLyricsSourcePresentationAction.BUILD_TTML_CATALOG
     }
-    "APPLE" -> if (hasAppleNativePointer) {
+    source == "APPLE" -> if (hasAppleNativePointer) {
         AppleLyricsSourcePresentationAction.PRESENT_APPLE_NATIVE
     } else {
         AppleLyricsSourcePresentationAction.REFRESH_ONLY
@@ -108,29 +109,29 @@ internal data class AppleNativeLyricsTimingStats(
         get() = wordTimedLineCount > 0
 }
 
-internal fun shouldUseLunaBeatOverAppleNativeLyrics(
+internal fun shouldUseTtmlCatalogOverAppleNativeLyrics(
     nativeStats: AppleNativeLyricsTimingStats?,
-    lunaBeatLineCount: Int,
+    ttmlCatalogLineCount: Int,
 ): Boolean {
     if (nativeStats == null || !nativeStats.isWordTimed) return true
-    if (nativeStats.lineCount <= 0 || lunaBeatLineCount <= 0) return true
-    return nativeStats.lineCount != lunaBeatLineCount
+    if (nativeStats.lineCount <= 0 || ttmlCatalogLineCount <= 0) return true
+    return nativeStats.lineCount != ttmlCatalogLineCount
 }
 
-internal fun shouldRetainLunaBeatAlternativeAfterNativePresentation(
-    lunaBeatEnabled: Boolean,
+internal fun shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
+    ttmlCatalogEnabled: Boolean,
     storedSourceInfo: AppleMissingLyricsSourceInfo?,
-): Boolean = lunaBeatEnabled && storedSourceInfo?.statuses.orEmpty().any {
-    it.source == "LB" && it.found && it.wordTimed
+): Boolean = ttmlCatalogEnabled && storedSourceInfo?.statuses.orEmpty().any {
+    Source.isTtmlCatalogName(it.source) && it.found && it.wordTimed
 }
 
 internal fun shouldShowStoredSupplementSourceMenu(
     normalSupplementMenu: Boolean,
-    lunaBeatEnabled: Boolean,
+    ttmlCatalogEnabled: Boolean,
     storedSourceInfo: AppleMissingLyricsSourceInfo?,
 ): Boolean = normalSupplementMenu ||
-    shouldRetainLunaBeatAlternativeAfterNativePresentation(
-        lunaBeatEnabled = lunaBeatEnabled,
+    shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
+        ttmlCatalogEnabled = ttmlCatalogEnabled,
         storedSourceInfo = storedSourceInfo,
     )
 

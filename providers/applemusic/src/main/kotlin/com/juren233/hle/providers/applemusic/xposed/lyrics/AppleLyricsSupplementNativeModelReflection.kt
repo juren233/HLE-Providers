@@ -63,7 +63,7 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
 internal fun AppleLyricsSupplementHooks.hasAnyOnlineTranslation(songId: String?): Boolean =
     (isNativeOnlineTranslationEnabled() && nativeOnlineTranslationStore.hasTranslation(songId)) ||
         missingLyricsSupplement().hasTranslation(songId)
-// 注意：这里刻意不计入 hasLunaBeatSource。LB 来源的歌曲靠
+// 注意：这里刻意不计入 hasTtmlCatalogSource。LB 来源的歌曲靠
 // ensureMissingLyricsTranslationButtonVisible（hasSupplementContent）强制保留
 // translations_button 作为来源菜单入口，与“是否有翻译”无关；若把 LB 计入
 // 翻译可用性，Apple 会在无翻译的 LB 歌曲菜单里渲染无效的「隐藏翻译」项。
