@@ -59,6 +59,19 @@ internal class AppleMissingLyricsHooks(
 
     val store = AppleMissingLyricsStore()
 
+    /** 已被「原生歌词优先」撤销补充的歌曲；用于告知核心不要再把目录源当作当前歌词。 */
+    private val revokedSupplementSongIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    internal fun markSupplementRevoked(songId: String) {
+        revokedSupplementSongIds += songId
+    }
+
+    internal fun clearSupplementRevoked(songId: String) {
+        revokedSupplementSongIds -= songId
+    }
+
+    fun isSupplementRevoked(songId: String): Boolean = songId in revokedSupplementSongIds
+
     internal val nativeParser by lazy { AppleMissingLyricsNativeParser(runtime) }
 
     internal val lyricsNativeTarget by lazy {

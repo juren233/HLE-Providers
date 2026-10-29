@@ -39,6 +39,7 @@ import com.juren233.hle.providers.applemusic.xposed.PreferencesMonitor
 import com.juren233.hle.providers.applemusic.xposed.ProviderLogger
 import com.juren233.hle.providers.applemusic.xposed.effectiveOnlineSourceSelection
 import com.juren233.hle.providers.applemusic.xposed.isMissingLyricsSourceSelectable
+import com.juren233.hle.providers.applemusic.xposed.AppleMenuText
 import com.juren233.hle.providers.applemusic.xposed.missingLyricsSourceMenuLabel
 import com.juren233.hle.providers.applemusic.xposed.missingLyricsSourceStatusLabel
 import com.juren233.hle.providers.applemusic.xposed.sourceMenuLabel
@@ -65,6 +66,8 @@ internal class AppleOnlineSourceMenuHooks(
     internal val debugValue: (Any?) -> String,
     private val configuredOrderedSources: () -> List<String> = { DEFAULT_SOURCE_ORDER },
     private val availableLyricsSources: (String?) -> List<String> = { emptyList() },
+    internal val missingLyricsSourceContentState: (String?, String) ->
+    com.juren233.hyperlyricsenhanced.common.lyric.OnlineSourceContentState? = { _, _ -> null },
 ) {
     private var activeMenu: ActiveOnlineSourceMenu? = null
     internal var activeLyricsSourceDialog: ActiveLyricsSourceDialog? = null
@@ -495,9 +498,9 @@ internal class AppleOnlineSourceMenuHooks(
         }
         val title = TextView(context).apply {
             text = when {
-                isLyricsSourceDialog -> "选择歌词来源"
-                isTranslationSourceDialog -> "选择翻译来源"
-                else -> "选择发音来源"
+                isLyricsSourceDialog -> AppleMenuText.pick("选择歌词来源", "Choose Lyrics Source")
+                isTranslationSourceDialog -> AppleMenuText.pick("选择翻译来源", "Choose Translation Source")
+                else -> AppleMenuText.pick("选择发音来源", "Choose Pronunciation Source")
             }
             textSize = 21f
             setTextColor(onSurfaceColor)
@@ -508,9 +511,9 @@ internal class AppleOnlineSourceMenuHooks(
         list.addView(
             TextView(context).apply {
                 text = if (isLyricsSourceDialog) {
-                    "选择补充歌词使用的在线来源"
+                    AppleMenuText.pick("选择补充歌词使用的在线来源", "Choose the online source for supplemental lyrics")
                 } else {
-                    "缺失行将从其余源自动补全"
+                    AppleMenuText.pick("缺失行将从其余源自动补全", "Missing lines are filled from the other sources")
                 }
                 textSize = 13f
                 setTextColor(onSurfaceVariantColor)
@@ -535,7 +538,7 @@ internal class AppleOnlineSourceMenuHooks(
         if (sourceOrder.isEmpty()) {
             group.addView(
                 TextView(context).apply {
-                    text = "未启用任何在线来源"
+                    text = AppleMenuText.pick("未启用任何在线来源", "No online sources enabled")
                     textSize = 14f
                     setTextColor(onSurfaceVariantColor)
                     gravity = android.view.Gravity.CENTER
@@ -549,19 +552,24 @@ internal class AppleOnlineSourceMenuHooks(
         } else {
             sourceOrder.forEachIndexed { index, source ->
                 val status = if (isLyricsSourceDialog) lyricsSourceStatus(songId, source) else null
-                val contentMatchPercentage = if (status == null) {
-                    contentMatchPercentage(songId, contentType, source) ?: 0
-                } else {
-                    null
-                }
                 val isSelected = source == selected
                 val pending = pendingSwitches[contentType]?.takeIf { it.songId == songId }
                 val isPending = pending?.targetSource == source
-                val selectable = pending == null && if (status != null) {
-                    isMissingLyricsSourceSelectable(status, isSelected)
+                val contentRow = if (status == null) {
+                    contentSourceRow(
+                        songId = songId,
+                        contentType = contentType,
+                        source = source,
+                        isSelected = isSelected,
+                        isPending = isPending,
+                        isFailedSwitch = false,
+                        anyPending = pending != null,
+                    )
                 } else {
-                    !isSelected
+                    null
                 }
+                val selectable = contentRow?.selectable
+                    ?: (pending == null && isMissingLyricsSourceSelectable(status!!, isSelected))
                 val row = LinearLayout(context).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = android.view.Gravity.CENTER_VERTICAL
@@ -570,7 +578,11 @@ internal class AppleOnlineSourceMenuHooks(
                     isClickable = selectable
                     isFocusable = selectable
                     isEnabled = selectable
-                    alpha = if (isPending || status == null || status.found) 1f else 0.52f
+                    alpha = when {
+                        contentRow != null -> if (contentRow.dimmed) 0.52f else 1f
+                        isPending || status!!.found -> 1f
+                        else -> 0.52f
+                    }
                     contentDescription = sourceMenuSourceName(source)
                 }
                 val textColumn = LinearLayout(context).apply {
@@ -598,20 +610,12 @@ internal class AppleOnlineSourceMenuHooks(
                     typeface = Typeface.DEFAULT_BOLD
                     gravity = android.view.Gravity.CENTER
                     minWidth = dp(context, 24)
-                    contentDescription = if (isSelected) "已选择" else null
+                    contentDescription = if (isSelected) AppleMenuText.pick("已选择", "Selected") else null
                 }
                 val rowSubtitle = TextView(context).apply {
-                    text = when {
-                        isPending -> "获取中…"
-                        status != null -> missingLyricsSourceStatusLabel(status)
-                        isSelected -> currentSourceSubtitle(
-                            contentType = contentType,
-                            percentage = contentMatchPercentage ?: 0,
-                        )
-                        else -> sourceMatchSubtitle(
-                            contentType = contentType,
-                            percentage = contentMatchPercentage ?: 0,
-                        )
+                    text = contentRow?.subtitle ?: when {
+                        isPending -> AppleMenuText.pick("获取中…", "Fetching…")
+                        else -> missingLyricsSourceStatusLabel(status!!)
                     }
                     textSize = 12.5f
                     setTextColor(onSurfaceVariantColor)

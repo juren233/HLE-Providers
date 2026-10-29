@@ -33,7 +33,7 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
     val incomingLines = song.lyrics.orEmpty()
     val incomingWordLines = incomingLines.count { it.words.orEmpty().size >= 2 }
     val ttmlCatalogSupplement = isTtmlCatalogSupplement(song) &&
-        isTtmlCatalogEligibleForSong(
+        isTtmlCatalogTakeoverAllowed(
             songId = songId,
             sourceInfo = song.metadata?.let { metadata ->
                 com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceMetadata.decode(
@@ -60,17 +60,21 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
         details = "wordLines=$incomingWordLines,thread=${Thread.currentThread().name}",
     )
     nativeTakeoverGate.observe(songId)
+    AppleCrashTrace.record {
+        "supplement_received song=$songId lines=${incomingLines.size} ttml=$ttmlCatalogSupplement"
+    }
     if (hasKnownNativeLyrics(songId) && !ttmlCatalogSupplement) {
         ProviderLogger.info(
             "Apple Music 无歌词补充被原生歌词拒绝: id=$songId, " +
                 "reason=native_lyrics_present"
         )
-        discardSupplementForConfirmedNativeLyrics(songId)
+        discardSupplementForConfirmedNativeLyrics(songId, supplementOffered = true)
         return
     }
     if (ttmlCatalogSupplement) {
         candidates.accept(songId)
     }
+    clearSupplementRevoked(songId)
     val storeUpdateStartedAtNanos = SystemClock.elapsedRealtimeNanos()
     AppleSourceSwitchPerformanceDiagnostics.stageForSong(
         songId = songId,
@@ -235,7 +239,7 @@ internal fun AppleMissingLyricsHooks.restoreCachedSupplement(songId: String) {
         cached.metadata
             ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE)
     )
-    val cachedTtmlCatalogEligible = cachedIsTtmlCatalog && isTtmlCatalogEligibleForSong(
+    val cachedTtmlCatalogEligible = cachedIsTtmlCatalog && isTtmlCatalogTakeoverAllowed(
         songId = songId,
         sourceInfo = cached.metadata?.let { metadata ->
             com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceMetadata.decode(

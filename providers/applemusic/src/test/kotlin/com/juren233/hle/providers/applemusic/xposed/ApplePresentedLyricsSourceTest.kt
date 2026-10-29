@@ -7,9 +7,21 @@ package com.juren233.hle.providers.applemusic.xposed
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 
 class ApplePresentedLyricsSourceTest {
+    @Before
+    fun pinChinese() {
+        AppleMenuText.chineseOverride = true
+    }
+
+    @After
+    fun releaseLanguage() {
+        AppleMenuText.chineseOverride = null
+    }
+
     private class Pointer(val address: Long)
 
     private val apple = Pointer(101)

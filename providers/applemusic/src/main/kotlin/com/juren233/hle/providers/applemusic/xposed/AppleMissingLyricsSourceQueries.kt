@@ -31,6 +31,12 @@ internal fun AppleMissingLyricsHooks.translationSource(songId: String?): String?
 internal fun AppleMissingLyricsHooks.translationMatchPercentage(songId: String?, source: String): Int? =
     store.translationMatchPercentage(resolveSupplementContentId(songId), source)
 
+internal fun AppleMissingLyricsHooks.sourceContentState(
+    songId: String?,
+    source: String,
+): com.juren233.hyperlyricsenhanced.common.lyric.OnlineSourceContentState? =
+    store.sourceContentState(resolveSupplementContentId(songId), source)
+
 internal fun AppleMissingLyricsHooks.pronunciationMatchPercentage(songId: String?, source: String): Int? =
     store.pronunciationMatchPercentage(resolveSupplementContentId(songId), source)
 
@@ -121,6 +127,24 @@ internal fun AppleMissingLyricsHooks.isTtmlCatalogEligibleForSong(
     )
 }
 
+/**
+ * 目录源能否自动接管歌词页。[isTtmlCatalogEligibleForSong] 只回答「这首歌的目录源能不能作为备选」
+ * （来源菜单、手动切换都用它）；自动接管还要求原生歌词不是逐字——原生已逐字时不应被目录源覆盖，
+ * 除非用户在来源菜单里明确选了目录源。
+ */
+internal fun AppleMissingLyricsHooks.isTtmlCatalogTakeoverAllowed(
+    songId: String,
+    sourceInfo: AppleMissingLyricsSourceInfo? = store.sourceInfo(songId),
+    lineCountOverride: Int? = null,
+): Boolean {
+    return shouldAllowTtmlCatalogTakeover(
+        eligible = isTtmlCatalogEligibleForSong(songId, sourceInfo, lineCountOverride),
+        nativeStats = nativeLyricsTimingStats(songId),
+        userChoseCatalog = Source.isTtmlCatalogName(lyricsSourceSelection.selected(songId)) ||
+            Source.isTtmlCatalogName(lyricsSourceSelection.requested(songId)),
+    )
+}
+
 internal fun AppleMissingLyricsHooks.eligibleTtmlCatalogSourceInfo(
     songId: String,
     sourceInfo: AppleMissingLyricsSourceInfo?,
@@ -146,7 +170,7 @@ internal fun AppleMissingLyricsHooks.shouldPreferTtmlCatalog(songId: String?): B
     val selectedSource = lyricsSourceSelection.selected(contentSongId)
         ?: store.sourceInfo(contentSongId)?.selectedSource
     return Source.isTtmlCatalogName(selectedSource) &&
-        isTtmlCatalogEligibleForSong(contentSongId)
+        isTtmlCatalogTakeoverAllowed(contentSongId)
 }
 
 internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
@@ -389,9 +413,28 @@ internal fun AppleMissingLyricsHooks.onNativeLyricsState(songId: String?, hasLin
     )
 }
 
-internal fun AppleMissingLyricsHooks.discardSupplementForConfirmedNativeLyrics(songId: String) {
+/**
+ * [supplementOffered] 表示本次调用是因为刚收到一份被拒绝的补充；这类拒绝与「清除已接管的补充」一样，
+ * 核心都已把该补充当作当前歌词，必须通知它撤回。无补充存在的普通原生确认不得标记撤销，
+ * 否则核心会对所有有原生歌词的歌曲停用自动目录源。
+ */
+internal fun AppleMissingLyricsHooks.discardSupplementForConfirmedNativeLyrics(
+    songId: String,
+    supplementOffered: Boolean = false,
+) {
     val deleted = DiskSongManager.deleteMissingLyrics(songId)
     val cleared = store.clear(songId)
+    val withdrawn = cleared || supplementOffered
+    if (withdrawn && !isSupplementRevoked(songId)) {
+        markSupplementRevoked(songId)
+        // 刷新界面绑定不会触发原生歌词发布，必须直接重发带标记的原生歌词。
+        mainHandler.post {
+            PlaybackManager.republishNativeAfterSupplementRevoked(songId)
+            refreshNowPlaying(songId)
+        }
+    } else if (cleared) {
+        markSupplementRevoked(songId)
+    }
     if (!cleared && deleted) return
     ProviderLogger.info(
         "Apple Music 原生歌词优先，撤销三方补充: id=$songId, " +

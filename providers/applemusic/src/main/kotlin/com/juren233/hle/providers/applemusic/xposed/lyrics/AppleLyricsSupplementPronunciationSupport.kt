@@ -149,6 +149,7 @@ internal fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetters(clazz
  * 此处只在该 vector 被消费的调用栈内替换显示文本，退出后立即恢复主句原文。
  */
 internal fun AppleLyricsSupplementHooks.hookApplePronunciationWordRendering() {
+    AppleCrashTrace.installOnce()
     val wordVectorClassName = hookResolver.resolveClass(
         AppleMusicHookPoint.LYRICS_WORD_VECTOR_CLASS
     ).target.className
@@ -168,9 +169,17 @@ internal fun AppleLyricsSupplementHooks.hookApplePronunciationWordRendering() {
             renderMethods.forEach { method ->
                 if (!pronunciationRenderInstallDedup.markInstalled(method)) return@forEach
                 method.isAccessible = true
+                if (method.parameterTypes.getOrNull(1) == android.util.ArrayMap::class.java) {
+                    hookRegistrar.installArgumentRewriteHook(method) { chain ->
+                        dropPreviousWordCacheWhenBeginsRepeat(method, chain.args)
+                    }
+                }
                 hookRegistrar.installScopedHook(
                     executable = method,
                     enter = enter@{ chain ->
+                        if (AppleProviderEnvironment.diagnosticsEnabled) {
+                            diagnoseApplePronunciationWordBuilderInput(method, chain.args)
+                        }
                         val vector = chain.args.firstOrNull() ?: return@enter false
                         val plan = consumeApplePronunciationRenderPlan(vector)
                         if (plan == null) {
@@ -511,6 +520,74 @@ private fun AppleLyricsSupplementHooks.logApplePronunciationWordBinding(
         dedupeKey = "words:${context.methodName}:${context.position}:$begin:" +
             "$methodName:$wordTrack:${nativeVectorSize(resolvedWords)}",
     )
+}
+
+/**
+ * Apple's row builder (`player.x.b0`) reuses the previous bind of a row by looking each word up
+ * in the previous per-word view-model table by its begin time. Two words that share a begin time
+ * therefore get the same cached view model, and its pronunciation view is added to a second
+ * pronunciation group while still in the first, which throws `The specified child already has a
+ * parent`. Apple's own data never repeats a begin; a TTML word with a zero-length first syllable
+ * does (e.g. 14085-14090 followed by 14085-14725).
+ *
+ * In that case the previous table is withheld, which is exactly the first-bind path of the same
+ * method (it takes the table as null): every word gets freshly inflated views.
+ */
+private fun AppleLyricsSupplementHooks.dropPreviousWordCacheWhenBeginsRepeat(
+    method: java.lang.reflect.Method,
+    args: List<Any?>,
+): Array<Any?>? {
+    val cache = args.getOrNull(1) as? Map<*, *>
+    if (cache.isNullOrEmpty()) return null
+    val begins = AppleLyricTextTransform.withRawReads {
+        nativeVectorItems(args.firstOrNull(), limit = MAX_WORD_BEGIN_SCAN).map { word ->
+            runCatching {
+                (lyricsNativeCall(word, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as Number)
+                    .toInt()
+            }.getOrDefault(-1)
+        }
+    }
+    if (!ApplePronunciationPolicy.hasSharedWordBegin(begins)) return null
+    if (AppleProviderEnvironment.diagnosticsEnabled) {
+        ProviderLogger.diagnostic(
+            "Apple Music 逐词行含相同起点的词，本次不复用上次视图: " +
+                "method=${method.name}/${method.parameterCount}, song=$currentAppleLyricsSongId, " +
+                "words=${begins.size}, cacheKeys=${cache.size}"
+        )
+    }
+    return args.toTypedArray().also { it[1] = null }
+}
+
+private const val MAX_WORD_BEGIN_SCAN = 256
+
+/**
+ * Diagnostics only. Apple's row builder looks the previous bind up by word begin while storing by
+ * word id; a vector with repeated begins (or ids) would hand one cached view to two words. This
+ * records whether the vector entering the builder has them, and how the cache lines up.
+ */
+private fun AppleLyricsSupplementHooks.diagnoseApplePronunciationWordBuilderInput(
+    method: java.lang.reflect.Method,
+    args: List<Any?>,
+) {
+    val words = debugAppleWordTimings(args.firstOrNull())
+    val cacheKeys = (args.getOrNull(1) as? Map<*, *>)?.keys.orEmpty()
+    val duplicateBegins = words.groupBy { it.begin }.filterValues { it.size > 1 }
+    val duplicateIds = words.groupBy { it.wordId }.filterValues { it.size > 1 }
+    val beginHits = words.count { it.begin in cacheKeys }
+    val idHits = words.count { it.wordId in cacheKeys }
+    AppleCrashTrace.record {
+        "word_input ${method.name}/${method.parameterCount} words=${words.size} " +
+            "dupBegin=${duplicateBegins.size} dupId=${duplicateIds.size} " +
+            "cacheKeys=${cacheKeys.size} hitsByBegin=$beginHits hitsById=$idHits"
+    }
+    if (duplicateBegins.isNotEmpty() || duplicateIds.isNotEmpty()) {
+        ProviderLogger.diagnostic(
+            "Apple Music 逐词行重建输入存在重复起点或词ID: method=${method.name}/" +
+                "${method.parameterCount}, song=$currentAppleLyricsSongId, words=${words.size}, " +
+                "cacheKeys=${cacheKeys.size}, hitsByBegin=$beginHits, hitsById=$idHits, " +
+                "detail=${debugAppleWordTimings(words)}"
+        )
+    }
 }
 
 private fun AppleLyricsSupplementHooks.debugAppleOfficialPronunciationAlignment(

@@ -6,6 +6,7 @@
 
 package com.juren233.hle.providers.applemusic.xposed.lyrics
 
+import com.juren233.hle.providers.applemusic.xposed.AppleMenuText
 import com.juren233.hle.providers.applemusic.xposed.AppleProviderEnvironment
 
 import android.app.Dialog
@@ -34,6 +35,8 @@ import com.juren233.hle.providers.applemusic.xposed.ConfirmedOnlineSourceSelecti
 import com.juren233.hle.providers.applemusic.xposed.FailedOnlineSourceSwitch
 import com.juren233.hle.providers.applemusic.xposed.OnlineSourceMenuPresentation
 import com.juren233.hle.providers.applemusic.xposed.OnlineSourceMenuStatus
+import com.juren233.hle.providers.applemusic.xposed.OnlineSourceRowKind
+import com.juren233.hle.providers.applemusic.xposed.onlineSourceRowKind
 import com.juren233.hle.providers.applemusic.xposed.PendingOnlineSourceSwitch
 import com.juren233.hle.providers.applemusic.xposed.PreferencesMonitor
 import com.juren233.hle.providers.applemusic.xposed.ProviderLogger
@@ -78,40 +81,41 @@ internal fun AppleOnlineSourceMenuHooks.refreshActiveLyricsSourceDialog(songId: 
     val failed = failedSwitches[active.contentType]?.takeIf { it.songId == songId }
     active.rows.forEach { (source, row) ->
         val status = if (isLyricsSourceDialog) lyricsSourceStatus(songId, source) else null
-        val contentMatchPercentage = if (status == null) {
-            contentMatchPercentage(songId, active.contentType, source) ?: 0
-        } else {
-            null
-        }
         val isSelected = source == selected
         val isPending = pending?.targetSource == source
         val isFailed = failed?.displayedSource == source
-        val selectable = pending == null && if (status != null) {
-            isMissingLyricsSourceSelectable(status, isSelected)
+        val contentRow = if (status == null) {
+            contentSourceRow(
+                songId = songId,
+                contentType = active.contentType,
+                source = source,
+                isSelected = isSelected,
+                isPending = isPending,
+                isFailedSwitch = isFailed,
+                anyPending = pending != null,
+            )
         } else {
-            !isSelected
+            null
         }
+        val selectable = contentRow?.selectable
+            ?: (pending == null && isMissingLyricsSourceSelectable(status!!, isSelected))
         row.container.isClickable = selectable
         row.container.isFocusable = selectable
         row.container.isEnabled = selectable
-        row.container.alpha = if (isPending || status == null || status.found) 1f else 0.52f
+        row.container.alpha = when {
+            contentRow != null -> if (contentRow.dimmed) 0.52f else 1f
+            isPending || status!!.found -> 1f
+            else -> 0.52f
+        }
         row.title.setTextColor(if (isSelected) active.primaryColor else active.onSurfaceColor)
         row.title.typeface = Typeface.create(
             Typeface.DEFAULT,
             if (isSelected) Typeface.BOLD else Typeface.NORMAL,
         )
-        row.subtitle.text = when {
-            isPending -> "获取中…"
-            isFailed -> "切换失败"
-            status != null -> missingLyricsSourceStatusLabel(status)
-            isSelected -> currentSourceSubtitle(
-                contentType = active.contentType,
-                percentage = contentMatchPercentage ?: 0,
-            )
-            else -> sourceMatchSubtitle(
-                contentType = active.contentType,
-                percentage = contentMatchPercentage ?: 0,
-            )
+        row.subtitle.text = contentRow?.subtitle ?: when {
+            isPending -> AppleMenuText.pick("获取中…", "Fetching…")
+            isFailed -> AppleMenuText.pick("切换失败", "Switch failed")
+            else -> missingLyricsSourceStatusLabel(status!!)
         }
         row.subtitle.setTextColor(active.onSurfaceVariantColor)
         row.indicator.text = when {
@@ -120,11 +124,52 @@ internal fun AppleOnlineSourceMenuHooks.refreshActiveLyricsSourceDialog(songId: 
             else -> ""
         }
         row.indicator.contentDescription = when {
-            isPending -> "获取中"
-            isSelected -> "已选择"
+            isPending -> AppleMenuText.pick("获取中", "Fetching")
+            isSelected -> AppleMenuText.pick("已选择", "Selected")
             else -> null
         }
     }
+}
+
+/** Row behavior for translation/pronunciation sources; shared by first render and refresh. */
+internal data class ContentSourceRow(
+    val selectable: Boolean,
+    val dimmed: Boolean,
+    val subtitle: String,
+)
+
+internal fun AppleOnlineSourceMenuHooks.contentSourceRow(
+    songId: String,
+    contentType: String,
+    source: String,
+    isSelected: Boolean,
+    isPending: Boolean,
+    isFailedSwitch: Boolean,
+    anyPending: Boolean,
+): ContentSourceRow {
+    val percentage = contentMatchPercentage(songId, contentType, source)
+    val state = nativeTranslationStore.sourceContentState(songId, source)
+        ?: missingLyricsSourceContentState(songId, source)
+    val kind = onlineSourceRowKind(contentType, source, isSelected, state, percentage != null)
+    // The core keeps what a searched source returned, so such a switch only re-matches locally;
+    // a source it never got a result from (not reported, or failed) really goes to the network.
+    val resultKept = state != null && !state.searchFailed
+    val subtitle = when {
+        isPending -> if (resultKept) AppleMenuText.pick("切换中…", "Switching…") else AppleMenuText.pick("获取中…", "Fetching…")
+        isFailedSwitch -> AppleMenuText.pick("切换失败", "Switch failed")
+        kind == OnlineSourceRowKind.NO_CONTENT ->
+            if (contentType == "pronunciation") AppleMenuText.pick("暂无发音", "No pronunciation") else AppleMenuText.pick("暂无翻译", "No translation")
+        kind == OnlineSourceRowKind.SEARCH_FAILED ->
+            if (contentType == "pronunciation") AppleMenuText.pick("上次检索暂无发音 · 点击重试", "No pronunciation last time · Tap to retry") else AppleMenuText.pick("上次检索暂无翻译 · 点击重试", "No translation last time · Tap to retry")
+        kind == OnlineSourceRowKind.SEARCHING -> AppleMenuText.pick("检索中…", "Searching…")
+        isSelected -> currentSourceSubtitle(contentType, percentage ?: 0)
+        else -> sourceMatchSubtitle(contentType, percentage ?: 0)
+    }
+    return ContentSourceRow(
+        selectable = !anyPending && !isSelected && kind != OnlineSourceRowKind.NO_CONTENT,
+        dimmed = !isPending && kind == OnlineSourceRowKind.NO_CONTENT,
+        subtitle = subtitle,
+    )
 }
 
 internal fun AppleOnlineSourceMenuHooks.resolveThemeColor(
@@ -229,13 +274,13 @@ internal fun AppleOnlineSourceMenuHooks.requestOnlineSourceSwitch(
 }
 
 internal fun AppleOnlineSourceMenuHooks.sourceMenuSourceName(source: String): String = when (source) {
-    APPLE_NATIVE_SOURCE -> "Apple Music 原生歌词"
+    APPLE_NATIVE_SOURCE -> AppleMenuText.pick("Apple Music 原生歌词", "Apple Music native lyrics")
     "LB" -> "LunaBeat"
     "AMLL" -> "AMLL"
-    "NE" -> "网易云音乐"
-    "QM" -> "QQ音乐"
-    "KUWO" -> "酷我音乐"
-    "KUGOU" -> "酷狗音乐"
+    "NE" -> AppleMenuText.pick("网易云音乐", "NetEase Cloud Music")
+    "QM" -> AppleMenuText.pick("QQ音乐", "QQ Music")
+    "KUWO" -> AppleMenuText.pick("酷我音乐", "Kuwo Music")
+    "KUGOU" -> AppleMenuText.pick("酷狗音乐", "Kugou Music")
     else -> source
 }
 
@@ -308,13 +353,13 @@ internal fun AppleOnlineSourceMenuHooks.contentMatchPercentage(
 
 internal fun AppleOnlineSourceMenuHooks.sourceMatchSubtitle(contentType: String, percentage: Int): String =
     if (contentType == "pronunciation") {
-        "发音匹配度${percentage}%"
+        AppleMenuText.pick("发音匹配度${percentage}%", "Pronunciation match ${percentage}%")
     } else {
-        "翻译匹配度${percentage}%"
+        AppleMenuText.pick("翻译匹配度${percentage}%", "Translation match ${percentage}%")
     }
 
 internal fun AppleOnlineSourceMenuHooks.currentSourceSubtitle(contentType: String, percentage: Int): String =
-    "当前使用 · ${sourceMatchSubtitle(contentType, percentage)}"
+    AppleMenuText.pick("当前使用", "In use") + " · " + sourceMatchSubtitle(contentType, percentage)
 
 internal fun AppleOnlineSourceMenuHooks.storedSource(songId: String?, contentType: String): String? = when (contentType) {
     "pronunciation" -> nativeTranslationStore.pronunciationSource(songId)

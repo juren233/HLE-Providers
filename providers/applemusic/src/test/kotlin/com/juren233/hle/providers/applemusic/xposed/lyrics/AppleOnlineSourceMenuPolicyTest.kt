@@ -6,6 +6,7 @@
 
 package com.juren233.hle.providers.applemusic.xposed.lyrics
 
+import com.juren233.hle.providers.applemusic.xposed.AppleMenuText
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceStatus
 import com.juren233.hle.providers.applemusic.xposed.OnlineSourceMenuStatus
 import com.juren233.hle.providers.applemusic.xposed.currentLyricsMenuSongId
@@ -15,9 +16,21 @@ import com.juren233.hle.providers.applemusic.xposed.missingLyricsSourceStatusLab
 import com.juren233.hle.providers.applemusic.xposed.sourceMenuLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 
 class AppleOnlineSourceMenuPolicyTest {
+    @Before
+    fun pinChinese() {
+        AppleMenuText.chineseOverride = true
+    }
+
+    @After
+    fun releaseLanguage() {
+        AppleMenuText.chineseOverride = null
+    }
+
     @Test
     fun `lyrics menu label uses every provider prefix`() {
         assertEquals("网易歌词", sourceMenuLabel("NE", "lyrics"))
@@ -26,12 +39,44 @@ class AppleOnlineSourceMenuPolicyTest {
         assertEquals("酷狗歌词", sourceMenuLabel("KUGOU", "lyrics"))
         assertEquals("LB歌词", sourceMenuLabel("LB", "lyrics"))
         assertEquals("原生歌词", sourceMenuLabel("APPLE", "lyrics"))
+        assertEquals("原生发音", sourceMenuLabel("APPLE", "pronunciation"))
+        assertEquals("原生翻译", sourceMenuLabel("APPLE", "translation"))
     }
 
     @Test
     fun `legacy supplement without a known provider uses neutral source label`() {
         assertEquals("歌词来源", missingLyricsSourceMenuLabel(null))
         assertEquals("酷狗歌词", missingLyricsSourceMenuLabel("KUGOU"))
+    }
+
+    @Test
+    fun `english menu labels read naturally`() {
+        AppleMenuText.chineseOverride = false
+        assertEquals("NE Lyrics", sourceMenuLabel("NE", "lyrics"))
+        assertEquals("QQ Pronunciation", sourceMenuLabel("QM", "pronunciation"))
+        assertEquals("Kuwo Translation", sourceMenuLabel("KUWO", "translation"))
+        assertEquals("Native Lyrics", sourceMenuLabel("APPLE", "lyrics"))
+        assertEquals("Native Pronunciation", sourceMenuLabel("APPLE", "pronunciation"))
+        assertEquals("Native Translation", sourceMenuLabel("APPLE", "translation"))
+        assertEquals("Lyrics Source", missingLyricsSourceMenuLabel(null))
+        assertEquals("Switching", sourceMenuLabel("NE", "lyrics", OnlineSourceMenuStatus.SWITCHING))
+        assertEquals("Switch failed", sourceMenuLabel("NE", "lyrics", OnlineSourceMenuStatus.FAILED))
+    }
+
+    @Test
+    fun `english line count is singular for one line`() {
+        AppleMenuText.chineseOverride = false
+        fun label(count: Int) = missingLyricsSourceStatusLabel(
+            AppleMissingLyricsSourceStatus(
+                source = "NE",
+                searched = true,
+                found = true,
+                wordTimed = false,
+                lineCount = count,
+            )
+        )
+        assertEquals("Line-synced · 1 line", label(1))
+        assertEquals("Line-synced · 12 lines", label(12))
     }
 
     @Test

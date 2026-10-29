@@ -21,6 +21,7 @@ object PlaybackManager {
     private var lyricsParserAccess: AppleLyricsParserAccess? = null
     private var onMissingLyricsSupplementBuilt: ((Song) -> Unit)? = null
     private var hasKnownNativeLyrics: ((String) -> Boolean)? = null
+    private var isSupplementRevoked: ((String) -> Boolean)? = null
 
     // 状态追踪
     private var currentSongId: String? = null
@@ -35,12 +36,14 @@ object PlaybackManager {
         hookResolver: AppleMusicHookResolver,
         onMissingLyricsSupplementBuilt: (Song) -> Unit,
         hasKnownNativeLyrics: (String) -> Boolean,
+        isSupplementRevoked: (String) -> Boolean,
     ) {
         this.player = remotePlayer
         this.lyricRequester = requester
         this.lyricsParserAccess = AppleLyricsParserAccess.from(hookResolver)
         this.onMissingLyricsSupplementBuilt = onMissingLyricsSupplementBuilt
         this.hasKnownNativeLyrics = hasKnownNativeLyrics
+        this.isSupplementRevoked = isSupplementRevoked
     }
 
     /**
@@ -268,7 +271,10 @@ object PlaybackManager {
                     previousSong = previousSong,
                 )
             val publishedSong = when {
-                authoritativeNativeLyrics -> markAsConfirmedAppleNativeLyrics(song)
+                authoritativeNativeLyrics -> markAsConfirmedAppleNativeLyrics(
+                    song,
+                    supplementRevoked = isSupplementRevoked?.invoke(id) == true,
+                )
                 missingLyricsSupplement -> markAsMissingLyricsSupplement(song)
                 else -> song
             }
@@ -311,6 +317,22 @@ object PlaybackManager {
     }
 
     private var lastSong: Song? = null
+
+    /**
+     * 目录源补充被撤销后，把已确认的原生歌词重新发布一份带撤销标记的版本，让核心回到
+     * 原生歌词基准。刷新界面绑定不会触发这次发布，所以必须在这里直接发。
+     * 原生歌词尚未发布时返回 false；之后的发布会通过 [isSupplementRevoked] 携带标记。
+     */
+    @Synchronized
+    internal fun republishNativeAfterSupplementRevoked(songId: String): Boolean {
+        val song = lastSong?.takeIf { it.id == songId } ?: return false
+        val confirmed = song.metadata
+            ?.getString(LyricMetadataKeys.APPLE_NATIVE_LYRICS_CONFIRMED)
+            .toBoolean()
+        if (!confirmed) return false
+        ProviderLogger.info("Apple Music 补充已撤销，重新发布原生歌词: id=$songId")
+        return setSong(markAsConfirmedAppleNativeLyrics(song, supplementRevoked = true))
+    }
 
     internal fun mergeCatalogMetadata(currentSong: Song?, resolvedSong: Song): Song {
         val currentSameSong = currentSong?.takeIf { it.id == resolvedSong.id }
@@ -524,10 +546,11 @@ object PlaybackManager {
      * Apple 的非空原生主结果必须显式越过跨进程的 supplement 保留逻辑。
      * 普通无标记回调仍按旧规则继承补充身份，只有已由原生主结果确认的歌曲会携带此标记。
      */
-    internal fun markAsConfirmedAppleNativeLyrics(song: Song): Song {
+    internal fun markAsConfirmedAppleNativeLyrics(song: Song, supplementRevoked: Boolean = false): Song {
         val replacedKeys = setOf(
             LyricMetadataKeys.APPLE_LYRICS_CACHE_SOURCE,
             LyricMetadataKeys.APPLE_NATIVE_LYRICS_CONFIRMED,
+            LyricMetadataKeys.APPLE_SUPPLEMENT_REVOKED,
             LyricMetadataKeys.APPLE_MISSING_LYRICS_SUPPLEMENT,
             LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE,
             LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE_STATUSES,
@@ -540,6 +563,7 @@ object PlaybackManager {
             )
             add(LyricMetadataKeys.APPLE_LYRICS_CACHE_SOURCE to "apple")
             add(LyricMetadataKeys.APPLE_NATIVE_LYRICS_CONFIRMED to "true")
+            if (supplementRevoked) add(LyricMetadataKeys.APPLE_SUPPLEMENT_REVOKED to "true")
         }
         return song.copy(metadata = lyricMetadataOf(*metadataEntries.toTypedArray()))
     }

@@ -118,6 +118,16 @@ internal fun shouldUseTtmlCatalogOverAppleNativeLyrics(
     return nativeStats.lineCount != ttmlCatalogLineCount
 }
 
+/**
+ * 目录源能否自动接管歌词页：先要有资格（[shouldUseTtmlCatalogOverAppleNativeLyrics] 等），
+ * 且原生歌词已经逐字时不得自动覆盖，除非用户明确选了目录源。
+ */
+internal fun shouldAllowTtmlCatalogTakeover(
+    eligible: Boolean,
+    nativeStats: AppleNativeLyricsTimingStats?,
+    userChoseCatalog: Boolean,
+): Boolean = eligible && (userChoseCatalog || nativeStats?.isWordTimed != true)
+
 internal fun shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
     ttmlCatalogEnabled: Boolean,
     storedSourceInfo: AppleMissingLyricsSourceInfo?,

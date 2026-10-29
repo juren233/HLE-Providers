@@ -11,9 +11,21 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 
 class AppleLyricsProviderPolicyTest {
+    @Before
+    fun pinChinese() {
+        AppleMenuText.chineseOverride = true
+    }
+
+    @After
+    fun releaseLanguage() {
+        AppleMenuText.chineseOverride = null
+    }
+
 
     @Test
     fun `system font variation cache reuses only identical requests and stays bounded`() {

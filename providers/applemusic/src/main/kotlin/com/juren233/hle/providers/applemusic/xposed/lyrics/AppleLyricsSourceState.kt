@@ -29,8 +29,16 @@ internal class AppleNativeLyricsKnowledge(private val limit: Int) {
 internal class AppleLyricsSourceSelection {
     private var playbackSongId: String? = null
     private val selections = mutableMapOf<String, String>()
+    private val requests = mutableMapOf<String, String>()
 
     @Synchronized fun selected(songId: String): String? = selections[songId]
+
+    /**
+     * 用户在来源菜单里点选的来源。核心先送来补充、后回调切换结果，补充到达时 [select] 还没发生，
+     * 所以点击瞬间就要记下意图，否则手动切换会被当成自动接管拒绝。
+     */
+    @Synchronized fun noteRequest(songId: String, source: String) { requests[songId] = source }
+    @Synchronized fun requested(songId: String): String? = requests[songId]
     @Synchronized fun select(songId: String, source: String) { selections[songId] = source }
     @Synchronized fun remove(songId: String) { selections.remove(songId) }
 
@@ -38,6 +46,7 @@ internal class AppleLyricsSourceSelection {
     @Synchronized fun beginPlayback(songId: String): Boolean {
         if (playbackSongId == songId) return false
         selections.clear()
+        requests.clear()
         playbackSongId = songId
         return true
     }

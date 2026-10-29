@@ -42,6 +42,15 @@ internal object ApplePronunciationPolicy {
      * word/time vector. This preserves Apple-source precedence without creating synthetic
      * native words or inheriting an incompatible pronunciation timeline.
      */
+    /**
+     * True when two words of one line share a begin time (negative begins are placeholders and
+     * are never looked up). Apple's row builder keys its reusable per-word views by begin.
+     */
+    fun hasSharedWordBegin(begins: List<Int>): Boolean {
+        val seen = HashSet<Int>()
+        return begins.any { it >= 0 && !seen.add(it) }
+    }
+
     fun hasCompatibleOfficialWordTiming(
         mainWordBegins: List<Int>,
         pronunciationWordBegins: List<Int>,

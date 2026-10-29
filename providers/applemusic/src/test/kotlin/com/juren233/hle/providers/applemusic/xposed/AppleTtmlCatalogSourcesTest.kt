@@ -10,9 +10,21 @@ import com.juren233.hle.providers.applemusic.xposed.sourceMenuLabel
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceInfo
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceStatus
 import org.junit.Assert.assertEquals
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 
 class AppleTtmlCatalogSourcesTest {
+    @Before
+    fun pinChinese() {
+        AppleMenuText.chineseOverride = true
+    }
+
+    @After
+    fun releaseLanguage() {
+        AppleMenuText.chineseOverride = null
+    }
+
     @Test
     fun `every TTML catalog source builds or presents its native model`() {
         listOf("LB", "AMLL").forEach { source ->

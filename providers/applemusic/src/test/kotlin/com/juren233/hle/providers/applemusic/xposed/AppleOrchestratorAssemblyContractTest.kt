@@ -158,8 +158,8 @@ class AppleOrchestratorAssemblyContractTest {
         val metadata = source(METADATA_FILE)
         val catalog = source(CATALOG_FILE)
         assertEquals(
-            "歌词/播放组装群只保留迁移前的 9 处窄守卫（1 处 playbackHooks + 8 处 missingLyricsHooks）",
-            9,
+            "歌词/播放组装群只保留 11 处窄守卫（1 处 playbackHooks + 10 处 missingLyricsHooks；其中第 10 处是翻译来源菜单读取来源检索状态的 missingLyricsSourceContentState，第 11 处是来源菜单点击时记录用户选择意图的 requestOnlineSource，均与同类菜单 lambda 同构）",
+            11,
             Regex("isInitialized").findAll(lyrics).count(),
         )
         assertEquals(

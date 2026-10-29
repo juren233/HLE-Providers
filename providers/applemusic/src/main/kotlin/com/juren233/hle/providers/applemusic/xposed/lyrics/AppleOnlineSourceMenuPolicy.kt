@@ -7,6 +7,8 @@
 package com.juren233.hle.providers.applemusic.xposed
 
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceStatus
+import com.juren233.hyperlyricsenhanced.common.lyric.OnlineSourceContentState
+import com.juren233.hyperlyricsenhanced.online.model.Source
 
 internal fun effectiveOnlineSourceSelection(
     storedSource: String?,
@@ -69,31 +71,24 @@ internal fun sourceMenuLabel(
     contentType: String,
     status: OnlineSourceMenuStatus = OnlineSourceMenuStatus.STABLE,
 ): String {
-    if (
-        source == "APPLE" &&
-        contentType == "lyrics" &&
-        status == OnlineSourceMenuStatus.STABLE
-    ) {
-        return "原生歌词"
-    }
     val sourceLabel = when (source) {
         "QM" -> "QQ"
-        "KUWO" -> "酷我"
-        "KUGOU" -> "酷狗"
+        "KUWO" -> AppleMenuText.pick("酷我", "Kuwo")
+        "KUGOU" -> AppleMenuText.pick("酷狗", "Kugou")
         "LB" -> "LB"
         "AMLL" -> "AMLL"
-        "APPLE" -> "Apple Music原生"
-        else -> "网易"
+        "APPLE" -> AppleMenuText.pick("原生", "Native")
+        else -> AppleMenuText.pick("网易", "NE")
     }
     val contentLabel = when (contentType) {
-        "pronunciation" -> "发音"
-        "lyrics" -> "歌词"
-        else -> "翻译"
+        "pronunciation" -> AppleMenuText.pick("发音", "Pronunciation")
+        "lyrics" -> AppleMenuText.pick("歌词", "Lyrics")
+        else -> AppleMenuText.pick("翻译", "Translation")
     }
     return when (status) {
-        OnlineSourceMenuStatus.STABLE -> sourceLabel + contentLabel
-        OnlineSourceMenuStatus.SWITCHING -> "切换中"
-        OnlineSourceMenuStatus.FAILED -> "切换失败"
+        OnlineSourceMenuStatus.STABLE -> AppleMenuText.join(sourceLabel, contentLabel)
+        OnlineSourceMenuStatus.SWITCHING -> AppleMenuText.pick("切换中", "Switching")
+        OnlineSourceMenuStatus.FAILED -> AppleMenuText.pick("切换失败", "Switch failed")
     }
 }
 
@@ -102,7 +97,7 @@ internal fun sourceMenuLabel(
  * 在来源状态重新检索完成前，必须使用中性标题，不能假装它来自默认的网易。
  */
 internal fun missingLyricsSourceMenuLabel(source: String?): String =
-    source?.let { sourceMenuLabel(it, "lyrics") } ?: "歌词来源"
+    source?.let { sourceMenuLabel(it, "lyrics") } ?: AppleMenuText.pick("歌词来源", "Lyrics Source")
 
 /**
  * `searched=true, found=false` 只表示没有匹配到可用歌词，并不等于请求失败。
@@ -110,12 +105,15 @@ internal fun missingLyricsSourceMenuLabel(source: String?): String =
  */
 internal fun missingLyricsSourceStatusLabel(status: AppleMissingLyricsSourceStatus): String =
     when {
-        status.source == "APPLE" -> "Apple Music 原生歌词"
+        status.source == "APPLE" -> AppleMenuText.pick("Apple Music 原生歌词", "Apple Music native lyrics")
         status.searched && status.found ->
-            "${if (status.wordTimed) "逐字歌词" else "逐行歌词"} · " +
-                "${status.lineCount} 句"
-        status.searched -> "未找到匹配歌词"
-        else -> "正在获取来源信息"
+            "${if (status.wordTimed) AppleMenuText.pick("逐字歌词", "Word-synced") else AppleMenuText.pick("逐行歌词", "Line-synced")} · " +
+                AppleMenuText.pick(
+                    "${status.lineCount} 句",
+                    if (status.lineCount == 1) "1 line" else "${status.lineCount} lines",
+                )
+        status.searched -> AppleMenuText.pick("未找到匹配歌词", "No matching lyrics found")
+        else -> AppleMenuText.pick("正在获取来源信息", "Fetching source info…")
     }
 
 internal fun isMissingLyricsSourceSelectable(
@@ -140,3 +138,37 @@ internal fun shouldDeferNativeTranslationPresentationRefresh(
     popupShowing &&
         !activeMenuSongId.isNullOrBlank() &&
         (expectedSongId.isNullOrBlank() || activeMenuSongId == expectedSongId)
+
+/** What a translation/pronunciation source row can offer, from what the core searched. */
+internal enum class OnlineSourceRowKind {
+    /** Has content (or is the current source): shows its match percentage. */
+    AVAILABLE,
+
+    /** Searched and returned none, or cannot supply this content at all: dimmed, not clickable. */
+    NO_CONTENT,
+
+    /** Searched but returned nothing usable (miss, timeout): clickable to search again. */
+    SEARCH_FAILED,
+
+    /** The core has not reported this source yet. */
+    SEARCHING,
+}
+
+/**
+ * [state] is null while the core has not reported the source. Every source, TTML catalog sources
+ * included, is judged by the content the core actually found in it.
+ */
+internal fun onlineSourceRowKind(
+    contentType: String,
+    source: String,
+    isSelected: Boolean,
+    state: OnlineSourceContentState?,
+    hasMatchStat: Boolean,
+): OnlineSourceRowKind = when {
+    isSelected -> OnlineSourceRowKind.AVAILABLE
+    state == null -> if (hasMatchStat) OnlineSourceRowKind.AVAILABLE else OnlineSourceRowKind.SEARCHING
+    state.searchFailed -> OnlineSourceRowKind.SEARCH_FAILED
+    (if (contentType == "pronunciation") state.hasPronunciation else state.hasTranslation) ->
+        OnlineSourceRowKind.AVAILABLE
+    else -> OnlineSourceRowKind.NO_CONTENT
+}

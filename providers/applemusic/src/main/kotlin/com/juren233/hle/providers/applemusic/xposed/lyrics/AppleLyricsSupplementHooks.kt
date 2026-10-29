@@ -350,7 +350,52 @@ internal class AppleLyricsSupplementHooks(
     }
 
 
+    private val consumptionDiagnostics = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     fun hasCurrentOnlineContentConsumption(
+        songId: String?,
+        contentType: String,
+    ): Boolean {
+        val consumed = computeOnlineContentConsumption(songId, contentType)
+        if (AppleProviderEnvironment.diagnosticsEnabled && contentType == "translation" && !songId.isNullOrBlank()) {
+            val details = describeTranslationConsumption(songId)
+            val line = "结果=$consumed, $details"
+            // 状态不变就不重复记录，菜单每次重绘都会调用本函数。
+            if (consumptionDiagnostics.put(songId, line) != line) {
+                ProviderLogger.diagnostic("在线翻译消费判定: id=$songId, $line")
+            }
+        }
+        return consumed
+    }
+
+    private fun describeTranslationConsumption(songId: String): String {
+        if (songId != currentAppleLyricsSongId) return "当前歌词页歌曲=${currentAppleLyricsSongId}与请求不符"
+        val supplementTranslation = missingLyricsSupplement().hasTranslation(songId)
+        val nativeEnabled = isNativeOnlineTranslationEnabled()
+        val songNative = currentAppleLyricsNativeSong(songId)
+        val lines = songNative?.let { currentAppleLyricsNativeLines(it) }.orEmpty()
+        var official = 0
+        var online = 0
+        lines.forEach { line ->
+            val hasOfficial = AppleNativeOnlineTranslationStore.sanitizeContent(
+                nativeRawLineText(
+                    line,
+                    lyricsRuntimeMember(AppleMusicRuntimeMember.LYRICS_NATIVE_TRANSLATION_TEXT_METHOD),
+                )
+            ) != null
+            if (hasOfficial) official++
+            if (onlineTranslationForNativeLine(line) != null) online++
+        }
+        val first = lines.firstOrNull()
+        val firstBegin = first?.let { (lyricsNativeCall(it, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number)?.toLong() }
+        val firstEnd = first?.let { (lyricsNativeCall(it, AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD) as? Number)?.toLong() }
+        val overlay = nativeOnlineTranslationStore.diagnostic(songId, firstBegin ?: -1L, firstEnd ?: -1L)
+        return "补充含翻译=$supplementTranslation, 原生在线翻译开关=$nativeEnabled, " +
+            "原生歌曲=${songNative != null}, 原生行=${lines.size}, 行自带官方翻译=$official, 行可匹配在线翻译=$online, " +
+            "首行=$firstBegin-$firstEnd, $overlay"
+    }
+
+    private fun computeOnlineContentConsumption(
         songId: String?,
         contentType: String,
     ): Boolean {

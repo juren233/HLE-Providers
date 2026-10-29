@@ -219,6 +219,24 @@ class PlaybackManagerTest {
     }
 
     @Test
+    fun confirmedAppleNativeLyricsCarryTheRevokedMarkerOnlyWhenTheSupplementWasWithdrawn() {
+        val song = Song(
+            id = "1645308331",
+            metadata = lyricMetadataOf(
+                LyricMetadataKeys.APPLE_SUPPLEMENT_REVOKED to "true",
+            ),
+            lyrics = listOf(RichLyricLine(begin = 0L, end = 1_000L, text = "native line")),
+        )
+
+        val withdrawn = PlaybackManager.markAsConfirmedAppleNativeLyrics(song, supplementRevoked = true)
+        assertEquals("true", withdrawn.metadata?.getString(LyricMetadataKeys.APPLE_SUPPLEMENT_REVOKED))
+
+        val kept = PlaybackManager.markAsConfirmedAppleNativeLyrics(song, supplementRevoked = false)
+        assertEquals(null, kept.metadata?.getString(LyricMetadataKeys.APPLE_SUPPLEMENT_REVOKED))
+        assertEquals("true", kept.metadata?.getString(LyricMetadataKeys.APPLE_NATIVE_LYRICS_CONFIRMED))
+    }
+
+    @Test
     fun confirmedAppleNativeLyricsRemoveSupplementIdentityBeforePublication() {
         val confirmed = PlaybackManager.markAsConfirmedAppleNativeLyrics(
             Song(

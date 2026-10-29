@@ -381,6 +381,13 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                     null
                 }
             },
+            missingLyricsSourceContentState = { songId, source ->
+                if (this::missingLyricsHooks.isInitialized) {
+                    missingLyricsHooks.sourceContentState(songId, source)
+                } else {
+                    null
+                }
+            },
             missingLyricsPronunciationMatchPercentage = { songId, source ->
                 if (this::missingLyricsHooks.isInitialized) {
                     missingLyricsHooks.pronunciationMatchPercentage(songId, source)
@@ -396,6 +403,9 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                 }
             },
             requestOnlineSource = { requestId, songId, contentType, source ->
+                if (contentType == "lyrics" && this::missingLyricsHooks.isInitialized) {
+                    missingLyricsHooks.lyricsSourceSelection.noteRequest(songId, source)
+                }
                 directPlayer?.requestOnlineLyricContentSource(
                     requestId = requestId,
                     songId = songId,
@@ -576,6 +586,7 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             hookResolver = runtime.hookResolver,
             onMissingLyricsSupplementBuilt = lyricsHooks::receiveModuleMissingLyrics,
             hasKnownNativeLyrics = missingLyricsHooks::hasKnownNativeLyricsFor,
+            isSupplementRevoked = missingLyricsHooks::isSupplementRevoked,
         )
         playbackHooks.attachRemotePlayer(activePlayer)
         playbackHooks.setDisplayTranslation(PreferencesMonitor.isTranslationSelected())

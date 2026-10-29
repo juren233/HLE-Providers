@@ -4,6 +4,8 @@ import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationContentPolicy
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStat
+import com.juren233.hyperlyricsenhanced.common.lyric.OnlineSourceContentState
+import com.juren233.hyperlyricsenhanced.common.lyric.OnlineSourceContentStatesCodec
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStatsCodec
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
 
@@ -38,6 +40,7 @@ internal class AppleNativeOnlineTranslationStore {
         val pronunciationSource: String?,
         val translationMatchStats: Map<String, OnlineTranslationMatchStat>,
         val pronunciationMatchStats: Map<String, OnlineTranslationMatchStat>,
+        val sourceStates: Map<String, OnlineSourceContentState>,
     )
 
     @Volatile
@@ -110,6 +113,9 @@ internal class AppleNativeOnlineTranslationStore {
             pronunciationMatchStats = OnlineTranslationMatchStatsCodec.decode(
                 song.metadata?.getString(LyricMetadataKeys.ONLINE_PRONUNCIATION_MATCH_STATS)
             ),
+            sourceStates = OnlineSourceContentStatesCodec.decode(
+                song.metadata?.getString(LyricMetadataKeys.ONLINE_SOURCE_CONTENT_STATES)
+            ),
         )
     }
 
@@ -123,6 +129,16 @@ internal class AppleNativeOnlineTranslationStore {
     }
 
     fun revision(): Long = contentRevision
+
+    /** 仅诊断：覆盖层与当前歌曲、请求时间键的对应关系。 */
+    @Synchronized
+    fun diagnostic(songId: String?, begin: Long, end: Long): String {
+        val current = overlay ?: return "覆盖层=null"
+        return "覆盖层歌曲=${current.songId}(${if (current.songId == songId) "一致" else "不一致"}), " +
+            "带翻译=${current.hasTranslation}, 翻译来源=${current.translationSource}, " +
+            "条目=${current.exactContent.size}, 时间键含请求=${current.translationsByTiming.containsKey(TimingKey(begin, end))}, " +
+            "首个时间键=${current.translationsByTiming.keys.firstOrNull()}, 修订=$contentRevision"
+    }
 
     @Synchronized
     fun isCurrentRevision(songId: String?, revision: Long): Boolean =
@@ -140,6 +156,12 @@ internal class AppleNativeOnlineTranslationStore {
 
     fun translationSource(songId: String?): String? =
         overlay?.takeIf { it.songId == songId && it.hasTranslation }?.translationSource
+
+    fun sourceContentState(songId: String?, source: String): OnlineSourceContentState? =
+        overlay
+            ?.takeIf { it.songId == songId }
+            ?.sourceStates
+            ?.get(source)
 
     fun translationMatchPercentage(songId: String?, source: String): Int? =
         overlay

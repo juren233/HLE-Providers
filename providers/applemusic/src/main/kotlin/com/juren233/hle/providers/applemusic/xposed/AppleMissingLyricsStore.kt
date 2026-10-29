@@ -15,6 +15,8 @@ import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceInf
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceMetadata
 import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStat
+import com.juren233.hyperlyricsenhanced.common.lyric.OnlineSourceContentState
+import com.juren233.hyperlyricsenhanced.common.lyric.OnlineSourceContentStatesCodec
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationMatchStatsCodec
 import java.security.MessageDigest
 
@@ -84,6 +86,7 @@ internal class AppleMissingLyricsStore {
         val pronunciationSource: String?,
         val translationMatchStats: Map<String, OnlineTranslationMatchStat>,
         val pronunciationMatchStats: Map<String, OnlineTranslationMatchStat>,
+        val sourceStates: Map<String, OnlineSourceContentState>,
     )
 
     private data class NativeModel(
@@ -232,6 +235,9 @@ internal class AppleMissingLyricsStore {
             pronunciationMatchStats = OnlineTranslationMatchStatsCodec.decode(
                 song.metadata?.getString(LyricMetadataKeys.ONLINE_PRONUNCIATION_MATCH_STATS)
             ).ifEmpty { previousContent?.pronunciationMatchStats.orEmpty() },
+            sourceStates = OnlineSourceContentStatesCodec.decode(
+                song.metadata?.getString(LyricMetadataKeys.ONLINE_SOURCE_CONTENT_STATES)
+            ).ifEmpty { previousContent?.sourceStates.orEmpty() },
         )
         // TTML/native 模型只依赖主歌词文本与逐字时间轴；翻译和来源状态变化不需要
         // 重建模型，否则在线翻译赛马的多个同曲载荷会反复清空已暴露的 native model，
@@ -471,6 +477,7 @@ internal class AppleMissingLyricsStore {
     fun updatePlaybackIdentity(identity: AppleMissingLyricsPlaybackIdentity): Boolean {
         if (playbackIdentity == identity) return false
         if (content != null && content?.songId != identity.contentSongId) {
+            logContentCleared("playback_identity_changed", content?.songId)
             content = null
             presentationRevision += 1
             contentRevision += 1
@@ -556,11 +563,21 @@ internal class AppleMissingLyricsStore {
             return false
         }
         if (!songId.isNullOrBlank() && current.songId != songId) return false
+        logContentCleared("clear", current.songId)
         content = null
         presentationRevision += 1
         contentRevision += 1
         clearNativeModelLocked()
         return true
+    }
+
+    /** 仅诊断：补充内容被移出 Store 时记录调用栈，用于查明是谁清除了它。 */
+    private fun logContentCleared(reason: String, clearedSongId: String?) {
+        if (!AppleProviderEnvironment.diagnosticsEnabled) return
+        val caller = Throwable().stackTrace.drop(2).take(6).joinToString(" < ") {
+            "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}"
+        }
+        ProviderLogger.diagnostic("补充内容被清除: reason=$reason, songId=$clearedSongId, 调用栈=$caller")
     }
 
     private fun clearNativeModelLocked() {
@@ -626,6 +643,12 @@ internal class AppleMissingLyricsStore {
 
     fun translationSource(songId: String?): String? =
         content?.takeIf { songId.isNullOrBlank() || it.songId == songId }?.translationSource
+
+    fun sourceContentState(songId: String?, source: String): OnlineSourceContentState? =
+        content
+            ?.takeIf { it.songId == songId }
+            ?.sourceStates
+            ?.get(source)
 
     fun translationMatchPercentage(songId: String?, source: String): Int? =
         content
