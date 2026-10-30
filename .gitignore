@@ -13,3 +13,5 @@ docs/
 __pycache__/
 signing-private.pem
 signing-public.pem
+
+.DS_Store

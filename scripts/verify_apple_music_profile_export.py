@@ -172,13 +172,13 @@ def verify_1607_semantics(ctx, points, profile_id=''):
                if owner == to_dex_type(observe['className']) and ret == to_dex_type(observe['returnTypeName'])
                for method in all_methods(ctx, binary_name(owner))
                if method.name == name and tuple(method.param_types) == params and method.return_type == ret]
-    if profile_id.endswith('-1613'):
+    if profile_id.endswith(('-1613', '-1614')):
         # q3.b.c is the LiveData-without-initial overload; it delegates to q3.b.a,
         # which allocates the Compose state through z0.S.h / z0.v1.
         require(any(helper.dex and any(
             ('z0/S;' in owner and name == 'h') or ('z0/v1;' in owner and name == '<init>')
             for owner, name, _, _ in helper.dex.code_references(helper)['methods'])
-            for helper in helpers), '1613: observeAsState does not create the Compose state')
+            for helper in helpers), '1613/1614: observeAsState does not create the Compose state')
     else:
         require(any(helper.dex and any(name == 'isInitialized'
                                       for _, name, _, _ in helper.dex.code_references(helper)['methods'])
@@ -398,7 +398,7 @@ def verify_profile(ctx, profile):
         row_owner = row['parameterTypeNames'][1]
         names = row['runtimeMemberNames']
         key_owner = field(row_owner, names['ALBUM_COMPOSE_ROW_KEY_FIELD'],
-                          'D7.s' if profile['id'].endswith(('-1611', '-1613')) else 'D7.q')
+                          'D7.s' if profile['id'].endswith(('-1611', '-1613', '-1614')) else 'D7.q')
         if key_owner:
             field(key_owner, names['ALBUM_COMPOSE_KEY_ID_FIELD'], 'java.lang.String')
 
@@ -418,7 +418,7 @@ def verify_profile(ctx, profile):
         field(section, names['RADIO_SEARCH_ARTISTS_KIND_FIELD'], section)
         field(catalogue, names['RADIO_SEARCH_CATALOG_KIND_FIELD'], catalogue)
         method(scope, names['RADIO_SEARCH_SCOPE_CONTEXT_METHOD'], [],
-               'fi.f' if profile['id'].endswith(('-1611', '-1613')) else 'fi.e', False)
+               'fi.f' if profile['id'].endswith(('-1611', '-1613', '-1614')) else 'fi.e', False)
 
     names = ui['runtimeMemberNames']
     binding = field(ui['className'], names['LYRICS_UI_BINDING_FIELD'])
@@ -427,7 +427,7 @@ def verify_profile(ctx, profile):
           'com.apple.android.music.player.viewmodel.PlayerLyricsViewModel')
     adapter = field(ui['className'], names['LYRICS_UI_ADAPTER_FIELD'])
     adapters = points['LYRICS_RECYCLER_ADAPTER']
-    if profile['id'].endswith('-1613'):
+    if profile['id'].endswith(('-1613', '-1614')):
         # 1613 moved the active-line adapter next to the word adapter as siblings,
         # and the fragment field still references only the active-line one.
         require(any(adapter in [c.binary_name for c in lineage(ctx, item['className'])]
@@ -530,7 +530,8 @@ def verify_profile(ctx, profile):
             f'{model["className"]}: not the ListenNow callback-bearing model')
     semantic_checks = 0
     if profile['id'] in ('am-7.0.0-beta-1607', 'am-7.0.0-beta-1609',
-                         'am-7.0.0-beta-1611', 'am-7.0.0-beta-1613'):
+                         'am-7.0.0-beta-1611', 'am-7.0.0-beta-1613',
+                         'am-7.0.0-beta-1614'):
         from verify_apple_music_1607_members import verify_consumer_members
         verify_consumer_members(ctx, points, field, method, require,
                                 version_code=int(profile['id'].rsplit('-', 1)[1]))

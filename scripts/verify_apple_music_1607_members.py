@@ -8,7 +8,7 @@ The checks establish member compatibility, not execution or visual acceptance.
 
 
 def verify_consumer_members(ctx, points, field, method, require, version_code=1607):
-    # Consumer roles are unchanged in 1609/1611/1613; their Media3, lifecycle and Compose
+    # Consumer roles are unchanged in 1609/1611/1613/1614; their Media3, lifecycle and Compose
     # binary types moved. Keep the old APK contracts isolated from the new maps.
     renamed = {
         1609: {'z3.v': 'z3.w', 'z0.y0': 'z0.A0', 'z0.o1': 'z0.r1',
@@ -16,6 +16,8 @@ def verify_consumer_members(ctx, points, field, method, require, version_code=16
         1611: {'z3.v': 'z3.w', 'z0.y0': 'z0.C0', 'z0.o1': 'z0.s1',
                'androidx.lifecycle.G': 'androidx.lifecycle.H'},
         1613: {'z3.v': 'z3.w', 'z0.y0': 'z0.p1', 'z0.o1': 'z0.q1',
+               'androidx.lifecycle.G': 'androidx.lifecycle.H'},
+        1614: {'z3.v': 'z3.w', 'z0.y0': 'z0.p1', 'z0.o1': 'z0.q1',
                'androidx.lifecycle.G': 'androidx.lifecycle.H'},
     }.get(version_code)
     if renamed:

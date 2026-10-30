@@ -634,6 +634,7 @@ class AppleMusicHookProfilesTest {
         )
         assertEquals(
             listOf(
+                "com.apple.android.music.utils.m1",
                 "com.apple.android.music.utils.l1",
                 "com.apple.android.music.utils.f1",
                 "com.apple.android.music.utils.g1",

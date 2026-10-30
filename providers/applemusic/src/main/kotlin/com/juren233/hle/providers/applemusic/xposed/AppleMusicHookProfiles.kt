@@ -2560,6 +2560,70 @@ internal object AppleMusicHookProfiles {
         )
     }
 
+    private val APPLE_MUSIC_7_0_0_1614 by lazy {
+        AppleMusicHookProfile(
+            id = "am-7.0.0-beta-1614",
+            versionName = "7.0.0",
+            versionCodes = setOf(1614L),
+            matchVersionName = false,
+            settingsDataCategoryHasNoSimGate = true,
+            hookTargets = verified7001614Targets(),
+        )
+    }
+
+    /**
+     * Original 1614 base.apk SHA-256: 0b063d70fc55b8a7a1f304ef8a1e8a60b59aa22cd18ab911034d8852a2278bbc.
+     * Descriptors come from the original four DEX files and are verified by AppleMusicProfileBinaryTest.
+     * Only the groups below moved from 1613; every other target is carried over unchanged.
+     */
+    private fun verified7001614Targets(): Map<AppleMusicHookPoint, List<AppleMusicHookTarget>> {
+        val inherited = AppleMusicHookPoint.entries.associateWith(APPLE_MUSIC_7_0_0_1613::targets)
+            .filterValues { it.isNotEmpty() }
+        fun target(point: AppleMusicHookPoint, index: Int = 0) = inherited.getValue(point)[index]
+        // 1614 shifted the abstract lyrics adapter's members by one: x()TreeSet is the active-position
+        // set, y()ttml.i the lyrics, P(List,int,Pair[])V the active-line update (1613: w/x/O).
+        fun lyricsAdapter(index: Int) = target(AppleMusicHookPoint.LYRICS_RECYCLER_ADAPTER, index).let { base ->
+            base.copy(
+                runtimeMemberNames = base.runtimeMemberNames + mapOf(
+                    AppleMusicRuntimeMember.LYRICS_ADAPTER_ACTIVE_POSITIONS_METHOD to "x",
+                    AppleMusicRuntimeMember.LYRICS_ADAPTER_LYRICS_METHOD to "y",
+                    AppleMusicRuntimeMember.LYRICS_ADAPTER_ACTIVE_LINES_UPDATE_METHOD to "P",
+                ),
+            )
+        }
+        return inherited + mapOf(
+            // The 1613 utils.l1 became a lambda; the text-style utility is now utils.m1 (s unchanged).
+            AppleMusicHookPoint.APPLE_TEXT_STYLE_UTILS to listOf(
+                target(AppleMusicHookPoint.APPLE_TEXT_STYLE_UTILS).copy(
+                    className = "com.apple.android.music.utils.m1",
+                ),
+            ),
+            // ea.a: x(List)V submits, l(RecyclerView$D,int)V binds; the displayed entry is the
+            // inherited ListAdapter getItem androidx.recyclerview.widget.v.w(int)Object (1613: v).
+            AppleMusicHookPoint.IN_APP_QUEUE_ADAPTER_SUBMIT to listOf(
+                target(AppleMusicHookPoint.IN_APP_QUEUE_ADAPTER_SUBMIT).let { base ->
+                    base.copy(
+                        methodName = "x",
+                        runtimeMemberNames = base.runtimeMemberNames + mapOf(
+                            AppleMusicRuntimeMember.QUEUE_ADAPTER_DISPLAYED_ENTRY_METHOD to "w",
+                        ),
+                    )
+                },
+            ),
+            AppleMusicHookPoint.IN_APP_QUEUE_ADAPTER_BIND to listOf(
+                target(AppleMusicHookPoint.IN_APP_QUEUE_ADAPTER_BIND).copy(methodName = "l"),
+            ),
+            // epoxy.f declares x()List and y(int)w; epoxy.s inherits y (1613: x).
+            AppleMusicHookPoint.SEARCH_ADAPTER_MODEL to listOf(
+                target(AppleMusicHookPoint.SEARCH_ADAPTER_MODEL).copy(methodName = "y"),
+            ),
+            AppleMusicHookPoint.LYRICS_RECYCLER_ADAPTER to listOf(
+                lyricsAdapter(0),
+                lyricsAdapter(1),
+            ),
+        )
+    }
+
     /** Verified against all four original 1606 DEX files, SHA-256 recorded in docs. */
     private fun verified700Targets(): Map<AppleMusicHookPoint, List<AppleMusicHookTarget>> {
         val inherited = AppleMusicHookPoint.entries.associateWith(APPLE_MUSIC_6_5_3::targets)
@@ -3327,6 +3391,7 @@ internal object AppleMusicHookProfiles {
 
     /** 新版本档案必须放在前面，未知版本回退时优先尝试较新的目标。 */
     private val KNOWN_PROFILES = listOf(
+        APPLE_MUSIC_7_0_0_1614,
         APPLE_MUSIC_7_0_0_1613,
         APPLE_MUSIC_7_0_0_1611,
         APPLE_MUSIC_7_0_0_1609,
@@ -4525,28 +4590,34 @@ internal object AppleMusicHookProfiles {
         // Preserve the OLD compatibility pool within 6.5.0-6.5.2 (650 intentionally
         // borrows some 651 groups). Unknown APKs still try newest-first.
         val compatible = when (known) {
-            null, APPLE_MUSIC_7_0_0_1613 -> KNOWN_PROFILES
-            APPLE_MUSIC_7_0_0_1611 -> KNOWN_PROFILES.filterNot { it === APPLE_MUSIC_7_0_0_1613 }
+            null, APPLE_MUSIC_7_0_0_1614 -> KNOWN_PROFILES
+            APPLE_MUSIC_7_0_0_1613 -> KNOWN_PROFILES.filterNot { it === APPLE_MUSIC_7_0_0_1614 }
+            APPLE_MUSIC_7_0_0_1611 -> KNOWN_PROFILES.filterNot {
+                it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614
+            }
             APPLE_MUSIC_7_0_0_1609 -> KNOWN_PROFILES.filterNot {
-                it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613
+                it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
+                    it === APPLE_MUSIC_7_0_0_1614
             }
             APPLE_MUSIC_7_0_0_1607 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1609 || it === APPLE_MUSIC_7_0_0_1611 ||
-                    it === APPLE_MUSIC_7_0_0_1613
+                    it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614
             }
             APPLE_MUSIC_7_0_0 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1607 || it === APPLE_MUSIC_7_0_0_1609 ||
-                    it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613
+                    it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
+                    it === APPLE_MUSIC_7_0_0_1614
             }
             APPLE_MUSIC_6_5_3 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0 || it === APPLE_MUSIC_7_0_0_1607 ||
                     it === APPLE_MUSIC_7_0_0_1609 || it === APPLE_MUSIC_7_0_0_1611 ||
-                    it === APPLE_MUSIC_7_0_0_1613
+                    it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614
             }
             else -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_6_5_3 || it === APPLE_MUSIC_7_0_0 ||
                     it === APPLE_MUSIC_7_0_0_1607 || it === APPLE_MUSIC_7_0_0_1609 ||
-                    it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613
+                    it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
+                    it === APPLE_MUSIC_7_0_0_1614
             }
         }
         return (exact + compatible.flatMap { profile -> profile.targets(hookPoint) })
