@@ -11,8 +11,8 @@ android {
         applicationId = "com.juren233.hle.providers.pack.applemusic"
         minSdk = 33
         targetSdk = 37
-        versionCode = 27
-        versionName = "1.0.26"
+        versionCode = 28
+        versionName = "1.0.27"
     }
 
     buildTypes {
