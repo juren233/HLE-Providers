@@ -100,5 +100,22 @@ class AppleLyricsShareCardComposerTest {
         assertEquals("Scan to listen", AppleLyricsSharePoster.qrTitle(chinese = false))
         assertEquals("Open in Apple Music", AppleLyricsSharePoster.qrSubtitle(chinese = false))
         assertEquals("扫码收听完整歌曲", AppleLyricsSharePoster.qrTitle(chinese = true))
+        assertEquals("在 Apple Music 中打开", AppleLyricsSharePoster.qrSubtitle(chinese = true))
+    }
+
+    @Test
+    fun `the wordmark takes the place of Apple Music in the subtitle`() {
+        assertEquals("Open in " to "", AppleLyricsSharePoster.qrSubtitleAroundWordmark(chinese = false))
+        assertEquals("在 " to " 中打开", AppleLyricsSharePoster.qrSubtitleAroundWordmark(chinese = true))
+    }
+
+    @Test
+    fun `wordmark apple spans the cap height and music sits on the baseline`() {
+        val capHeight = 30f
+        val height = AppleLyricsSharePoster.wordmarkHeight(capHeight)
+        val top = AppleLyricsSharePoster.wordmarkTop(baseline = 100f, wordmarkHeight = height)
+        // 1614 vector: apple top at 0.5 / 80.9, "music" baseline at 79.1 / 80.9.
+        assertEquals(100f - capHeight, top + height * 0.5f / 80.9f, 0.01f)
+        assertEquals(100f, top + height * 79.1f / 80.9f, 0.01f)
     }
 }

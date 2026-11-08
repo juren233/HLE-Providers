@@ -21,7 +21,7 @@ internal object AppleMenuText {
     private val isChinese: Boolean
         get() = chineseOverride ?: (Locale.getDefault().language == Locale.CHINESE.language)
 
-    fun pick(zh: String, en: String): String = if (isChinese) zh else en
+    fun <T> pick(zh: T, en: T): T = if (isChinese) zh else en
 
     /** Chinese joins the source and content words directly; English separates them. */
     fun join(source: String, content: String): String = if (isChinese) source + content else "$source $content"

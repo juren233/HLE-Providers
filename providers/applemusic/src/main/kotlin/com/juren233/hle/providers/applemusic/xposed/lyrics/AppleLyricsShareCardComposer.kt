@@ -15,6 +15,7 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.text.TextPaint
 import android.text.TextUtils
 import com.google.zxing.BarcodeFormat
@@ -27,6 +28,7 @@ import com.juren233.hyperlyricsenhanced.contract.AppleLyricsSharePoster
 import java.io.File
 import java.io.FileDescriptor
 import java.io.OutputStream
+import kotlin.math.roundToInt
 
 /**
  * Wraps Apple's rendered lyric card into a poster: a background behind the card, a soft shadow
@@ -60,6 +62,17 @@ internal object AppleLyricsShareCardComposer {
         }
     }
 
+    /**
+     * QR footer text. [wordmark] (Apple Music's own) replaces "Apple Music" between the two parts
+     * of [aroundWordmark]; without it the plain [subtitle] is drawn.
+     */
+    class Footer(
+        val title: String,
+        val subtitle: String,
+        val aroundWordmark: Pair<String, String>,
+        val wordmark: Drawable?,
+    )
+
     fun decode(file: File): Bitmap? = BitmapFactory.decodeFile(
         file.absolutePath,
         BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
@@ -81,8 +94,7 @@ internal object AppleLyricsShareCardComposer {
         background: Background,
         songUrl: String?,
         withQr: Boolean,
-        title: String,
-        subtitle: String,
+        footer: Footer,
         output: OutputStream,
     ): Boolean {
         val backdrop = (background as? Background.Image)?.bitmap
@@ -131,7 +143,7 @@ internal object AppleLyricsShareCardComposer {
             canvas.drawRoundRect(shadowRect, spec.cardCornerRadius, spec.cardCornerRadius, shadowPaint)
             canvas.drawBitmap(card, spec.cardLeft.toFloat(), spec.cardTop.toFloat(), null)
 
-            if (qr != null) drawFooter(canvas, spec, qr, foreground, title, subtitle)
+            if (qr != null) drawFooter(canvas, spec, qr, foreground, footer)
             return poster.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
         } finally {
             card.recycle()
@@ -179,8 +191,7 @@ internal object AppleLyricsShareCardComposer {
         spec: AppleLyricsSharePoster.Layout,
         qr: Bitmap,
         foreground: Int,
-        title: String,
-        subtitle: String,
+        footer: Footer,
     ) {
         val tile = RectF(
             spec.qrLeft.toFloat(),
@@ -211,8 +222,7 @@ internal object AppleLyricsShareCardComposer {
             alpha = AppleLyricsSharePoster.SUBTITLE_ALPHA
             textSize = spec.subtitleSize
         }
-        val titleText = TextUtils.ellipsize(title, titlePaint, available, TextUtils.TruncateAt.END)
-        val subtitleText = TextUtils.ellipsize(subtitle, subtitlePaint, available, TextUtils.TruncateAt.END)
+        val titleText = TextUtils.ellipsize(footer.title, titlePaint, available, TextUtils.TruncateAt.END)
         val gap = spec.subtitleSize * 0.55f
         val titleHeight = titlePaint.fontMetrics.let { it.descent - it.ascent }
         val subtitleHeight = subtitlePaint.fontMetrics.let { it.descent - it.ascent }
@@ -221,12 +231,46 @@ internal object AppleLyricsShareCardComposer {
             titleText, 0, titleText.length,
             spec.textLeft.toFloat(), blockTop - titlePaint.fontMetrics.ascent, titlePaint,
         )
-        canvas.drawText(
-            subtitleText, 0, subtitleText.length,
-            spec.textLeft.toFloat(),
-            blockTop + titleHeight + gap - subtitlePaint.fontMetrics.ascent,
-            subtitlePaint,
+        drawSubtitle(
+            canvas = canvas,
+            paint = subtitlePaint,
+            left = spec.textLeft.toFloat(),
+            baseline = blockTop + titleHeight + gap - subtitlePaint.fontMetrics.ascent,
+            available = available,
+            footer = footer,
         )
+    }
+
+    /** Same drawing as the core's preview footer: text, Apple's wordmark, text. */
+    private fun drawSubtitle(
+        canvas: Canvas,
+        paint: TextPaint,
+        left: Float,
+        baseline: Float,
+        available: Float,
+        footer: Footer,
+    ) {
+        val mark = footer.wordmark?.constantState?.newDrawable()?.mutate()
+            ?.takeIf { it.intrinsicWidth > 0 && it.intrinsicHeight > 0 }
+        if (mark == null) {
+            val text = TextUtils.ellipsize(footer.subtitle, paint, available, TextUtils.TruncateAt.END)
+            canvas.drawText(text, 0, text.length, left, baseline, paint)
+            return
+        }
+        val (before, after) = footer.aroundWordmark
+        val capHeight = Rect().also { paint.getTextBounds("H", 0, 1, it) }.height().toFloat()
+        val height = AppleLyricsSharePoster.wordmarkHeight(capHeight)
+        val width = height * mark.intrinsicWidth / mark.intrinsicHeight
+        val top = AppleLyricsSharePoster.wordmarkTop(baseline, height)
+        var x = left
+        canvas.drawText(before, x, baseline, paint)
+        x += paint.measureText(before)
+        mark.setBounds(x.roundToInt(), top.roundToInt(), (x + width).roundToInt(), (top + height).roundToInt())
+        // Same colour and alpha as the subtitle text.
+        mark.setTint(paint.color)
+        mark.draw(canvas)
+        x += width
+        canvas.drawText(after, x, baseline, paint)
     }
 
     /** One pixel per module; the canvas scales it up. Avoids per-pixel setPixel calls. */

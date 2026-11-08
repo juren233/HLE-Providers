@@ -6,6 +6,7 @@
 
 package com.juren233.hle.providers.applemusic.xposed
 
+import com.juren233.hyperlyricsenhanced.contract.AppleLyricsSharePoster
 import org.luckypray.dexkit.DexKitBridge
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -463,6 +464,7 @@ internal enum class AppleMusicRuntimeMember {
     LYRICS_SHARE_RESULT_EMPTY_METHOD,
     LYRICS_SHARE_RESULT_VALUE_METHOD,
     LYRICS_SHARE_FILE_PROVIDER_URI_METHOD,
+    LYRICS_SHARE_WORDMARK_DRAWABLE,
 }
 
 internal data class AppleMusicHookTarget(
@@ -2747,6 +2749,10 @@ internal object AppleMusicHookProfiles {
                         AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_CONSTRUCTOR to "",
                         AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_METHOD to "b",
                         AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_VALUE_METHOD to "a",
+                        // 1614 APK: res/drawable/apple_music_wordmark.xml (vector, apple glyph +
+                        // "music"), the one instagram_lyrics_sticker.xml shows; drawn in the QR footer.
+                        AppleMusicRuntimeMember.LYRICS_SHARE_WORDMARK_DRAWABLE to
+                            AppleLyricsSharePoster.WORDMARK_DRAWABLE,
                     ),
                 ),
             ),

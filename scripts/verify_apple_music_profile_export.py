@@ -14,11 +14,11 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 from verify_apple_music_profiles import ApkDexContext, to_dex_type
 
 
-def manifest_activity_names(apk_path):
-    """Read registered components from binary AXML; DEX class existence is insufficient."""
+def find_aapt():
     aapt = shutil.which('aapt')
     roots = [os.environ.get('ANDROID_HOME'), os.environ.get('ANDROID_SDK_ROOT')]
     local = Path(__file__).resolve().parents[1] / 'local.properties'
@@ -33,6 +33,25 @@ def manifest_activity_names(apk_path):
                 break
     if not aapt:
         raise RuntimeError('Manifest verification requires Android SDK aapt (ANDROID_HOME or local.properties)')
+    return aapt
+
+
+def drawable_is_vector(apk_path, name):
+    """The drawable resource [name] exists in resources.arsc and its XML root is a <vector>."""
+    with zipfile.ZipFile(apk_path) as apk:
+        if name.encode() not in apk.read('resources.arsc'):
+            return False
+        path = f'res/drawable/{name}.xml'
+        if path not in apk.namelist():
+            return False
+    xml = subprocess.check_output([find_aapt(), 'dump', 'xmltree', str(apk_path), path], text=True)
+    root = re.search(r'E: ([\w-]+)', xml)
+    return bool(root) and root[1] == 'vector'
+
+
+def manifest_activity_names(apk_path):
+    """Read registered components from binary AXML; DEX class existence is insufficient."""
+    aapt = find_aapt()
     xml = subprocess.check_output([aapt, 'dump', 'xmltree', str(apk_path), 'AndroidManifest.xml'], text=True)
     package = re.search(r'\bA: package="([^"]+)"', xml)
     if not package:
@@ -572,6 +591,9 @@ def verify_profile(ctx, profile):
         method(holder, rendered['LYRICS_SHARE_RESULT_VALUE_METHOD'], [], 'java.lang.Object', False)
         # The empty-result rewrite instantiates the holder with its no-arg constructor.
         constructor(holder, rendered['LYRICS_SHARE_RESULT_EMPTY_CONSTRUCTOR'])
+        # The QR footer draws Apple's wordmark, looked up by resource name.
+        wordmark = rendered['LYRICS_SHARE_WORDMARK_DRAWABLE']
+        require(drawable_is_vector(ctx.apk_path, wordmark), f'LYRICS_SHARE_WORDMARK_DRAWABLE: no vector drawable {wordmark}')
 
         provider = one('LYRICS_SHARE_FILE_PROVIDER_OPEN')
         method(provider['className'], provider['runtimeMemberNames']['LYRICS_SHARE_FILE_PROVIDER_URI_METHOD'],

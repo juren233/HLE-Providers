@@ -80,6 +80,11 @@ class AppleMusic7001614ProfileRegressionTest {
             "",
             rendered.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_RESULT_EMPTY_CONSTRUCTOR),
         )
+        // Verified in the 1614 APK resources; AppleMusicProfileBinaryTest checks it is a vector.
+        assertEquals(
+            "apple_music_wordmark",
+            rendered.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_WORDMARK_DRAWABLE),
+        )
     }
 
     @Test

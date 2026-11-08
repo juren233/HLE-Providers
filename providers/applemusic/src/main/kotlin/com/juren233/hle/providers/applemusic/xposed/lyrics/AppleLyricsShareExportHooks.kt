@@ -11,6 +11,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -94,6 +95,7 @@ internal class AppleLyricsShareExportHooks(
         val providerOpen: Method,
         val providerQuery: Method,
         val fileUriMethod: Method,
+        val wordmarkDrawable: String,
     )
 
     private val session = AtomicReference<Session?>(null)
@@ -212,6 +214,7 @@ internal class AppleLyricsShareExportHooks(
                 isAccessible = true
                 check(Modifier.isStatic(modifiers) && returnType == Uri::class.java) { "Unexpected $this" }
             },
+            wordmarkDrawable = rendered.target.runtimeMemberName(AppleMusicRuntimeMember.LYRICS_SHARE_WORDMARK_DRAWABLE),
         )
     }
 
@@ -326,8 +329,7 @@ internal class AppleLyricsShareExportHooks(
                             background = background(storyBackground),
                             songUrl = current.songUrl,
                             withQr = qrCodeEnabled(),
-                            title = qrTitle(),
-                            subtitle = qrSubtitle(),
+                            footer = footer(),
                             output = output,
                         ) || run { file.inputStream().use { it.copyTo(output) }; true }
                     }
@@ -417,8 +419,7 @@ internal class AppleLyricsShareExportHooks(
                 background = background,
                 songUrl = current.songUrl,
                 withQr = qrCodeEnabled(),
-                title = qrTitle(),
-                subtitle = qrSubtitle(),
+                footer = footer(),
                 output = output,
             )
         } ?: return exportRaw(current) { source.inputStream() }
@@ -555,6 +556,28 @@ internal class AppleLyricsShareExportHooks(
         "已保存到相册 Pictures/$ALBUM_NAME",
         "Saved to Pictures/$ALBUM_NAME",
     )
+    private fun footer() = AppleLyricsShareCardComposer.Footer(
+        title = qrTitle(),
+        subtitle = qrSubtitle(),
+        aroundWordmark = AppleMenuText.pick(
+            AppleLyricsSharePoster.qrSubtitleAroundWordmark(chinese = true),
+            AppleLyricsSharePoster.qrSubtitleAroundWordmark(chinese = false),
+        ),
+        wordmark = wordmark(),
+    )
+
+    /** Apple Music's own wordmark; null if it cannot be read, and the footer then reads "Apple Music". */
+    private fun wordmark(): Drawable? = runCatching {
+        val app = runtime.application
+        @Suppress("DiscouragedApi") // Apple's own resource, profiled by name.
+        val id = app.resources.getIdentifier(targets.wordmarkDrawable, "drawable", app.packageName)
+        if (id == 0) null else app.resources.getDrawable(id, null)
+    }.onFailure {
+        ProviderLogger.error("Apple Music 字标读取失败", it)
+    }.getOrNull().also {
+        if (it == null) ProviderLogger.diagnostic("Apple Music 字标不可用，页脚改用文字: ${targets.wordmarkDrawable}")
+    }
+
     private fun qrTitle() =
         AppleMenuText.pick(AppleLyricsSharePoster.qrTitle(chinese = true), AppleLyricsSharePoster.qrTitle(chinese = false))
     private fun qrSubtitle() =
