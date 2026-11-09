@@ -4,7 +4,7 @@
  * http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package com.juren233.hle.providers.saltplayer
+package com.juren233.hle.providers.locallyrics
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets
 import kotlin.math.min
 
 /** Reads raw embedded lyric text without calling any Salt Player class. */
-internal object SaltPlayerEmbeddedLyricsReader {
+internal object EmbeddedLyricsReader {
     fun read(channel: FileChannel, fileName: String): String? {
         val extension = fileName.substringAfterLast('.', "").lowercase()
         val readers = when (extension) {

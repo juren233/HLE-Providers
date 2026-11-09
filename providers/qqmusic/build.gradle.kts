@@ -10,8 +10,8 @@ android {
         applicationId = "com.juren233.hle.providers.pack.qqmusic"
         minSdk = 33
         targetSdk = 37
-        versionCode = 36
-        versionName = "1.0.35"
+        versionCode = 37
+        versionName = "1.0.36"
     }
 
     buildTypes {
@@ -28,6 +28,16 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    // 本地文件歌词（媒体库定位、内嵌标签读取、LRC 解析）由椒盐音乐、QQ 音乐与网易云音乐共用，源码只放一份
+    sourceSets {
+        getByName("main").kotlin.directories.add(
+            rootProject.file("shared/local-lyrics/src/main/kotlin").path,
+        )
+        getByName("test").kotlin.directories.add(
+            rootProject.file("shared/local-lyrics/src/test/kotlin").path,
+        )
     }
 
     compileOptions {

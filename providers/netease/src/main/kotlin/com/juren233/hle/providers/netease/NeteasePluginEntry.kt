@@ -18,6 +18,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.juren233.hle.providers.locallyrics.LocalAudioLibrary
+import com.juren233.hle.providers.locallyrics.LocalAudioQuery
+import com.juren233.hle.providers.locallyrics.LocalLrcParser
+import com.juren233.hle.providers.locallyrics.LocalLyricsDocument
+import com.juren233.hle.providers.locallyrics.LocalLyricsLineMapper
 import com.juren233.hle.providers.netease.BuildConfig
 import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
@@ -208,6 +213,12 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         private val appLyricsExecutor: ExecutorService = Executors.newSingleThreadExecutor { task ->
             Thread(task, "HLE-Netease-AppLyrics").apply { isDaemon = true }
         }
+
+        /** 读本地文件内嵌歌词；读不到时再把接口取词交给 [executor]，不排在上一首的下载后面。 */
+        private val localLyricsExecutor: ExecutorService = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "HLE-Netease-LocalLyrics").apply { isDaemon = true }
+        }
+        private val localAudioLibrary = LocalAudioLibrary(application.contentResolver)
         private val metadata = ConcurrentHashMap<Long, TrackMetadata>()
         private val cacheDir = File(application.filesDir, "hle-provider/netease")
         private val nextTrackScheduler: ScheduledExecutorService =
@@ -217,7 +228,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         @Volatile
         private var currentId: Long? = null
         private var lastSong: Song? = null
-        private val lyricSelection = NeteaseLyricSelection<NeteasePayload>()
+        private val lyricSelection = NeteaseLyricSelection<NeteaseLyricContent>()
         private var lastNextTrackFrame: String? = null
         private var lastNextTrackFrameSentAtMs = 0L
         private val diagnosticsEnabled = NeteaseDiagnosticCapability.resolve { host.isDiagnosticEnabled() }
@@ -384,32 +395,73 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             )
             loadCachedPayload(track)
                 ?.takeIf(::hasUsableLyrics)
-                ?.let { lyricSelection.setApi(id, it) }
+                ?.let { lyricSelection.setApi(id, NeteaseLyricContent.Online(it)) }
+            // 本地歌优先用音乐文件内嵌歌词：查文件期间不选在线版本，免得先闪一下再被替换
+            lyricSelection.beginEmbeddedLookup(id)
             publishSelected(track)
-            executor.execute {
-                runCatching { NeteaseClient.fetch(id) }
-                    .onSuccess { payload ->
-                        val usable = hasUsableLyrics(payload)
-                        if (usable) writeCache(id, payload)
-                        lyricSelection.setApi(id, payload.takeIf { usable })
-                        val isCurrent = currentId == id
-                        if (diagnosticsEnabled) reportMediaCardDiagnostic(
-                            stage = "provider",
-                            event = "lyrics_fetch_complete",
-                            details = "id=$id,current=$isCurrent,usable=$usable," +
-                                "lines=${payload.lrc?.lines()?.size ?: 0}," +
-                                "translated=${payload.translated?.lines()?.size ?: 0}",
-                        )
-                        if (isCurrent) publishSelected(track)
-                        // 接口已答复且没有可用歌词（含纯音乐）：本 Provider 没有重试，视为确认缺失。
-                        if (isCurrent && !usable) publishUnavailable(track)
-                    }
-                    .onFailure { error ->
-                        Log.w(TAG, "网易云歌词下载失败: id=$id", error)
-                        // 网络失败同样没有重试，结果即最终。
-                        if (currentId == id) publishUnavailable(track)
-                    }
+            localLyricsExecutor.execute {
+                val document = runCatching { readEmbeddedLyrics(track) }
+                    .onFailure { Log.w(TAG, "网易云内嵌歌词读取失败: id=$id", it) }
+                    .getOrNull()
+                lyricSelection.finishEmbeddedLookup(id, document?.let(NeteaseLyricContent::Embedded))
+                if (document != null) {
+                    Log.i(TAG, "网易云采用音乐文件内嵌歌词: id=$id, lines=${document.lines.size}")
+                    publishSelected(track)
+                    return@execute
+                }
+                publishSelected(track)
+                executor.execute { fetchApiLyrics(track) }
             }
+        }
+
+        private fun readEmbeddedLyrics(track: TrackMetadata): LocalLyricsDocument? {
+            val query = LocalAudioQuery(
+                title = track.title,
+                artist = track.artist,
+                album = null,
+                durationMs = track.duration,
+            )
+            val media = localAudioLibrary.findByMetadata(query) ?: run {
+                if (BuildConfig.DEBUG) Log.i(TAG, "网易云媒体库无唯一对应文件: id=${track.id}, title=${track.title}")
+                return null
+            }
+            val text = localAudioLibrary.readEmbeddedLyrics(media)
+            val document = text?.let { LocalLrcParser.parse(it, track.duration) }
+                ?.takeIf { it.lines.isNotEmpty() }
+            if (BuildConfig.DEBUG) {
+                Log.i(
+                    TAG,
+                    "网易云本地文件内嵌歌词: id=${track.id}, file=${media.dataPath ?: media.mediaUri}, " +
+                        "chars=${text?.length ?: 0}, lines=${document?.lines?.size ?: 0}",
+                )
+            }
+            return document
+        }
+
+        private fun fetchApiLyrics(track: TrackMetadata) {
+            val id = track.id
+            runCatching { NeteaseClient.fetch(id) }
+                .onSuccess { payload ->
+                    val usable = hasUsableLyrics(payload)
+                    if (usable) writeCache(id, payload)
+                    lyricSelection.setApi(id, payload.takeIf { usable }?.let(NeteaseLyricContent::Online))
+                    val isCurrent = currentId == id
+                    if (diagnosticsEnabled) reportMediaCardDiagnostic(
+                        stage = "provider",
+                        event = "lyrics_fetch_complete",
+                        details = "id=$id,current=$isCurrent,usable=$usable," +
+                            "lines=${payload.lrc?.lines()?.size ?: 0}," +
+                            "translated=${payload.translated?.lines()?.size ?: 0}",
+                    )
+                    if (isCurrent) publishSelected(track)
+                    // 接口已答复且没有可用歌词（含纯音乐）：本 Provider 没有重试，视为确认缺失。
+                    if (isCurrent && !usable) publishUnavailable(track)
+                }
+                .onFailure { error ->
+                    Log.w(TAG, "网易云歌词下载失败: id=$id", error)
+                    // 网络失败同样没有重试，结果即最终。
+                    if (currentId == id) publishUnavailable(track)
+                }
         }
 
         fun onAppLyrics(snapshot: NeteaseAppLyricsSnapshot) {
@@ -431,7 +483,7 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             )
             appLyricsExecutor.execute {
                 if (!hasUsableLyrics(payload)) return@execute
-                if (!lyricSelection.setApp(snapshot.musicId, payload)) return@execute
+                if (!lyricSelection.setApp(snapshot.musicId, NeteaseLyricContent.Online(payload))) return@execute
                 val track = metadata[snapshot.musicId] ?: return@execute
                 publishSelected(track)
             }
@@ -441,7 +493,11 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         private fun publishSelected(track: TrackMetadata) {
             if (currentId != track.id) return
             val selected = lyricSelection.select(track.id)
-            val song = selected?.value?.let { toSong(track, it) } ?: placeholder(track)
+            val song = when (val content = selected?.value) {
+                is NeteaseLyricContent.Online -> toSong(track, content.payload)
+                is NeteaseLyricContent.Embedded -> toEmbeddedSong(track, content.document)
+                null -> placeholder(track)
+            }
             if (currentId != track.id) return
             if (diagnosticsEnabled) reportMediaCardDiagnostic(
                 stage = "provider",
@@ -862,6 +918,12 @@ object NeteasePluginEntry : OfficialProviderPlugin {
         }
     }
 
+    /** 一首歌的歌词候选：在线（接口或 App 自带）或音乐文件内嵌。 */
+    private sealed interface NeteaseLyricContent {
+        data class Online(val payload: NeteasePayload) : NeteaseLyricContent
+        data class Embedded(val document: LocalLyricsDocument) : NeteaseLyricContent
+    }
+
     private data class TrackMetadata(
         val id: Long,
         val title: String?,
@@ -1054,6 +1116,17 @@ object NeteasePluginEntry : OfficialProviderPlugin {
             artist = track.artist
             duration = track.duration.takeIf { it > 0 } ?: rich.lastOrNull()?.end ?: 0L
             lyrics = rich.takeIf { it.isNotEmpty() && !payload.pureMusic }
+        }
+    }
+
+    private fun toEmbeddedSong(track: TrackMetadata, document: LocalLyricsDocument): Song {
+        val lines = LocalLyricsLineMapper.map(document)
+        return Song().apply {
+            id = track.id.toString()
+            name = track.title
+            artist = track.artist
+            duration = track.duration.takeIf { it > 0 } ?: lines.lastOrNull()?.end ?: 0L
+            lyrics = lines.takeIf { it.isNotEmpty() }
         }
     }
 

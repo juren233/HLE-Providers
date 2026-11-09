@@ -19,6 +19,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.juren233.hle.providers.locallyrics.LocalAudioLibrary
+import com.juren233.hle.providers.locallyrics.LocalAudioQuery
+import com.juren233.hle.providers.locallyrics.LocalLrcParser
+import com.juren233.hle.providers.locallyrics.LocalLyricsDocument
+import com.juren233.hle.providers.locallyrics.LocalLyricsLineMapper
 import com.juren233.hle.providers.qqmusic.BuildConfig
 import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderControlProtocol
@@ -122,6 +127,15 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
             Thread(task, "HLE-QQMusic-Lyrics").apply { isDaemon = true }
         }
+
+        /**
+         * 本地文件歌词单独一个线程：不排在上一首的在线换算/下载后面，切歌后能立刻读文件。
+         * 读不到内嵌歌词时再把在线取词任务交给 [executor]。
+         */
+        private val localLyricsExecutor: ExecutorService = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "HLE-QQMusic-LocalLyrics").apply { isDaemon = true }
+        }
+        private val localAudioLibrary = LocalAudioLibrary(application.contentResolver)
         private val trackCoordinator = QQMusicLyricTrackCoordinator(playerPackage)
         private val bufferCoordinator = QQMusicBufferStateCoordinator()
         private val carLyricsPolicy = QQMusicCarLyricsMetadataPolicy()
@@ -142,6 +156,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
         /** 已上屏歌词来自 QQ 关联 ID（含其缓存）：按歌名匹配的结果不能覆盖它。 */
         private var publishedAppLinked = false
+
+        /** 已上屏歌词来自音乐文件内嵌歌词：同一首歌不再换成在线歌词。 */
+        private var publishedEmbedded = false
         private var loadGeneration = 0L
 
         private fun identityKeyOf(track: QQMusicLyricTrack): String =
@@ -551,6 +568,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     publishedLyricIdentity = null
                     publishedSongId = null
                     publishedAppLinked = false
+                    publishedEmbedded = false
                     if (BuildConfig.DEBUG && playerPackage == QQMusicRuntimePlan.HD_PACKAGE) {
                         Log.i(
                             TAG,
@@ -577,6 +595,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private fun load(track: QQMusicLyricTrack) {
             val identity = identityKeyOf(track)
             val sameSongShowing = publishedLyricIdentity == identity
+            // 本地歌优先用音乐文件内嵌歌词：已上屏的是内嵌歌词时，快照候选升级也不替换
+            if (sameSongShowing && publishedEmbedded) return
             // 同一首歌已带歌词上屏：只有快照候选 ID 都不是上屏所用的在线 ID 时才尝试升级，
             // 且不先发占位/缓存（避免歌词闪掉），换算或下载失败也保留现有歌词。
             val linkedIds = track.appLinkedSongIds.map(QQMusicSongMidResolver::sanitizeNumericSongId)
@@ -592,6 +612,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 publishedLyricIdentity = null
                 publishedSongId = null
                 publishedAppLinked = false
+                publishedEmbedded = false
                 val cached = loadCached(track)
                 if (cached != null) {
                     val published = publish(cached.song)
@@ -604,7 +625,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     publish(placeholder(track))
                 }
             }
-            executor.execute {
+            val onlineTask: () -> Unit = execute@{
                 // 1.0.25 真机教训：单线程执行器里任何一个任务卡死（HTTP/DNS 无限
                 // 等待、解析死循环、发布 binder 挂起）都会让后续所有歌曲的换算与
                 // 发布永远排队，且无任何失败日志。以下阶段日志（release 可见、按
@@ -721,6 +742,76 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         if (!upgrade) publishUnavailable(track, loadKey)
                     }
             }
+            if (upgrade) {
+                executor.execute(onlineTask)
+                return
+            }
+            localLyricsExecutor.execute {
+                if (!loadEmbeddedLyrics(track, identity, loadKey)) executor.execute(onlineTask)
+            }
+        }
+
+        /**
+         * 本地歌优先用音乐文件内嵌的歌词：按歌名 + 时长在系统媒体库里找到唯一对应的文件，
+         * 读出标签里的歌词并上屏，返回 true，本次不再走在线换算。没有对应文件、文件没有内嵌
+         * 歌词或解析不出带时间的行时返回 false，交给在线取词。
+         */
+        private fun loadEmbeddedLyrics(
+            track: QQMusicLyricTrack,
+            identity: String,
+            loadKey: String,
+        ): Boolean {
+            synchronized(this) { if (activeLoadKey != loadKey) return true }
+            val document = runCatching { readEmbeddedLyrics(track) }
+                .onFailure { Log.w(TAG, "QQ 内嵌歌词读取失败: id=${track.id}", it) }
+                .getOrNull()
+                ?: return false
+            val song = toEmbeddedSong(track, document)
+            synchronized(this) {
+                if (activeLoadKey != loadKey) {
+                    Log.i(TAG, "QQ 内嵌歌词发布跳过(轨道已切换): id=${track.id}")
+                    return true
+                }
+                val published = publish(song)
+                Log.i(
+                    TAG,
+                    "QQ 采用音乐文件内嵌歌词: id=${track.id}, lines=${song.lyrics?.size ?: 0}, " +
+                        "result=$published",
+                )
+                if (published) {
+                    publishedLyricIdentity = identity
+                    publishedSongId = null
+                    publishedAppLinked = false
+                    publishedEmbedded = true
+                }
+            }
+            // 这首歌以后都用内嵌歌词：删掉以前在线取词留下的缓存，免得下次先闪一下在线版本
+            runCatching { cacheFileOf(track).delete() }
+            return true
+        }
+
+        private fun readEmbeddedLyrics(track: QQMusicLyricTrack): LocalLyricsDocument? {
+            val query = LocalAudioQuery(
+                title = track.title,
+                artist = track.artist,
+                album = null,
+                durationMs = track.duration,
+            )
+            val media = localAudioLibrary.findByMetadata(query) ?: run {
+                if (BuildConfig.DEBUG) Log.i(TAG, "QQ 媒体库无唯一对应文件: id=${track.id}, title=${track.title}")
+                return null
+            }
+            val text = localAudioLibrary.readEmbeddedLyrics(media)
+            val document = text?.let { LocalLrcParser.parse(it, track.duration) }
+                ?.takeIf { it.lines.isNotEmpty() }
+            if (BuildConfig.DEBUG) {
+                Log.i(
+                    TAG,
+                    "QQ 本地文件内嵌歌词: id=${track.id}, file=${media.dataPath ?: media.mediaUri}, " +
+                        "chars=${text?.length ?: 0}, lines=${document?.lines?.size ?: 0}",
+                )
+            }
+            return document
         }
 
         /**
@@ -1253,13 +1344,31 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             artist = payload.singer ?: track.artist
             duration = track.duration.takeIf { it > 0 } ?: rich.lastOrNull()?.end ?: 0L
             lyrics = rich.takeIf { it.isNotEmpty() }
-            // 会话 mediaId 随元数据透传：SystemUI 侧用它做 TrackIdentity 匹配，
-            // 车载歌词污染的标题/歌手不再影响身份判定。
-            track.sessionMediaId?.takeIf(String::isNotBlank)?.let {
-                metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
-                    mapOf(SESSION_MEDIA_ID_METADATA_KEY to it)
-                )
-            }
+            attachSessionMediaId(track)
+        }
+    }
+
+    private fun toEmbeddedSong(track: QQMusicLyricTrack, document: LocalLyricsDocument): Song {
+        val lines = LocalLyricsLineMapper.map(document)
+        return Song().apply {
+            id = track.id
+            name = track.title
+            artist = track.artist
+            duration = track.duration.takeIf { it > 0 } ?: lines.lastOrNull()?.end ?: 0L
+            lyrics = lines.takeIf { it.isNotEmpty() }
+            attachSessionMediaId(track)
+        }
+    }
+
+    /**
+     * 会话 mediaId 随元数据透传：SystemUI 侧用它做 TrackIdentity 匹配，
+     * 车载歌词污染的标题/歌手不再影响身份判定。
+     */
+    private fun Song.attachSessionMediaId(track: QQMusicLyricTrack) {
+        track.sessionMediaId?.takeIf(String::isNotBlank)?.let {
+            metadata = io.github.proify.lyricon.lyric.model.LyricMetadata(
+                mapOf(SESSION_MEDIA_ID_METADATA_KEY to it)
+            )
         }
     }
 

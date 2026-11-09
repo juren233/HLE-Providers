@@ -56,6 +56,40 @@ class NeteaseLyricSelectionTest {
     }
 
     @Test
+    fun `file embedded lyrics win over API and app lyrics`() {
+        val selection = NeteaseLyricSelection<String>()
+        selection.setApp(1, "app")
+        selection.setApi(1, "official")
+        selection.beginEmbeddedLookup(1)
+        selection.finishEmbeddedLookup(1, "file")
+
+        assertEquals(NeteaseLyricSelection.Selected(NeteaseLyricSelection.Source.EMBEDDED, "file"), selection.select(1))
+    }
+
+    @Test
+    fun `holds online lyrics while the file lookup runs and releases them when the file has none`() {
+        val selection = NeteaseLyricSelection<String>()
+        selection.setApp(1, "app")
+        selection.beginEmbeddedLookup(1)
+        assertNull(selection.select(1))
+
+        selection.finishEmbeddedLookup(1, null)
+        assertEquals(NeteaseLyricSelection.Selected(NeteaseLyricSelection.Source.APP, "app"), selection.select(1))
+        selection.setApi(1, "official")
+        assertEquals(NeteaseLyricSelection.Source.API, selection.select(1)?.source)
+    }
+
+    @Test
+    fun `a repeated lookup keeps showing the known embedded lyrics`() {
+        val selection = NeteaseLyricSelection<String>()
+        selection.beginEmbeddedLookup(1)
+        selection.finishEmbeddedLookup(1, "file")
+        selection.beginEmbeddedLookup(1)
+
+        assertEquals("file", selection.select(1)?.value)
+    }
+
+    @Test
     fun `rejects NetEase no lyrics placeholder`() {
         assertFalse(NeteaseLyricContentPolicy.hasMeaningfulText(listOf("暂无歌词")))
         assertFalse(NeteaseLyricContentPolicy.hasMeaningfulText(listOf("", " 暂无歌词 ")))

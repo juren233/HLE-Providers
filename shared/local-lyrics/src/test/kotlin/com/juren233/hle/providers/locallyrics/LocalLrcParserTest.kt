@@ -4,16 +4,16 @@
  * http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package com.juren233.hle.providers.saltplayer
+package com.juren233.hle.providers.locallyrics
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-class SaltPlayerLrcParserTest {
+class LocalLrcParserTest {
     @Test
     fun `plain lrc lines end at the following line`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             """
             [00:01.00]First
             [00:03.50]Second
@@ -28,7 +28,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `last plain lrc line uses salt default duration`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             "[00:10.00]Last",
             durationMs = 0L,
         )!!
@@ -39,7 +39,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `last plain lrc line is clamped when media ends sooner`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             "[00:10.00]Last",
             durationMs = 11_500L,
         )!!
@@ -49,7 +49,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `enhanced lrc becomes word timing within one active line`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             """
             [00:01.00]<00:01.00>Hello <00:01.60>world
             [00:03.00]Next
@@ -66,7 +66,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `same timestamp plain line is kept as translation`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             """
             [00:01.00]<00:01.00>Hello
             [00:01.00]你好
@@ -82,7 +82,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `salt thin space separator creates a translation at the preceding timestamp`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             """
             [00:01.00]Your ex friend's sister 你以前朋友的姐姐
             [00:03.00]2003, unbearable 2003年 无法忍受
@@ -97,7 +97,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `salt thin space translation is excluded from enhanced lrc word cells`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             """
             [00:01.00]<00:01.00>Hello <00:01.60>world 你好世界
             [00:03.00]Next
@@ -112,7 +112,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `ordinary ascii spaces do not imply a translation`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             """
             [00:01.00]Hello world 你好世界
             [00:03.00]Number 33第三十三号
@@ -128,7 +128,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `multiple salt continuation segments are retained in translation order`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             "[00:01.00]Main Translation one Translation two\n[00:03.00]Next",
         )!!
 
@@ -138,7 +138,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `untimed physical continuation follows salt timestamp inheritance`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             "[00:01.00]Main\nTranslation\n[00:03.00]Next",
         )!!
 
@@ -148,7 +148,7 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `offset moves line and word timing together`() {
-        val document = SaltPlayerLrcParser.parse(
+        val document = LocalLrcParser.parse(
             """
             [offset:250]
             [00:01.00]<00:01.00>A
@@ -163,6 +163,6 @@ class SaltPlayerLrcParserTest {
 
     @Test
     fun `returns null when no timed lyric exists`() {
-        assertNull(SaltPlayerLrcParser.parse("[ar:Artist]\nUntimed text"))
+        assertNull(LocalLrcParser.parse("[ar:Artist]\nUntimed text"))
     }
 }

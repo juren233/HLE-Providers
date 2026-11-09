@@ -6,6 +6,9 @@
 
 package com.juren233.hle.providers.saltplayer
 
+import com.juren233.hle.providers.locallyrics.LocalLyricsCell
+import com.juren233.hle.providers.locallyrics.LocalLyricsDocument
+import com.juren233.hle.providers.locallyrics.LocalLyricsLine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -14,16 +17,16 @@ class SaltPlayerLyricsMapperTest {
     @Test
     fun `maps original main translation and word timing into separate lyric tracks`() {
         val song = SaltPlayerLyricsMapper.map(
-            document = SaltPlayerLyricsDocument(
+            document = LocalLyricsDocument(
                 lines = listOf(
-                    SaltPlayerLyricsLine(
+                    LocalLyricsLine(
                         beginMs = 1_000L,
                         endMs = 3_000L,
                         mainText = "Hello world",
                         translation = "你好，世界",
                         cells = listOf(
-                            SaltPlayerLyricsCell(1_000L, 1_800L, "Hello"),
-                            SaltPlayerLyricsCell(1_800L, 3_000L, " world"),
+                            LocalLyricsCell(1_000L, 1_800L, "Hello"),
+                            LocalLyricsCell(1_800L, 3_000L, " world"),
                         ),
                     ),
                 ),
@@ -53,9 +56,9 @@ class SaltPlayerLyricsMapperTest {
     @Test
     fun `uses the whole line timing when no word cells are available`() {
         val song = SaltPlayerLyricsMapper.map(
-            SaltPlayerLyricsDocument(
+            LocalLyricsDocument(
                 listOf(
-                    SaltPlayerLyricsLine(
+                    LocalLyricsLine(
                         beginMs = 4_000L,
                         endMs = 7_500L,
                         mainText = "Plain LRC line",
@@ -80,9 +83,9 @@ class SaltPlayerLyricsMapperTest {
     @Test
     fun `does not duplicate a translation identical to the main lyric`() {
         val song = SaltPlayerLyricsMapper.map(
-            SaltPlayerLyricsDocument(
+            LocalLyricsDocument(
                 listOf(
-                    SaltPlayerLyricsLine(
+                    LocalLyricsLine(
                         beginMs = 0L,
                         endMs = 1_000L,
                         mainText = "相同",
@@ -100,16 +103,16 @@ class SaltPlayerLyricsMapperTest {
     @Test
     fun `falls back to whole line timing when word cells are outside the line`() {
         val song = SaltPlayerLyricsMapper.map(
-            SaltPlayerLyricsDocument(
+            LocalLyricsDocument(
                 listOf(
-                    SaltPlayerLyricsLine(
+                    LocalLyricsLine(
                         beginMs = 2_000L,
                         endMs = 4_000L,
                         mainText = "Fallback",
                         translation = null,
                         cells = listOf(
-                            SaltPlayerLyricsCell(0L, 1_000L, "old"),
-                            SaltPlayerLyricsCell(4_000L, 4_000L, "instant"),
+                            LocalLyricsCell(0L, 1_000L, "old"),
+                            LocalLyricsCell(4_000L, 4_000L, "instant"),
                         ),
                     ),
                 ),

@@ -4,7 +4,7 @@
  * http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package com.juren233.hle.providers.saltplayer
+package com.juren233.hle.providers.locallyrics
 
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -14,7 +14,7 @@ import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-class SaltPlayerEmbeddedLyricsReaderTest {
+class EmbeddedLyricsReaderTest {
     @Test
     fun `reads id3v2 unsynchronized lyrics`() {
         val lyrics = "[00:01.00]ID3 lyric"
@@ -41,7 +41,7 @@ class SaltPlayerEmbeddedLyricsReaderTest {
             [00:05.00]Good night 晚安
         """.trimIndent()
         val decoded = read(flacWithLyrics(lyrics), "sample.flac")!!
-        val document = SaltPlayerLrcParser.parse(decoded)!!
+        val document = LocalLrcParser.parse(decoded)!!
 
         assertEquals("Hello world", document.lines.first().mainText)
         assertEquals("你好世界", document.lines.first().translation)
@@ -68,7 +68,7 @@ class SaltPlayerEmbeddedLyricsReaderTest {
         return try {
             Files.write(path, bytes)
             FileInputStream(path.toFile()).use { input ->
-                SaltPlayerEmbeddedLyricsReader.read(input.channel, fileName)
+                EmbeddedLyricsReader.read(input.channel, fileName)
             }
         } finally {
             Files.deleteIfExists(path)

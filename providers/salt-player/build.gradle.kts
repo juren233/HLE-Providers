@@ -24,6 +24,16 @@ android {
         buildConfig = true
     }
 
+    // 本地文件歌词（媒体库定位、内嵌标签读取、LRC 解析）由椒盐音乐、QQ 音乐与网易云音乐共用，源码只放一份
+    sourceSets {
+        getByName("main").kotlin.directories.add(
+            rootProject.file("shared/local-lyrics/src/main/kotlin").path,
+        )
+        getByName("test").kotlin.directories.add(
+            rootProject.file("shared/local-lyrics/src/test/kotlin").path,
+        )
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

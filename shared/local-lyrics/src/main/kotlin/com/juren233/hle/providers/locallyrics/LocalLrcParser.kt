@@ -4,12 +4,13 @@
  * http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package com.juren233.hle.providers.saltplayer
+package com.juren233.hle.providers.locallyrics
 
 import java.util.Locale
 
 /**
- * Version-independent LRC/Enhanced-LRC parser used by the local-file lyric path.
+ * Version-independent LRC/Enhanced-LRC parser used by the local-file lyric path
+ * (Salt Player and QQ Music share it, so one file shows the same lyrics in both).
  *
  * Salt Player 12.1.1 splits source text on newlines and U+2009 THIN SPACE. A segment
  * without a timestamp reuses the preceding timestamp prefix, so the first segment at
@@ -17,7 +18,7 @@ import java.util.Locale
  * are clamped to the next line so the non-Apple-Music rendering path never reports
  * multiple simultaneously active lines.
  */
-internal object SaltPlayerLrcParser {
+internal object LocalLrcParser {
     private val timeTag = Regex("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?]")
     private val timedLine = Regex(
         "^((?:\\[\\d{1,3}:\\d{1,2}(?:[.:]\\d{1,3})?])+)(.*)$",
@@ -25,7 +26,7 @@ internal object SaltPlayerLrcParser {
     private val wordTimeTag = Regex("<(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?>")
     private val metadataTag = Regex("^\\[([A-Za-z][A-Za-z0-9_-]*):(.*)]$")
 
-    fun parse(text: String, durationMs: Long = 0L): SaltPlayerLyricsDocument? {
+    fun parse(text: String, durationMs: Long = 0L): LocalLyricsDocument? {
         val normalized = text.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
         var offsetMs = 0L
         val timedSourceLines = ArrayList<TimedSourceLine>()
@@ -107,9 +108,9 @@ internal object SaltPlayerLrcParser {
                     ?.let { (it.beginMs + offsetMs).coerceAtMost(end) }
                     ?: end
                 if (wordEnd <= wordBegin || word.text.isEmpty()) return@mapIndexedNotNull null
-                SaltPlayerLyricsCell(wordBegin, wordEnd, word.text)
+                LocalLyricsCell(wordBegin, wordEnd, word.text)
             }
-            SaltPlayerLyricsLine(
+            LocalLyricsLine(
                 beginMs = begin,
                 endMs = end,
                 mainText = line.text,
@@ -117,7 +118,7 @@ internal object SaltPlayerLrcParser {
                 cells = cells,
             )
         }
-        return SaltPlayerLyricsDocument(lines)
+        return LocalLyricsDocument(lines)
     }
 
     private fun mergeSameTimestamp(beginMs: Long, candidates: List<RawLine>): MergedLine? {

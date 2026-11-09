@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.juren233.hle.providers.locallyrics.LocalLyricsDocument
 import com.juren233.hle.providers.saltplayer.BuildConfig
 import com.juren233.hyperlyricsenhanced.provider.OfficialCoreHostGuard
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderApplicationCallback
@@ -126,7 +127,7 @@ object SaltPlayerPluginEntry : OfficialProviderPlugin {
         }
         private val localLyricsGeneration = AtomicLong(0L)
         private var metadata = SaltPlayerTrackMetadata()
-        private var document: SaltPlayerLyricsDocument? = null
+        private var document: LocalLyricsDocument? = null
         private var lastSong: io.github.proify.lyricon.lyric.model.Song? = null
         private var lastLocalLyricsRequestKey: String? = null
         private var pendingLocalLyricsTask: Future<*>? = null
