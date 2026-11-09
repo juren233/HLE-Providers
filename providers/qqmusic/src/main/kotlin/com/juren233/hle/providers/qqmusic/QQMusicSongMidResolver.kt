@@ -10,6 +10,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.juren233.hle.providers.qqmusic.QQMusicCatalogClient.DetailResult
 import com.juren233.hle.providers.qqmusic.QQMusicCatalogClient.MetadataMatch
+import com.juren233.hyperlyricsenhanced.common.lyric.SongMetadataQueryPolicy
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
@@ -160,9 +161,12 @@ internal object QQMusicSongMidResolver {
     }
 
     /**
-     * 按会话歌名/歌手匹配在线歌曲。[sessionId] 出现在匹配结果里时视为会话 ID 已被服务端
-     * 确认（详情查询失败时仍能识别在线歌）。歌手为空不发请求：服务端会模糊匹配到别的歌
-     * （2026-11-09 实测《Broken》配到《Broken Cities》）。
+     * 按会话歌名/歌手匹配在线歌曲，查询组合见与核心共用的
+     * [SongMetadataQueryPolicy.metadataQueries]，逐组查到有候选通过
+     * 核对为止。只有原歌名 + 整串歌手的查询结果里出现 [sessionId] 时，才视为会话 ID 已被服务端
+     * 确认（详情查询失败时仍能识别在线歌）；放宽后的查询里会话 ID 与其他候选一样要过核对。
+     * 候选一律按会话原始歌名/歌手核对。歌手为空不发请求：服务端会模糊匹配到别的歌
+     * （2026-11-09 实测《Broken》配到《Broken Cities》）。网络异常直接抛出，不写负缓存。
      */
     private fun resolveByMetadata(
         sessionId: String?,
@@ -176,30 +180,33 @@ internal object QQMusicSongMidResolver {
         if (title.isNullOrBlank() || artist.isNullOrBlank()) {
             throw IllegalStateException("QQ 歌曲 ID 无法核对(缺少歌名或歌手): id=$sessionId")
         }
-        val matched = match(title, artist, durationMs.coerceAtLeast(0L) / 1_000L)
-        if (matched !is MetadataMatch.Found) {
-            failedAt[failureKey] = elapsedRealtimeMs()
+        val seconds = durationMs.coerceAtLeast(0L) / 1_000L
+        // 已核对过的候选不再重复查详情（不同查询组合常返回重叠的候选）
+        val checked = mutableSetOf<String>()
+        SongMetadataQueryPolicy.metadataQueries(title, artist).forEachIndexed { queryIndex, (queryTitle, queryArtist) ->
+            val matched = match(queryTitle, queryArtist, seconds)
+            if (matched !is MetadataMatch.Found) return@forEachIndexed
+            val ordered = (listOfNotNull(matched.songId) + matched.candidates).distinct()
+            if (queryIndex == 0 && sessionId != null && sessionId in ordered) {
+                return SongMidResolution(sessionId, null, null)
+            }
+            ordered.forEachIndexed { index, candidate ->
+                if (!checked.add(candidate)) return@forEachIndexed
+                val verified = verifyAlternative(candidate, title, artist, detail) ?: return@forEachIndexed
+                Log.i(
+                    TAG,
+                    "QQ 按歌名匹配到在线歌曲: id=$sessionId -> songId=$candidate, " +
+                        "name=${verified.songName}, query=$queryTitle / $queryArtist",
+                )
+                return verified.copy(alternatives = ordered.drop(index + 1))
+            }
+        }
+        failedAt[failureKey] = elapsedRealtimeMs()
+        if (checked.isEmpty()) {
             Log.i(TAG, "QQ 按歌名匹配无结果: title=$title, artist=$artist")
             throw IllegalStateException("QQ 歌曲 ID 换算失败(按歌名匹配无结果): id=$sessionId")
         }
-        if (sessionId != null &&
-            (matched.songId == sessionId || sessionId in matched.candidates)
-        ) {
-            return SongMidResolution(sessionId, null, null)
-        }
-        val ordered = (listOfNotNull(matched.songId) + matched.candidates)
-            .distinct()
-            .filterNot { it == sessionId }
-        ordered.forEachIndexed { index, candidate ->
-            val verified = verifyAlternative(candidate, title, artist, detail) ?: return@forEachIndexed
-            Log.i(
-                TAG,
-                "QQ 按歌名匹配到在线歌曲: id=$sessionId -> songId=$candidate, name=${verified.songName}",
-            )
-            return verified.copy(alternatives = ordered.drop(index + 1))
-        }
-        failedAt[failureKey] = elapsedRealtimeMs()
-        Log.i(TAG, "QQ 按歌名匹配的候选均未通过核对: title=$title, candidates=${ordered.size}")
+        Log.i(TAG, "QQ 按歌名匹配的候选均未通过核对: title=$title, candidates=${checked.size}")
         throw IllegalStateException("QQ 歌曲 ID 换算失败(候选身份不符): id=$sessionId")
     }
 

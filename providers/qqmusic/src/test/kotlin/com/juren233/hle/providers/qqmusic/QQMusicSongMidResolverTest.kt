@@ -201,7 +201,80 @@ class QQMusicSongMidResolverTest {
                 )
             }
         }
-        assertEquals(1, matches)
+        // 原歌名与去括号歌名各查一次；第二次调用命中负缓存，不再发请求
+        assertEquals(2, matches)
+    }
+
+    @Test
+    fun `multi artist local song retries with each split artist`() {
+        // 2026-11-09 真机：本地《勿听》会话 ID 47 在线是《爱上你只是我的错》；
+        // 接口对整串歌手返回 24001，只传「张紫宁」命中 509884965
+        val artist = "张紫宁/赵紫骅/游戏科学/8082Audio"
+        val details = mapOf(
+            "47" to detailOf("47", "爱上你只是我的错", "dMDM"),
+            "509884965" to detailOf("509884965", "勿听", "张紫宁"),
+        )
+        val queried = mutableListOf<Pair<String, String>>()
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "47", "勿听", artist, 255_000L, false,
+            detail = { details[it] ?: QQMusicCatalogClient.DetailResult.NotFound },
+            match = { title, singer, _ ->
+                queried += title to singer
+                if (singer == "张紫宁") {
+                    QQMusicCatalogClient.MetadataMatch.Found(null, listOf("509884965", "509884987"))
+                } else {
+                    QQMusicCatalogClient.MetadataMatch.NoMatch
+                }
+            },
+        )
+        assertEquals(listOf("勿听" to artist, "勿听" to "张紫宁"), queried)
+        assertEquals("509884965", resolution.numericSongId)
+        assertEquals(listOf("509884987"), resolution.alternatives)
+    }
+
+    @Test
+    fun `bracketed title retries without the annotation`() {
+        // 2026-11-09 真机：本地《Question...? (Explicit)》会话 ID 34 在线是 BEYOND《太空》
+        val details = mapOf(
+            "34" to detailOf("34", "太空", "BEYOND"),
+            "378883302" to detailOf("378883302", "Question...?", "Taylor Swift"),
+        )
+        val queried = mutableListOf<String>()
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "34", "Question...? (Explicit)", "Taylor Swift", 210_000L, false,
+            detail = { details[it] ?: QQMusicCatalogClient.DetailResult.NotFound },
+            match = { title, _, _ ->
+                queried += title
+                if (title == "Question...?") {
+                    QQMusicCatalogClient.MetadataMatch.Found("378883302", listOf("413370134"))
+                } else {
+                    QQMusicCatalogClient.MetadataMatch.NoMatch
+                }
+            },
+        )
+        assertEquals(listOf("Question...? (Explicit)", "Question...?"), queried)
+        assertEquals("378883302", resolution.numericSongId)
+    }
+
+    @Test
+    fun `session id in a relaxed query result still needs identity check`() {
+        // 放宽后的查询（单个歌手）不能直接确认会话 ID，会话 ID 与其他候选一样要过核对
+        val details = mapOf(
+            "987010" to detailOf("987010", "另一首", "别人"),
+            "987011" to detailOf("987011", "勿听", "张紫宁"),
+        )
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "987010", "勿听", "张紫宁/赵紫骅", 255_000L, false,
+            detail = { details[it] ?: QQMusicCatalogClient.DetailResult.NotFound },
+            match = { _, singer, _ ->
+                if (singer == "张紫宁") {
+                    QQMusicCatalogClient.MetadataMatch.Found("987010", listOf("987011"))
+                } else {
+                    QQMusicCatalogClient.MetadataMatch.NoMatch
+                }
+            },
+        )
+        assertEquals("987011", resolution.numericSongId)
     }
 
     @Test
