@@ -554,7 +554,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 // 歌曲次数输出）用于在真机日志里直接定位卡住的阶段。
                 Log.i(TAG, "QQ 歌词任务开始: id=${track.id}, title=${track.title}")
                 val resolution = runCatching {
-                    QQMusicSongMidResolver.resolve(track.id, track.title, track.artist, track.idTrusted)
+                    QQMusicSongMidResolver.resolve(
+                        id = track.id,
+                        title = track.title,
+                        artist = track.artist,
+                        durationMs = track.duration,
+                        trustedId = track.idTrusted,
+                    )
                 }
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌曲 ID 换算失败: id=${track.id}", error)
@@ -566,16 +572,16 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         return@execute
                     }
                 Log.i(TAG, "QQ 换算完成: id=${track.id}, songId=${resolution.numericSongId}")
-                runCatching { QQClient.fetch(resolution.numericSongId) }
-                    .onSuccess { payload ->
+                runCatching { fetchWithAlternatives(track, resolution) }
+                    .onSuccess { (chosen, payload) ->
                         Log.i(
                             TAG,
-                            "QQ 歌词下载完成: id=${track.id}, songId=${resolution.numericSongId}, " +
+                            "QQ 歌词下载完成: id=${track.id}, songId=${chosen.numericSongId}, " +
                                 "lyricChars=${payload.lyric?.length ?: 0}",
                         )
                         val enriched = payload.copy(
-                            name = resolution.songName,
-                            singer = resolution.singerName,
+                            name = chosen.songName,
+                            singer = chosen.singerName,
                         )
                         val song = toSong(track, enriched)
                         Log.i(TAG, "QQ 歌词解析完成: id=${track.id}, lines=${song.lyrics?.size ?: 0}")
@@ -583,7 +589,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                             Log.w(
                                 TAG,
                                 "QQ 歌词内容为空，不发布以免覆盖已有歌词: id=${track.id} " +
-                                    "songId=${resolution.numericSongId}",
+                                    "songId=${chosen.numericSongId}",
                             )
                             Log.i(TAG, "QQ 歌词任务结束(空歌词): id=${track.id}")
                             publishUnavailable(track, loadKey)
@@ -591,7 +597,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         }
                         // 未校验的透传结果（来源不可信且无权威 name）没有身份证明，不落缓存，
                         // 否则限流窗口内放行的内容会按 track.id 永久回放（issue #62）
-                        if (track.idTrusted || resolution.songName != null) {
+                        if (track.idTrusted || chosen.songName != null) {
                             writeCache(track.id, enriched)
                         }
                         synchronized(this@QQRuntime) {
@@ -619,6 +625,41 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     }
             }
         }
+
+        /**
+         * 主条目没有歌词时（按歌名匹配选中的条目可能无词，如《Broken》605895210），按顺序核对
+         * 其余同曲候选，取第一个有歌词的；都没有时返回主条目的结果，由调用方按空歌词处理。
+         */
+        private fun fetchWithAlternatives(
+            track: QQMusicLyricTrack,
+            resolution: QQMusicSongMidResolver.SongMidResolution,
+        ): Pair<QQMusicSongMidResolver.SongMidResolution, QQPayload> {
+            val primary = QQClient.fetch(resolution.numericSongId)
+            if (hasLyrics(track, primary) || resolution.alternatives.isEmpty()) {
+                return resolution to primary
+            }
+            for (candidate in resolution.alternatives) {
+                val verified = runCatching {
+                    QQMusicSongMidResolver.verifyAlternative(candidate, track.title, track.artist)
+                }.onFailure { Log.w(TAG, "QQ 同曲候选核对失败: songId=$candidate", it) }
+                    .getOrNull() ?: continue
+                val payload = runCatching { QQClient.fetch(verified.numericSongId) }
+                    .onFailure { Log.w(TAG, "QQ 同曲候选歌词下载失败: songId=$candidate", it) }
+                    .getOrNull() ?: continue
+                if (hasLyrics(track, payload)) {
+                    Log.i(
+                        TAG,
+                        "QQ 主条目无歌词，改用同曲候选: id=${track.id}, " +
+                            "${resolution.numericSongId} -> ${verified.numericSongId}",
+                    )
+                    return verified to payload
+                }
+            }
+            return resolution to primary
+        }
+
+        private fun hasLyrics(track: QQMusicLyricTrack, payload: QQPayload): Boolean =
+            runCatching { !toSong(track, payload).lyrics.isNullOrEmpty() }.getOrDefault(false)
 
         private fun QQMusicLyricTrack.loadKey(): String =
             "$id\u0000$title\u0000$artist\u0000${sessionMediaId.orEmpty()}"

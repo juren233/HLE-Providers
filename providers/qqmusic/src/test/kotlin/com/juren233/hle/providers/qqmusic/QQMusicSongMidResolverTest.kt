@@ -80,258 +80,206 @@ class QQMusicSongMidResolverTest {
         assertEquals("0039MnYb0qxYhV", QQMusicSongMidResolver.sanitizeNumericSongId("0039MnYb0qxYhV"))
     }
 
-    // musicu.fcg 网关真实响应样本（music.search.SearchCgiService / DoSearchForQQMusicDesktop）
-    private val searchRaw = """
-        {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
-          {"id":390478855,"mid":"004c8nzy40CLsL","name":"菲律宾没有雪",
-           "singer":[{"name":"一个小孩"}]},
-          {"id":717479938,"mid":"004BO87l2BofMf","name":"菲律宾没有雪(我想要的)",
-           "singer":[{"name":"一个小孩"},{"name":"听风叙晚"}]}
-        ]}}}}}
-    """.trimIndent()
+
+    // ---- 数字 ID 核对（issue #62：QQ 手机版本地歌 MEDIA_ID 是本地库编号）----
+
+    private fun detailOf(id: String, name: String, singer: String) =
+        QQMusicCatalogClient.DetailResult.Found(QQMusicCatalogClient.SongDetail(id, name, singer, 200))
+
+    private fun noMatch(title: String, artist: String, seconds: Long): QQMusicCatalogClient.MetadataMatch =
+        throw AssertionError("不应按歌名匹配: $title / $artist / $seconds")
 
     @Test
-    fun `search fallback accepts candidate with exact title and singer`() {
-        val resolution = QQMusicSongMidResolver.parseSearchResponse(
-            searchRaw, "菲律宾没有雪", "一个小孩",
-        )!!
-        assertEquals("390478855", resolution.numericSongId)
-        assertEquals("菲律宾没有雪", resolution.songName)
-        assertEquals("一个小孩", resolution.singerName)
-    }
-
-    @Test
-    fun `search fallback rejects mismatched singer or title`() {
-        // 标题相等但歌手不相等：精确轮拒绝；包含轮可命中「菲律宾没有雪(我想要的)」
-        // 合作版条目（同曲不同版本，歌词一致，听风叙晚在候选歌手列表内）
-        val collab = QQMusicSongMidResolver.parseSearchResponse(searchRaw, "菲律宾没有雪", "听风叙晚")
-        assertEquals("717479938", collab?.numericSongId)
-        // 标题不相等（即使歌手相等）：拒绝
-        assertNull(QQMusicSongMidResolver.parseSearchResponse(searchRaw, "不存在的歌曲名", "一个小孩"))
-        // 缺少服务层键：拒绝
-        assertNull(QQMusicSongMidResolver.parseSearchResponse("""{"code":0}""", "x", "y"))
-        // 顶层 code 非 0：拒绝
-        assertNull(QQMusicSongMidResolver.parseSearchResponse("""{"code":2000}""", "x", "y"))
-        // 服务层 code 非 0：拒绝
-        assertNull(
-            QQMusicSongMidResolver.parseSearchResponse(
-                """{"code":0,"music.search.SearchCgiService":{"code":2000,"data":{}}}""", "x", "y",
-            ),
+    fun `trusted numeric id passes through without lookups`() {
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "97773", null, null, 0L, trustedId = true,
+            detail = { throw AssertionError("不应查询详情") },
+            match = ::noMatch,
         )
-        // 非 JSON 响应（如网关返回错误页）：拒绝且不抛异常
-        assertNull(QQMusicSongMidResolver.parseSearchResponse("<html></html>", "x", "y"))
-    }
-
-    @Test
-    fun `search matches multi artist slash separated metadata strings`() {
-        // 元数据歌手是多人斜杠串（小米音乐车载场景实测形态），按段匹配
-        val raw = """
-            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
-              {"id":99,"mid":"x","name":"I Like Me Better","singer":[{"name":"Zach Herron"},{"name":"Lauv"}]}
-            ]}}}}}
-        """.trimIndent()
-        val resolution = QQMusicSongMidResolver.parseSearchResponse(
-            raw, "I Like Me Better", "Zach Herron/Lauv",
-        )!!
-        assertEquals("99", resolution.numericSongId)
-    }
-
-    @Test
-    fun `search fallback accepts exact title when singer list has extra members`() {
-        // 候选歌手列表含额外成员（合作版），但标题精确相等且目标歌手在列表内：采纳
-        val resolution = QQMusicSongMidResolver.parseSearchResponse(
-            searchRaw, "菲律宾没有雪(我想要的)", "一个小孩",
-        )!!
-        assertEquals("717479938", resolution.numericSongId)
-    }
-
-    @Test
-    fun `match normalization ignores case and whitespace`() {
-        val raw = """
-            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
-              {"id":42,"mid":"m","name":"Love  Somebody","singer":[{"name":"lauv"}]}
-            ]}}}}}
-        """.trimIndent()
-        val resolution = QQMusicSongMidResolver.parseSearchResponse(raw, "love somebody", "LAUV")!!
-        assertEquals("42", resolution.numericSongId)
-    }
-
-    @Test
-    fun `search accepts truncated title via containment after exact pass misses`() {
-        // 真机实测：App 标题 golden hour，QQ 真名 In your golden hour（精确轮不中，包含轮采纳）
-        val raw = """
-            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
-              {"id":236084449,"mid":"002jsOVo03DMQG","name":"In your golden hour","singer":[{"name":"JVKE"}]}
-            ]}}}}}
-        """.trimIndent()
-        val resolution = QQMusicSongMidResolver.parseSearchResponse(raw, "golden hour", "JVKE")!!
-        assertEquals("236084449", resolution.numericSongId)
-        assertEquals("In your golden hour", resolution.songName)
-    }
-
-    @Test
-    fun `search prefers exact title over containment candidate listed earlier`() {
-        val raw = """
-            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
-              {"id":1,"mid":"a","name":"golden hour (Live)","singer":[{"name":"JVKE"}]},
-              {"id":2,"mid":"b","name":"golden hour","singer":[{"name":"JVKE"}]}
-            ]}}}}}
-        """.trimIndent()
-        val resolution = QQMusicSongMidResolver.parseSearchResponse(raw, "golden hour", "JVKE")!!
-        assertEquals("2", resolution.numericSongId)
-    }
-
-    @Test
-    fun `search containment requires at least four normalized characters`() {
-        val raw = """
-            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
-              {"id":3,"mid":"c","name":"晴天笑了","singer":[{"name":"周杰伦"}]}
-            ]}}}}}
-        """.trimIndent()
-        assertNull(QQMusicSongMidResolver.parseSearchResponse(raw, "晴天", "周杰伦"))
-    }
-
-    @Test
-    fun `search throttle detector flags service level rate limit code`() {
-        val raw = """
-            {"code":0,"ts":1790509010743,"music.search.SearchCgiService":{"code":2001,"data":{
-              "body":{"song":{"list":[]}},"code":0}}}
-        """.trimIndent()
-        assertTrue(QQMusicSongMidResolver.parseSearchThrottled(raw))
-    }
-
-    @Test
-    fun `search throttle detector flags top level gateway errors`() {
-        val raw = """{"code":500001,"ts":1790508681101,"traceid":"x"}"""
-        assertTrue(QQMusicSongMidResolver.parseSearchThrottled(raw))
-    }
-
-    @Test
-    fun `search throttle detector passes valid empty result through`() {
-        val raw = """
-            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[]}},"code":0}}}
-        """.trimIndent()
-        assertTrue(!QQMusicSongMidResolver.parseSearchThrottled(raw))
-    }
-
-    @Test
-    fun `search throttle detector treats malformed payload as retryable`() {
-        assertTrue(QQMusicSongMidResolver.parseSearchThrottled("<html>gateway</html>"))
-    }
-
-    @Test
-    fun `search candidates collect every match of the winning round in order`() {
-        val raw = """
-            {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"song":{"list":[
-              {"id":1,"mid":"a","name":"晴天","singer":[{"name":"周杰伦"}]},
-              {"id":2,"mid":"b","name":"晴天","singer":[{"name":"周杰伦"}]}
-            ]}}}}}
-        """.trimIndent()
-        val candidates = QQMusicSongMidResolver.parseSearchCandidates(raw, "晴天", "周杰伦")!!
-        assertEquals(listOf("1", "2"), candidates.map { it.numericSongId })
-        // 原单候选语义不变：取第一个
-        assertEquals("1", QQMusicSongMidResolver.parseSearchResponse(raw, "晴天", "周杰伦")!!.numericSongId)
-    }
-
-    // ---- 数字 ID 校验（issue #62：QQ 手机版本地歌 MEDIA_ID 是本地库数字 ID）----
-
-    private fun found(vararg ids: String) = QQMusicSongMidResolver.SearchOutcome.Found(
-        ids.map { QQMusicSongMidResolver.SongMidResolution(it, "分手快乐", "梁静茹") },
-    )
-
-    @Test
-    fun `trusted numeric id passes through without search`() {
-        var searches = 0
-        val resolution = QQMusicSongMidResolver.resolveNumericId("97773", null, null, true) { searches++; found("1") }
         assertEquals("97773", resolution.numericSongId)
         assertNull(resolution.songName)
-        assertEquals(0, searches)
     }
 
     @Test
-    fun `untrusted numeric id is confirmed when a candidate carries the same id`() {
+    fun `online session id is kept when its detail is the same song`() {
+        // 维护者手机实测：会话 Espresso (Explicit)，在线库名 Espresso
         val resolution = QQMusicSongMidResolver.resolveNumericId(
-            "4958007", "Without Me", "Eminem", false,
-        ) { found("105589678", "4958007") }
-        assertEquals("4958007", resolution.numericSongId)
-        assertEquals("分手快乐", resolution.songName)
-        assertEquals("梁静茹", resolution.singerName)
+            "483138560", "Espresso (Explicit)", "Sabrina Carpenter", 175_000L, false,
+            detail = { detailOf(it, "Espresso", "Sabrina Carpenter") },
+            match = ::noMatch,
+        )
+        assertEquals("483138560", resolution.numericSongId)
+        assertEquals("Espresso", resolution.songName)
     }
 
     @Test
-    fun `untrusted numeric id is replaced by searched id for local library ids`() {
-        // issue #62：本地库数字 ID 与在线同曲候选 ID 不同 → 改用搜索结果，本地歌拿到正确在线词
+    fun `local library id is replaced by verified metadata match`() {
+        // issue #62 实测：1926 在线是莫文蔚《那么爱你为什么》，按歌名匹配到林峯《Broken》
+        val details = mapOf(
+            "1926" to detailOf("1926", "那么爱你为什么", "莫文蔚"),
+            "605895210" to detailOf("605895210", "Broken", "林峯"),
+        )
+        var matchedSeconds = -1L
         val resolution = QQMusicSongMidResolver.resolveNumericId(
-            "267483012", "分手快乐", "梁静茹", false,
-        ) { found("97773") }
-        assertEquals("97773", resolution.numericSongId)
-        assertEquals("分手快乐", resolution.songName)
+            "1926", "Broken", "林峯", 190_400L, false,
+            detail = { details.getValue(it) },
+            match = { _, _, seconds ->
+                matchedSeconds = seconds
+                QQMusicCatalogClient.MetadataMatch.Found("605895210", listOf("4907722", "107770907"))
+            },
+        )
+        assertEquals(190L, matchedSeconds)
+        assertEquals("605895210", resolution.numericSongId)
+        assertEquals("Broken", resolution.songName)
+        assertEquals("林峯", resolution.singerName)
+        assertEquals(listOf("4907722", "107770907"), resolution.alternatives)
     }
 
     @Test
-    fun `untrusted numeric id without matching song throws and writes negative cache`() {
-        var searches = 0
-        val search = { searches++; QQMusicSongMidResolver.SearchOutcome.NotFound }
-        assertThrows(IllegalStateException::class.java) {
-            QQMusicSongMidResolver.resolveNumericId("987001", "冷门歌", "某人", false, search)
-        }
-        // 负缓存生效：第二次不再发起搜索，直接抛出
-        assertThrows(IllegalStateException::class.java) {
-            QQMusicSongMidResolver.resolveNumericId("987001", "冷门歌", "某人", false, search)
-        }
-        assertEquals(1, searches)
-    }
-
-    @Test
-    fun `untrusted numeric id falls back to passthrough when search throttles`() {
-        var searches = 0
-        val search = { searches++; QQMusicSongMidResolver.SearchOutcome.Throttled }
-        val first = QQMusicSongMidResolver.resolveNumericId("987002", "A Song", "B", false, search)
-        assertEquals("987002", first.numericSongId)
-        assertNull(first.songName)
-        // 放行不写正缓存：下次仍会重试校验
-        val second = QQMusicSongMidResolver.resolveNumericId("987002", "A Song", "B", false, search)
-        assertEquals("987002", second.numericSongId)
-        assertEquals(2, searches)
-    }
-
-    @Test
-    fun `untrusted numeric id falls back to passthrough when search fails`() {
+    fun `candidates failing identity check are skipped`() {
+        val details = mapOf(
+            "1921" to detailOf("1921", "没时间", "莫文蔚"),
+            "500" to detailOf("500", "讲不出再见 (DJ版)", "某翻唱歌手"),
+            "406532865" to detailOf("406532865", "讲不出再见", "谭咏麟"),
+        )
         val resolution = QQMusicSongMidResolver.resolveNumericId(
-            "987003", "A Song", "B", false,
-        ) { throw java.io.IOException("network down") }
-        assertEquals("987003", resolution.numericSongId)
+            "1921", "讲不出再见", "谭咏麟", 292_000L, false,
+            detail = { details[it] ?: QQMusicCatalogClient.DetailResult.NotFound },
+            match = { _, _, _ ->
+                QQMusicCatalogClient.MetadataMatch.Found("500", listOf("406532865", "102209"))
+            },
+        )
+        assertEquals("406532865", resolution.numericSongId)
+        assertEquals(listOf("102209"), resolution.alternatives)
+    }
+
+    @Test
+    fun `session id confirmed by match result when detail lookup fails`() {
+        val resolution = QQMusicSongMidResolver.resolveNumericId(
+            "556300755", "日落", "孙燕姿", 249_000L, false,
+            detail = { throw java.io.IOException("network down") },
+            match = { _, _, _ ->
+                QQMusicCatalogClient.MetadataMatch.Found("733033289", listOf("556300755", "648453000"))
+            },
+        )
+        assertEquals("556300755", resolution.numericSongId)
         assertNull(resolution.songName)
     }
 
     @Test
-    fun `verified numeric resolution is cached per song identity`() {
-        var searches = 0
-        val search = {
-            searches++
-            QQMusicSongMidResolver.SearchOutcome.Found(
-                listOf(QQMusicSongMidResolver.SongMidResolution("97773", "分手快乐", "梁静茹")),
+    fun `network failure never passes the session id through and is not negatively cached`() {
+        var matches = 0
+        val failing: (String, String, Long) -> QQMusicCatalogClient.MetadataMatch = { _, _, _ ->
+            matches++
+            throw java.io.IOException("network down")
+        }
+        repeat(2) {
+            assertThrows(java.io.IOException::class.java) {
+                QQMusicSongMidResolver.resolveNumericId(
+                    "1920", "Billie Jean", "Michael Jackson", 294_000L, false,
+                    detail = { throw java.io.IOException("network down") },
+                    match = failing,
+                )
+            }
+        }
+        assertEquals(2, matches)
+    }
+
+    @Test
+    fun `no match throws and writes negative cache`() {
+        var matches = 0
+        val none: (String, String, Long) -> QQMusicCatalogClient.MetadataMatch = { _, _, _ ->
+            matches++
+            QQMusicCatalogClient.MetadataMatch.NoMatch
+        }
+        repeat(2) {
+            assertThrows(IllegalStateException::class.java) {
+                QQMusicSongMidResolver.resolveNumericId(
+                    "987001", "懂了 (台版)", "周深", 0L, false,
+                    detail = { detailOf(it, "另一首", "别人") },
+                    match = none,
+                )
+            }
+        }
+        assertEquals(1, matches)
+    }
+
+    @Test
+    fun `blank artist is never sent to metadata matching`() {
+        // 实测歌手为空时服务端会模糊匹配到别的歌（Broken → Broken Cities）
+        assertThrows(IllegalStateException::class.java) {
+            QQMusicSongMidResolver.resolveNumericId(
+                "987005", "Broken", " ", 190_000L, false,
+                detail = { detailOf(it, "那么爱你为什么", "莫文蔚") },
+                match = ::noMatch,
             )
         }
-        val first = QQMusicSongMidResolver.resolveNumericId("987004", "分手快乐", "梁静茹", false, search)
-        val second = QQMusicSongMidResolver.resolveNumericId("987004", "分手快乐", "梁静茹", false, search)
+    }
+
+    @Test
+    fun `verified resolution is cached per song identity`() {
+        var details = 0
+        val lookup: (String) -> QQMusicCatalogClient.DetailResult = {
+            details++
+            detailOf(it, "分手快乐", "梁静茹")
+        }
+        val first = QQMusicSongMidResolver.resolveNumericId("987004", "分手快乐", "梁静茹", 0L, false, lookup, ::noMatch)
+        val second = QQMusicSongMidResolver.resolveNumericId("987004", "分手快乐", "梁静茹", 0L, false, lookup, ::noMatch)
         assertEquals(first, second)
-        assertEquals(1, searches)
-        // 本地库数字 ID 可能被复用为另一首歌：不同标题/歌手组合不命中旧换算缓存
-        // （若误按裸 id 命中旧换算会直接返回 97773 而不抛异常）
+        assertEquals(1, details)
+        // 本地库数字 ID 可能被复用为另一首歌：不同标题/歌手组合不命中旧换算
         assertThrows(IllegalStateException::class.java) {
-            QQMusicSongMidResolver.resolveNumericId("987004", "另一首", "别人", false) {
-                QQMusicSongMidResolver.SearchOutcome.NotFound
+            QQMusicSongMidResolver.resolveNumericId("987004", "另一首", "别人", 0L, false, lookup) { _, _, _ ->
+                QQMusicCatalogClient.MetadataMatch.NoMatch
             }
         }
     }
 
     @Test
-    fun `untrusted numeric id strips flag bits before comparing with candidates`() {
-        // SDK 长整型 ID：先掩码高位标志位再与候选比较（掩码后与候选同 ID 即确认在线）
+    fun `untrusted numeric id strips flag bits before detail lookup`() {
+        var looked: String? = null
         val resolution = QQMusicSongMidResolver.resolveNumericId(
-            "2305843009321456028", "虚拟", "陈粒", false,
-        ) { found("107762076") }
+            "2305843009321456028", "虚拟", "陈粒", 0L, false,
+            detail = { looked = it; detailOf(it, "虚拟", "陈粒") },
+            match = ::noMatch,
+        )
+        assertEquals("107762076", looked)
         assertEquals("107762076", resolution.numericSongId)
+    }
+
+    @Test
+    fun `songmid uses single song interface before metadata matching`() {
+        val resolution = QQMusicSongMidResolver.resolveSongMid(
+            "002N4Yw52prWDN", "世界が終るまでは… (直到世界尽头)", "WANDS", 0L,
+            singleSong = { QQMusicSongMidResolver.SongMidResolution("245587122", "世界が終るまでは…", "WANDS") },
+            detail = { throw AssertionError("不应查询详情") },
+            match = ::noMatch,
+        )
+        assertEquals("245587122", resolution.numericSongId)
+    }
+
+    @Test
+    fun `songmid falls back to verified metadata match when single song misses`() {
+        val resolution = QQMusicSongMidResolver.resolveSongMid(
+            "000Afpal3mCeFw", "Stay Gold", "米津玄師", 0L,
+            singleSong = { null },
+            detail = { detailOf(it, "Stay Gold", "米津玄師") },
+            match = { _, _, _ -> QQMusicCatalogClient.MetadataMatch.Found("777", emptyList()) },
+        )
+        assertEquals("777", resolution.numericSongId)
+    }
+
+    @Test
+    fun `verify alternative rejects different songs`() {
+        assertNull(
+            QQMusicSongMidResolver.verifyAlternative("1", "Broken", "林峯") {
+                detailOf(it, "Broken Cities", "Charlie Brennan")
+            },
+        )
+        assertNull(
+            QQMusicSongMidResolver.verifyAlternative("2", "Broken", "林峯") {
+                QQMusicCatalogClient.DetailResult.NotFound
+            },
+        )
     }
 }

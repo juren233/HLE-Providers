@@ -8,56 +8,41 @@ package com.juren233.hle.providers.qqmusic
 
 import android.os.SystemClock
 import android.util.Log
+import com.juren233.hle.providers.qqmusic.QQMusicCatalogClient.DetailResult
+import com.juren233.hle.providers.qqmusic.QQMusicCatalogClient.MetadataMatch
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 小米音乐（com.miui.player）的歌词接口只接受数字歌曲 ID，歌词下载按数字 ID 进行。
- * 数字 ID 只有来源可信（HD/MIUI 播放队列快照）时才透传；QQ 手机版的 MEDIA_ID 是会话
- * 原值，本地歌曲时是本地库数字 ID 而非在线歌曲 ID（issue #62：本地库 ID 恰好命中另一首
- * 在线歌的歌词，顶着会话标题发布并按 id 永久缓存），必须先经搜索校验（见
- * resolveNumericId）。
+ * 把会话里的歌曲标识换算成 QQ 歌词接口可用的在线数字歌曲 ID。
  *
- * 4.44.0.9 真机证伪（2026-09-27）：小米音乐的 MediaSession MEDIA_ID 不是 QQ songmid
- * （三首不同歌曲的 MEDIA_ID 在单曲接口一律 code=0 且 data 为空数组），而系统媒体卡片
- * mediaFocusParam.shareData 携带的 songmid 才是真身（Exhale 实测：MEDIA_ID=
- * 001Q5MKR47b4JH 查无此歌，shareData 的 004OZHd728dJgm 返回正确歌曲）。因此
- * songmid → 数字 ID 的主路径优先级低于会话 extras 提取（见 QQMusicPluginEntry），
- * 本换算只在 extras 没有提供 songmid 时兜底：单曲接口（songmid 精确主键查询，必须带
- * songmid 与 format=json 参数：裸端点返回 HTML 页而非 JSON）→ 搜索接口。
- * 接口对无版权/小众歌曲返回 code=0 且 data 为空数组（如 000Afpal3mCeFw、
- * 003ubw8F1sZAyy 实测），此时走搜索接口兜底：候选必须「标题精确相等且歌手列表
- * 精确包含」才采纳（搜索命中的条目可能与输入 songmid 不同——同一首歌的不同版本
- * 条目，歌词一致）。
- * 搜索走 u.y.qq.com/cgi-bin/musicu.fcg 统一网关的
- * music.search.SearchCgiService（DoSearchForQQMusicDesktop）：旧搜索端点
- * soso/fcgi-bin/client_search_cp 已被 QQ 服务端下线（2026-09-27 实测所有
- * 查询一律 HTTP 500，真机侧表现为 FileNotFoundException，1.0.19 及之前
- * 依赖它兜底的换算全部失败）。
- * 响应同时携带权威 name/singer，车载歌词污染场景下用它覆盖 MediaSession 标题。
- * 负缓存按 mid+标题+歌手 组合键：污染首行失败不会挡住归一化后的重试；
- * 限流/网关错误只进 60s 短冷却（见 THROTTLED_RETRY_MS）。
+ * 数字 ID 只有来源可信（HD/MIUI 播放队列快照）时才直接使用。QQ 手机版的 MEDIA_ID 是
+ * `SongInfo.H2()` 原值（20.9.5.8 反编译 `MediaSessionUpdateController`），本地歌是本地库
+ * 编号：issue #62 中《Broken》=1926 在在线库里是莫文蔚《那么爱你为什么》。因此不可信的数字
+ * ID 先用歌曲详情核对「这个 ID 在在线库里是不是这首歌」，对不上再按歌名匹配；任何一步都
+ * 确认不了时抛出，由调用方发布「歌词确认缺失」交给核心兜底，绝不按会话 ID 盲目透传。
+ *
+ * 1.0.30 的教训：旧实现靠搜索网关（music.search.SearchCgiService）校验，搜索在真机上大多
+ * 被限流（code=2001），限流时又放行透传，本地歌照样取到别的歌的歌词。现在两条路径都只用
+ * [QQMusicCatalogClient] 的详情与按歌名匹配接口，不再调用搜索网关。
+ *
+ * 小米音乐（com.miui.player）的会话标识是 songmid：先用单曲接口（songmid 精确主键）换算，
+ * 单曲接口查不到时同样走按歌名匹配。4.44.0.9 真机证伪：MEDIA_ID 不是 songmid，系统媒体卡片
+ * mediaFocusParam.shareData 携带的 songmid 才是真身（见 QQMusicPluginEntry）。
+ *
+ * 身份核对复用 [QQMusicLyricCachePolicy.belongsToSession]（歌名互相包含、歌手互相解释），
+ * 与读取歌词缓存时的身份规则是同一份。
  */
 internal object QQMusicSongMidResolver {
     private const val TAG = "HLEProvider/QQMusic"
     private const val SINGLE_SONG_URL =
         "https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg"
-    private const val SEARCH_URL =
-        "https://u.y.qq.com/cgi-bin/musicu.fcg"
     private const val REQUEST_TIMEOUT_MS = 15_000
+
+    /** 确认「在线库没有这首歌」后的负缓存时长；网络异常不写负缓存。 */
     private const val FAILED_RETRY_MS = 10 * 60_000L
-
-    /**
-     * musicu.fcg 搜索网关按 IP 限流（服务层 code=2001，2026-09-27 真机与 PC 双侧实测）。
-     * 全局搜索节流：任何一次真实搜索后至少间隔这么久才允许下一次，防止车载歌词
-     * 逐行改写元数据把每行都变成一次真实搜索（同 IP 的桌面端调试流量也会连累手机）。
-     */
-    private const val SEARCH_MIN_INTERVAL_MS = 10_000L
-
-    /** 限流/网关错误导致的失败只挡 60s（瞬时故障），与「查无此歌」的 10 分钟负缓存区分。 */
-    private const val THROTTLED_RETRY_MS = 60_000L
 
     private val numericPattern = Regex("""^\d+$""")
 
@@ -65,20 +50,15 @@ internal object QQMusicSongMidResolver {
         val numericSongId: String,
         val songName: String?,
         val singerName: String?,
+        /**
+         * 按歌名匹配得到的其余同曲候选（尚未核对身份）。主条目没有歌词时，调用方用
+         * [verifyAlternative] 逐个核对后再取词。
+         */
+        val alternatives: List<String> = emptyList(),
     )
 
     private val resolved = ConcurrentHashMap<String, SongMidResolution>()
     private val failedAt = ConcurrentHashMap<String, Long>()
-    private val throttledAt = ConcurrentHashMap<String, Long>()
-
-    @Volatile
-    private var lastSearchStartedAtMs = 0L
-
-    internal sealed interface SearchOutcome {
-        data class Found(val candidates: List<SongMidResolution>) : SearchOutcome
-        data object NotFound : SearchOutcome
-        data object Throttled : SearchOutcome
-    }
 
     internal var elapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime
 
@@ -96,92 +76,147 @@ internal object QQMusicSongMidResolver {
         return (value and 0xFFFF_FFFFL).toString()
     }
 
-    fun resolve(id: String, title: String?, artist: String?, trustedId: Boolean = false): SongMidResolution {
-        if (isNumericSongId(id)) return resolveNumericId(id, title, artist, trustedId)
-        resolved[id]?.let { return it }
-        val failureKey = "$id|$title|$artist"
-        failedAt[failureKey]?.let { failedAtMs ->
-            if (elapsedRealtimeMs() - failedAtMs < FAILED_RETRY_MS) {
-                throw IllegalStateException("QQ 歌曲 ID 换算失败(命中负缓存): mid=$id")
-            }
-            failedAt.remove(failureKey)
-        }
-        throttledAt[failureKey]?.let { throttledAtMs ->
-            if (elapsedRealtimeMs() - throttledAtMs < THROTTLED_RETRY_MS) {
-                throw IllegalStateException("QQ 歌曲 ID 换算失败(搜索限流冷却中): mid=$id")
-            }
-            throttledAt.remove(failureKey)
-        }
-        val resolution = fetchSingleSong(id) ?: when (val search = fetchBySearch(title, artist)) {
-            is SearchOutcome.Found -> search.candidates.first()
-            SearchOutcome.Throttled -> {
-                throttledAt[failureKey] = elapsedRealtimeMs()
-                throw IllegalStateException("QQ 歌曲 ID 换算失败(搜索限流或节流跳过): mid=$id")
-            }
-            SearchOutcome.NotFound, null -> {
-                failedAt[failureKey] = elapsedRealtimeMs()
-                throw IllegalStateException("QQ 歌曲 ID 换算失败(单曲与搜索接口均无此歌): mid=$id")
-            }
-        }
-        resolved[id] = resolution
-        Log.i(TAG, "QQ 歌曲 ID 已换算: mid=$id songId=${resolution.numericSongId}")
+    fun resolve(
+        id: String,
+        title: String?,
+        artist: String?,
+        durationMs: Long = 0L,
+        trustedId: Boolean = false,
+    ): SongMidResolution {
+        if (isNumericSongId(id)) return resolveNumericId(id, title, artist, durationMs, trustedId)
+        return resolveSongMid(id, title, artist, durationMs)
+    }
+
+    internal fun resolveSongMid(
+        songMid: String,
+        title: String?,
+        artist: String?,
+        durationMs: Long,
+        singleSong: (String) -> SongMidResolution? = ::fetchSingleSong,
+        detail: (String) -> DetailResult = QQMusicCatalogClient::fetchSongDetail,
+        match: (String, String, Long) -> MetadataMatch = QQMusicCatalogClient::matchByMetadata,
+    ): SongMidResolution {
+        resolved[songMid]?.let { return it }
+        val failureKey = "$songMid|$title|$artist"
+        checkNegativeCache(failureKey, "mid=$songMid")
+        val resolution = singleSong(songMid)
+            ?: resolveByMetadata(null, title, artist, durationMs, failureKey, detail, match)
+        resolved[songMid] = resolution
+        Log.i(TAG, "QQ 歌曲 ID 已换算: mid=$songMid songId=${resolution.numericSongId}")
         return resolution
     }
 
     /**
-     * 不可信数字 ID 的校验与换算。搜索命中同 ID 即确认在线歌；命中同曲但 ID 不同
-     * （本地库数字 ID 的典型特征，issue #62）改用搜索到的 ID 取词，本地歌也能拿到
-     * 正确的在线词；查无此歌不发布（与 songmid 换算路径同语义，负缓存 10 分钟）；
-     * 限流/网络异常放行透传且不写正缓存——在线歌不受限流窗口误伤，下次重试校验。
-     * 正/负缓存按 id|标题|歌手 组合键：本地库数字 ID 可能被复用，不能只按 id 记住换算。
+     * 不可信数字 ID：详情核对通过即在线歌，照用会话 ID；否则按歌名匹配，取第一个经详情核对的
+     * 候选。缓存键含标题/歌手：本地库数字 ID 可能被复用为另一首歌，不能只按 id 记住换算。
      */
     internal fun resolveNumericId(
         id: String,
         title: String?,
         artist: String?,
+        durationMs: Long,
         trustedId: Boolean,
-        search: () -> SearchOutcome = { fetchBySearch(title, artist) },
+        detail: (String) -> DetailResult = QQMusicCatalogClient::fetchSongDetail,
+        match: (String, String, Long) -> MetadataMatch = QQMusicCatalogClient::matchByMetadata,
     ): SongMidResolution {
         val numericId = sanitizeNumericSongId(id)
         if (trustedId) return SongMidResolution(numericId, null, null)
         val failureKey = "$id|$title|$artist"
         resolved[failureKey]?.let { return it }
-        failedAt[failureKey]?.let { failedAtMs ->
-            if (elapsedRealtimeMs() - failedAtMs < FAILED_RETRY_MS) {
-                throw IllegalStateException("QQ 歌曲 ID 校验失败(命中负缓存): id=$id")
-            }
-            failedAt.remove(failureKey)
-        }
-        val outcome = try {
-            search()
-        } catch (error: Exception) {
-            Log.w(TAG, "QQ 数字 ID 校验未完成(搜索异常), 放行透传: id=$id", error)
-            return SongMidResolution(numericId, null, null)
-        }
-        val candidates = when (outcome) {
-            is SearchOutcome.Found -> outcome.candidates
-            SearchOutcome.Throttled -> {
-                Log.w(TAG, "QQ 数字 ID 校验被限流跳过, 放行透传: id=$id")
-                return SongMidResolution(numericId, null, null)
-            }
-            SearchOutcome.NotFound -> {
-                failedAt[failureKey] = elapsedRealtimeMs()
-                Log.i(TAG, "QQ 数字 ID 校验未命中同曲, 不发布: id=$id, title=$title, artist=$artist")
-                throw IllegalStateException("QQ 歌曲 ID 校验失败(搜索无同曲): id=$id")
-            }
-        }
-        val resolution = candidates.firstOrNull { it.numericSongId == numericId }
-            ?: candidates.first().also {
+        checkNegativeCache(failureKey, "id=$id")
+        val sessionDetail = runCatching { detail(numericId) }
+            .onFailure { Log.w(TAG, "QQ 会话 ID 详情查询失败: id=$numericId", it) }
+            .getOrNull()
+        val confirmed = (sessionDetail as? DetailResult.Found)?.detail
+            ?.takeIf { identityMatches(it, title, artist) }
+        val resolution = if (confirmed != null) {
+            Log.i(TAG, "QQ 会话 ID 是在线歌曲: id=$numericId, name=${confirmed.name}")
+            SongMidResolution(numericId, confirmed.name, confirmed.singer)
+        } else {
+            if (sessionDetail is DetailResult.Found) {
                 Log.i(
                     TAG,
-                    "QQ 数字 ID 校验: 会话 ID 非在线歌曲 ID, 改用搜索结果: " +
-                        "mediaId=$numericId -> songId=${it.numericSongId}, title=${it.songName}",
+                    "QQ 会话 ID 在在线库中是另一首歌，按歌名匹配: id=$numericId, " +
+                        "online=${sessionDetail.detail.name}, title=$title",
                 )
             }
+            resolveByMetadata(numericId, title, artist, durationMs, failureKey, detail, match)
+        }
         resolved[failureKey] = resolution
         Log.i(TAG, "QQ 数字 ID 校验通过: id=$numericId -> songId=${resolution.numericSongId}")
         return resolution
     }
+
+    /** 核对一个按歌名匹配得到的候选；身份对不上或查不到时返回 null，网络异常抛出。 */
+    fun verifyAlternative(
+        candidateId: String,
+        title: String?,
+        artist: String?,
+        detail: (String) -> DetailResult = QQMusicCatalogClient::fetchSongDetail,
+    ): SongMidResolution? {
+        val found = (detail(candidateId) as? DetailResult.Found)?.detail ?: return null
+        if (!identityMatches(found, title, artist)) return null
+        return SongMidResolution(candidateId, found.name, found.singer)
+    }
+
+    /**
+     * 按会话歌名/歌手匹配在线歌曲。[sessionId] 出现在匹配结果里时视为会话 ID 已被服务端
+     * 确认（详情查询失败时仍能识别在线歌）。歌手为空不发请求：服务端会模糊匹配到别的歌
+     * （2026-11-09 实测《Broken》配到《Broken Cities》）。
+     */
+    private fun resolveByMetadata(
+        sessionId: String?,
+        title: String?,
+        artist: String?,
+        durationMs: Long,
+        failureKey: String,
+        detail: (String) -> DetailResult,
+        match: (String, String, Long) -> MetadataMatch,
+    ): SongMidResolution {
+        if (title.isNullOrBlank() || artist.isNullOrBlank()) {
+            throw IllegalStateException("QQ 歌曲 ID 无法核对(缺少歌名或歌手): id=$sessionId")
+        }
+        val matched = match(title, artist, durationMs.coerceAtLeast(0L) / 1_000L)
+        if (matched !is MetadataMatch.Found) {
+            failedAt[failureKey] = elapsedRealtimeMs()
+            Log.i(TAG, "QQ 按歌名匹配无结果: title=$title, artist=$artist")
+            throw IllegalStateException("QQ 歌曲 ID 换算失败(按歌名匹配无结果): id=$sessionId")
+        }
+        if (sessionId != null &&
+            (matched.songId == sessionId || sessionId in matched.candidates)
+        ) {
+            return SongMidResolution(sessionId, null, null)
+        }
+        val ordered = (listOfNotNull(matched.songId) + matched.candidates)
+            .distinct()
+            .filterNot { it == sessionId }
+        ordered.forEachIndexed { index, candidate ->
+            val verified = verifyAlternative(candidate, title, artist, detail) ?: return@forEachIndexed
+            Log.i(
+                TAG,
+                "QQ 按歌名匹配到在线歌曲: id=$sessionId -> songId=$candidate, name=${verified.songName}",
+            )
+            return verified.copy(alternatives = ordered.drop(index + 1))
+        }
+        failedAt[failureKey] = elapsedRealtimeMs()
+        Log.i(TAG, "QQ 按歌名匹配的候选均未通过核对: title=$title, candidates=${ordered.size}")
+        throw IllegalStateException("QQ 歌曲 ID 换算失败(候选身份不符): id=$sessionId")
+    }
+
+    private fun checkNegativeCache(failureKey: String, label: String) {
+        failedAt[failureKey]?.let { failedAtMs ->
+            if (elapsedRealtimeMs() - failedAtMs < FAILED_RETRY_MS) {
+                throw IllegalStateException("QQ 歌曲 ID 换算失败(命中负缓存): $label")
+            }
+            failedAt.remove(failureKey)
+        }
+    }
+
+    private fun identityMatches(
+        detail: QQMusicCatalogClient.SongDetail,
+        title: String?,
+        artist: String?,
+    ): Boolean = QQMusicLyricCachePolicy.belongsToSession(detail.name, detail.singer, title, artist)
 
     private fun fetchSingleSong(songMid: String): SongMidResolution? {
         val url = "$SINGLE_SONG_URL?songmid=${URLEncoder.encode(songMid, "UTF-8")}&format=json"
@@ -200,64 +235,6 @@ internal object QQMusicSongMidResolver {
         }
     }
 
-    private fun fetchBySearch(title: String?, artist: String?): SearchOutcome {
-        if (title.isNullOrBlank() || artist.isNullOrBlank()) return SearchOutcome.NotFound
-        val now = elapsedRealtimeMs()
-        if (now - lastSearchStartedAtMs < SEARCH_MIN_INTERVAL_MS) return SearchOutcome.Throttled
-        lastSearchStartedAtMs = now
-        val url = "$SEARCH_URL?data=${URLEncoder.encode(searchRequestBody("$title $artist"), "UTF-8")}"
-        val connection = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
-            connectTimeout = REQUEST_TIMEOUT_MS
-            readTimeout = REQUEST_TIMEOUT_MS
-            setRequestProperty("User-Agent", "Mozilla/5.0")
-            setRequestProperty("Referer", "https://y.qq.com/")
-        }
-        return try {
-            val raw = connection.getInputStream().bufferedReader().use { reader ->
-                reader.readText()
-            }
-            when {
-                parseSearchThrottled(raw) -> SearchOutcome.Throttled
-                else -> parseSearchCandidates(raw, title, artist)
-                    ?.takeIf(List<SongMidResolution>::isNotEmpty)
-                    ?.let { SearchOutcome.Found(it) }
-                    ?: SearchOutcome.NotFound
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    /**
-     * 搜索网关的失败分两类：服务层/顶层 code 非 0（限流 code=2001、网关错误等，
-     * 瞬时性，短冷却后重试）；code=0 但结果为空（查无此歌，进 10 分钟负缓存）。
-     */
-    internal fun parseSearchThrottled(raw: String): Boolean = runCatching {
-        val root = org.json.JSONObject(raw)
-        if (root.optInt("code", 0) != 0) return@runCatching true
-        val service = root.optJSONObject("music.search.SearchCgiService")
-            ?: return@runCatching false
-        service.optInt("code", 0) != 0
-    }.getOrDefault(true)
-
-    private fun searchRequestBody(query: String): String =
-        org.json.JSONObject()
-            .put(
-                "music.search.SearchCgiService",
-                org.json.JSONObject()
-                    .put("method", "DoSearchForQQMusicDesktop")
-                    .put("module", "music.search.SearchCgiService")
-                    .put(
-                        "param",
-                        org.json.JSONObject()
-                            .put("search_type", 0)
-                            .put("query", query)
-                            .put("page_num", 1)
-                            .put("num_per_page", 10),
-                    ),
-            )
-            .toString()
-
     internal fun parseSingleSongResponse(raw: String): SongMidResolution? = runCatching {
         val root = org.json.JSONObject(raw)
         if (root.optInt("code", -1) != 0) return null
@@ -274,76 +251,9 @@ internal object QQMusicSongMidResolver {
         )
     }.getOrNull()
 
-    internal fun parseSearchResponse(raw: String, title: String, artist: String): SongMidResolution? =
-        parseSearchCandidates(raw, title, artist)?.firstOrNull()
-
-    /**
-     * 搜索兜底采纳「标题匹配 + 歌手精确相等」的候选（忽略大小写与空白差异）；
-     * 标题匹配两轮扫描：先精确相等，再互相包含（小米音乐等端上会截断长标题，
-     * 如 golden hour ⊂ In your golden hour），包含要求较短侧 ≥4 字符防误配。
-     * 精确轮命中的全部候选优先于包含轮（songmid 兜底取第一个；数字 ID 校验在
-     * 全部候选里优先取与会话同 ID 的条目，其余按序作为本地库 ID 的替换来源）。
-     * 命中条目允许与输入 songmid 不同（同曲不同版本条目，歌词一致）。
-     * musicu.fcg 网关的条目字段是 id/name（旧 client_search_cp 是 songid/songname），
-     * 服务层与顶层各有一个 code，任一非 0 都视为失败。
-     */
-    internal fun parseSearchCandidates(raw: String, title: String, artist: String): List<SongMidResolution>? =
-        runCatching<List<SongMidResolution>> {
-        val root = org.json.JSONObject(raw)
-        if (root.optInt("code", -1) != 0) return null
-        val service = root.optJSONObject("music.search.SearchCgiService") ?: return null
-        if (service.optInt("code", -1) != 0) return null
-        val songs = service.optJSONObject("data")?.optJSONObject("body")
-            ?.optJSONObject("song")?.optJSONArray("list") ?: return null
-        val wantedTitle = normalizeForMatch(title)
-        // 元数据歌手可能是「多人斜杠串」（R3HAB/Noah Neiman/Miranda Glory），
-        // 拆段后按段匹配候选歌手，整串匹配仅作兜底
-        val wantedArtistSegments = artist.split('/', '、')
-            .map(::normalizeForMatch)
-            .filter(String::isNotEmpty)
-            .toSet()
-        if (wantedTitle.isEmpty() || wantedArtistSegments.isEmpty()) return null
-        for (allowContains in booleanArrayOf(false, true)) {
-            val matched = ArrayList<SongMidResolution>()
-            for (index in 0 until songs.length()) {
-                val song = songs.getJSONObject(index)
-                val candidateTitle = normalizeForMatch(song.optString("name"))
-                val titleMatch = if (allowContains) {
-                    minOf(candidateTitle.length, wantedTitle.length) >= 4 &&
-                        (candidateTitle.contains(wantedTitle) || wantedTitle.contains(candidateTitle))
-                } else {
-                    candidateTitle == wantedTitle
-                }
-                if (!titleMatch) continue
-                val singers = song.optJSONArray("singer") ?: continue
-                var matchedSinger: String? = null
-                for (singerIndex in 0 until singers.length()) {
-                    val singerName = singers.optJSONObject(singerIndex)?.optString("name")
-                    val candidateSinger = normalizeForMatch(singerName ?: "")
-                    if (candidateSinger.isNotEmpty() && candidateSinger in wantedArtistSegments) {
-                        matchedSinger = singerName
-                        break
-                    }
-                }
-                matchedSinger ?: continue
-                val songId = song.optLong("id", -1L).takeIf { it > 0L }?.toString() ?: continue
-                matched.add(
-                    SongMidResolution(
-                        numericSongId = songId,
-                        songName = song.optString("name").takeIf(String::isNotBlank),
-                        singerName = matchedSinger,
-                    ),
-                )
-            }
-            if (matched.isNotEmpty()) return matched
-        }
-        emptyList()
-    }.getOrNull()
-
     internal fun normalizeForMatch(value: String): String =
         value.trim().collapseWhitespace().lowercase()
 
     private fun String.collapseWhitespace(): String =
         replace(Regex("\\s+"), " ")
 }
-
