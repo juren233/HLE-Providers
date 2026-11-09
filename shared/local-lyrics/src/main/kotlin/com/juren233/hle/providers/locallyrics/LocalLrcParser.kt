@@ -17,13 +17,20 @@ import java.util.Locale
  * a timestamp is the main lyric and later segments become its translation. Line ends
  * are clamped to the next line so the non-Apple-Music rendering path never reports
  * multiple simultaneously active lines.
+ *
+ * Word timing: besides Enhanced-LRC `<mm:ss.xx>` tags, a timestamp in square brackets after
+ * the leading line timestamps is also a word tag, e.g. `[01:21.510]You [01:21.720]start`
+ * (embedded lyrics of a user's local file, issue #62 2026-11-09 log). Text before the first
+ * word tag starts at the line timestamp; a trailing tag with no text only ends the last word.
  */
 internal object LocalLrcParser {
     private val timeTag = Regex("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?]")
     private val timedLine = Regex(
         "^((?:\\[\\d{1,3}:\\d{1,2}(?:[.:]\\d{1,3})?])+)(.*)$",
     )
-    private val wordTimeTag = Regex("<(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?>")
+    private val wordTimeTag = Regex(
+        "<(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?>|\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?]",
+    )
     private val metadataTag = Regex("^\\[([A-Za-z][A-Za-z0-9_-]*):(.*)]$")
 
     fun parse(text: String, durationMs: Long = 0L): LocalLyricsDocument? {
@@ -67,7 +74,7 @@ internal object LocalLrcParser {
 
         val rawLines = ArrayList<RawLine>()
         timedSourceLines.forEach { source ->
-            val words = parseEnhancedWords(source.content)
+            val words = parseEnhancedWords(source.content, source.beginsMs.first())
             val mainText = if (words.isEmpty()) {
                 source.content
             } else {
@@ -131,23 +138,31 @@ internal object LocalLrcParser {
         return MergedLine(beginMs, main.text.trim(), translation, main.words)
     }
 
-    private fun parseEnhancedWords(content: String): List<RawWord> {
+    /**
+     * 拆出逐字时间。没有文字的时间标签也保留（文字为空）：它是前一个字的结束时间，
+     * 生成单元格时跳过空字。
+     */
+    private fun parseEnhancedWords(content: String, lineBeginMs: Long): List<RawWord> {
         val matches = wordTimeTag.findAll(content).toList()
         if (matches.isEmpty()) return emptyList()
-        return matches.mapIndexedNotNull { index, match ->
+        val leading = content.substring(0, matches.first().range.first)
+            .takeIf(String::isNotEmpty)
+            ?.let { RawWord(beginMs = lineBeginMs, text = it) }
+        val tagged = matches.mapIndexed { index, match ->
             val textStart = match.range.last + 1
             val textEnd = matches.getOrNull(index + 1)?.range?.first ?: content.length
-            val wordText = content.substring(textStart, textEnd)
-            if (wordText.isEmpty()) return@mapIndexedNotNull null
+            // 尖括号标签在第 1–3 组，方括号标签在第 4–6 组
+            val groups = if (match.groupValues[1].isNotEmpty()) {
+                match.groupValues.subList(1, 4)
+            } else {
+                match.groupValues.subList(4, 7)
+            }
             RawWord(
-                beginMs = parseTime(
-                    match.groupValues[1],
-                    match.groupValues[2],
-                    match.groupValues[3],
-                ),
-                text = wordText,
+                beginMs = parseTime(groups[0], groups[1], groups[2]),
+                text = content.substring(textStart, textEnd),
             )
         }
+        return listOfNotNull(leading) + tagged
     }
 
     private fun parseTime(minutes: String, seconds: String, fraction: String): Long {

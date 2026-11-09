@@ -65,6 +65,62 @@ class LocalLrcParserTest {
     }
 
     @Test
+    fun `square bracket timestamps inside a line are word timing, not text`() {
+        // issue #62 2026-11-09 用户本地文件《Thriller》的内嵌歌词写法
+        val document = LocalLrcParser.parse(
+            """
+            [01:21.510]You [01:21.720]start [01:22.170]freeze
+            [01:21.510]浑身冰凉 惊骇眼中闪光
+            [01:27.240]Next
+            """.trimIndent(),
+        )!!
+
+        val line = document.lines.first()
+        assertEquals("You start freeze", line.mainText)
+        assertEquals("浑身冰凉 惊骇眼中闪光", line.translation)
+        assertEquals(listOf("You ", "start ", "freeze"), line.cells.map { it.text })
+        assertEquals(listOf(81_510L, 81_720L, 82_170L), line.cells.map { it.beginMs })
+        assertEquals(listOf(81_720L, 82_170L, 87_240L), line.cells.map { it.endMs })
+    }
+
+    @Test
+    fun `trailing word tag without text ends the last word`() {
+        val document = LocalLrcParser.parse(
+            """
+            [00:01.000]Hello [00:01.500]world[00:02.200]
+            [00:05.000]Next
+            """.trimIndent(),
+        )!!
+
+        val line = document.lines.first()
+        assertEquals("Hello world", line.mainText)
+        assertEquals(listOf("Hello ", "world"), line.cells.map { it.text })
+        assertEquals(listOf(1_500L, 2_200L), line.cells.map { it.endMs })
+        assertEquals(5_000L, line.endMs)
+    }
+
+    @Test
+    fun `colon separated milliseconds in a word tag are parsed`() {
+        val document = LocalLrcParser.parse(
+            "[01:21.510]start [01:22:170]freeze\n[01:27.240]Next",
+        )!!
+
+        assertEquals("start freeze", document.lines.first().mainText)
+        assertEquals(listOf(81_510L, 82_170L), document.lines.first().cells.map { it.beginMs })
+    }
+
+    @Test
+    fun `text before the first enhanced tag starts at the line timestamp`() {
+        val document = LocalLrcParser.parse(
+            "[00:01.00]Hello <00:01.60>world\n[00:03.00]Next",
+        )!!
+
+        val line = document.lines.first()
+        assertEquals("Hello world", line.mainText)
+        assertEquals(listOf(1_000L, 1_600L), line.cells.map { it.beginMs })
+    }
+
+    @Test
     fun `same timestamp plain line is kept as translation`() {
         val document = LocalLrcParser.parse(
             """

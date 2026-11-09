@@ -10,8 +10,8 @@ android {
         applicationId = "com.juren233.hle.providers.pack.netease"
         minSdk = 33
         targetSdk = 37
-        versionCode = 31
-        versionName = "1.0.28"
+        versionCode = 32
+        versionName = "1.0.29"
     }
 
     buildTypes {
