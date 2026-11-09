@@ -97,4 +97,26 @@ class QQMusicLyricCachePolicyTest {
             QQMusicLyricCachePolicy.belongsToSession("晴天笑了", null, "晴天", "周杰伦"),
         )
     }
+
+    // ---- v2 缓存文件名（2026-11-09：本地库编号与在线 ID 同号不再共用文件）----
+
+    @Test
+    fun `cache file name separates local library ID from online ID`() {
+        // issue #62 场景：本地歌会话 46 与在线歌会话 46 都写成 46.json，互相顶掉对方
+        val local = QQMusicLyricCachePolicy.cacheFileName("46", "勿听", "张紫宁/赵紫骅")
+        val online = QQMusicLyricCachePolicy.cacheFileName("46", "爱上你只是我的错", "dMDM")
+        assertTrue(local != online)
+    }
+
+    @Test
+    fun `cache file name is stable and normalized`() {
+        // 同一首歌大小写/空格差异不产生第二份缓存；文件名是 SHA-256 十六进制 + .json
+        val first = QQMusicLyricCachePolicy.cacheFileName("46", "Hello", "Adele")
+        val second = QQMusicLyricCachePolicy.cacheFileName("46", "hello ", "ADELE")
+        assertTrue(first == second)
+        assertTrue(first.endsWith(".json"))
+        assertTrue(Regex("[0-9a-f]{64}\\.json").matches(first))
+        // 不同会话（本地库编号递增）不命中同一份缓存
+        assertTrue(first != QQMusicLyricCachePolicy.cacheFileName("47", "Hello", "Adele"))
+    }
 }

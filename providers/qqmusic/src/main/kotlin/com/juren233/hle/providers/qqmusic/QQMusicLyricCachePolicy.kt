@@ -18,6 +18,21 @@ package com.juren233.hle.providers.qqmusic
  */
 internal object QQMusicLyricCachePolicy {
 
+    /**
+     * 歌词缓存文件名：会话 ID + 归一化歌名/歌手的 SHA-256。QQ 手机版本地歌的会话 ID 是本地库编号，
+     * 与在线歌曲 ID 处在同一数字空间，只按 ID 命名会让本地歌 46 与在线歌 46 共用一个文件。
+     */
+    fun cacheFileName(sessionId: String, title: String?, artist: String?): String {
+        val key = listOf(
+            sessionId,
+            QQMusicSongMidResolver.normalizeForMatch(title.orEmpty()),
+            QQMusicSongMidResolver.normalizeForMatch(artist.orEmpty()),
+        ).joinToString("\u0000")
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(key.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("", postfix = ".json") { "%02x".format(it) }
+    }
+
     /** 缓存内容是否可确认属于该曲目；false 时调用方应删除缓存文件并按 miss 处理。 */
     fun belongsToSession(
         payloadName: String?,

@@ -125,7 +125,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private val trackCoordinator = QQMusicLyricTrackCoordinator(playerPackage)
         private val bufferCoordinator = QQMusicBufferStateCoordinator()
         private val carLyricsPolicy = QQMusicCarLyricsMetadataPolicy()
-        private val cacheDir = File(application.filesDir, "hle-provider/qqmusic")
+        private val legacyCacheDir = File(application.filesDir, "hle-provider/qqmusic")
+        private val cacheDir = File(legacyCacheDir, "v2")
         private var activeLoadKey: String? = null
         private var lastSong: Song? = null
 
@@ -135,6 +136,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
          * 的歌词抹掉再恢复（真机表现为歌词进度闪动）；身份一致且已带歌词时直接跳过。
          */
         private var publishedLyricIdentity: String? = null
+
+        /** 当前上屏歌词所用的在线歌曲 ID；QQ 关联 ID 与它不同时才替换歌词。 */
+        private var publishedSongId: String? = null
+        private var loadGeneration = 0L
 
         private fun identityKeyOf(track: QQMusicLyricTrack): String =
             track.publishedIdentityKey(playerPackage)
@@ -195,6 +200,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
         fun start() {
             cacheDir.mkdirs()
+            executor.execute { purgeLegacyCache() }
             provider = LyriconFactory.createProvider(
                 context = application,
                 providerPackageName = PROVIDER_PACKAGE,
@@ -206,6 +212,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             runtime = this
             if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
                 registerNotificationHooks()
+            }
+            if (playerPackage == QQMusicRuntimePlan.MOBILE_PACKAGE) {
+                runCatching {
+                    QQMusicQueueHintChannel.register(application) { snapshot ->
+                        if (!OfficialCoreHostGuard.isDeactivated()) onQueueSnapshot(snapshot)
+                    }
+                }.onFailure { Log.w(TAG, "QQ 队列快照接收注册失败", it) }
             }
             Log.i(TAG, "QQ 音乐 Lyricon Provider 已注册: process=${Application.getProcessName()}")
         }
@@ -510,6 +523,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 is QQMusicLyricTrackDecision.AwaitingVerifiedId -> {
                     activeLoadKey = null
                     publishedLyricIdentity = null
+                    publishedSongId = null
                     if (BuildConfig.DEBUG && playerPackage == QQMusicRuntimePlan.HD_PACKAGE) {
                         Log.i(
                             TAG,
@@ -534,18 +548,33 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         }
 
         private fun load(track: QQMusicLyricTrack) {
-            if (publishedLyricIdentity == identityKeyOf(track)) return
-            val loadKey = track.loadKey()
+            val identity = identityKeyOf(track)
+            val sameSongShowing = publishedLyricIdentity == identity
+            // 同一首歌已带歌词上屏：只有 QQ 关联 ID 新到且与上屏所用的在线 ID 不同时才重新换算，
+            // 且不先发占位/缓存（避免歌词闪掉），换算或下载失败也保留现有歌词。
+            if (sameSongShowing &&
+                (track.appLinkedSongId == null || track.appLinkedSongId == publishedSongId)
+            ) {
+                return
+            }
+            val upgrade = sameSongShowing
+            // 每次加载一个新代次：同一首歌可能先按歌名匹配、再按 QQ 关联 ID 各起一次任务，
+            // 只有最新一次的结果能发布
+            val loadKey = "${track.loadKey()}\u0000${++loadGeneration}"
             activeLoadKey = loadKey
-            publishedLyricIdentity = null
-            val cached = loadCached(track)
-            if (cached != null) {
-                val published = publish(cached)
-                if (published && !cached.lyrics.isNullOrEmpty()) {
-                    publishedLyricIdentity = identityKeyOf(track)
+            if (!upgrade) {
+                publishedLyricIdentity = null
+                publishedSongId = null
+                val cached = loadCached(track)
+                if (cached != null) {
+                    val published = publish(cached.song)
+                    if (published && !cached.song.lyrics.isNullOrEmpty()) {
+                        publishedLyricIdentity = identity
+                        publishedSongId = cached.songId
+                    }
+                } else {
+                    publish(placeholder(track))
                 }
-            } else {
-                publish(placeholder(track))
             }
             executor.execute {
                 // 1.0.25 真机教训：单线程执行器里任何一个任务卡死（HTTP/DNS 无限
@@ -560,6 +589,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         artist = track.artist,
                         durationMs = track.duration,
                         trustedId = track.idTrusted,
+                        appLinkedSongId = track.appLinkedSongId,
                     )
                 }
                     .onFailure { error ->
@@ -568,10 +598,14 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     }
                     .getOrNull()
                     ?: run {
-                        publishUnavailable(track, loadKey)
+                        if (!upgrade) publishUnavailable(track, loadKey)
                         return@execute
                     }
                 Log.i(TAG, "QQ 换算完成: id=${track.id}, songId=${resolution.numericSongId}")
+                if (upgrade && resolution.numericSongId == publishedSongId) {
+                    Log.i(TAG, "QQ 关联 ID 与已上屏版本一致，不重新下载: id=${track.id}")
+                    return@execute
+                }
                 runCatching { fetchWithAlternatives(track, resolution) }
                     .onSuccess { (chosen, payload) ->
                         Log.i(
@@ -582,6 +616,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         val enriched = payload.copy(
                             name = chosen.songName,
                             singer = chosen.singerName,
+                            songId = chosen.numericSongId,
                         )
                         val song = toSong(track, enriched)
                         Log.i(TAG, "QQ 歌词解析完成: id=${track.id}, lines=${song.lyrics?.size ?: 0}")
@@ -592,13 +627,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                                     "songId=${chosen.numericSongId}",
                             )
                             Log.i(TAG, "QQ 歌词任务结束(空歌词): id=${track.id}")
-                            publishUnavailable(track, loadKey)
+                            if (!upgrade) publishUnavailable(track, loadKey)
                             return@onSuccess
                         }
                         // 未校验的透传结果（来源不可信且无权威 name）没有身份证明，不落缓存，
                         // 否则限流窗口内放行的内容会按 track.id 永久回放（issue #62）
                         if (track.idTrusted || chosen.songName != null) {
-                            writeCache(track.id, enriched)
+                            writeCache(track, enriched)
                         }
                         synchronized(this@QQRuntime) {
                             if (activeLoadKey == loadKey) {
@@ -610,6 +645,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                                 )
                                 if (published) {
                                     publishedLyricIdentity = identityKeyOf(track)
+                                    publishedSongId = chosen.numericSongId
                                 } else {
                                     Log.i(TAG, "QQ 发布未成功，保留重试机会: id=${track.id}")
                                 }
@@ -621,7 +657,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌词下载失败: id=${track.id} songId=${resolution.numericSongId}", error)
                         Log.i(TAG, "QQ 歌词任务结束(下载失败): id=${track.id}")
-                        publishUnavailable(track, loadKey)
+                        if (!upgrade) publishUnavailable(track, loadKey)
                     }
             }
         }
@@ -700,8 +736,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             }
         }
 
-        private fun loadCached(track: QQMusicLyricTrack): Song? {
-            val file = File(cacheDir, "${track.id}.json")
+        private class CachedLyric(val song: Song, val songId: String?)
+
+        private fun cacheFileOf(track: QQMusicLyricTrack): File =
+            File(cacheDir, QQMusicLyricCachePolicy.cacheFileName(track.id, track.title, track.artist))
+
+        private fun loadCached(track: QQMusicLyricTrack): CachedLyric? {
+            val file = cacheFileOf(track)
             if (!file.isFile) return null
             val payload = runCatching { QQPayload.fromJson(JSONObject(file.readText())) }.getOrNull()
             if (payload == null) {
@@ -713,8 +754,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     payload.name, payload.singer, track.title, track.artist,
                 )
             ) {
-                // 无法证明缓存属于当前曲目（数字 ID 盲透传时代的缓存不带权威 name，
-                // 含 issue #62 的错词缓存）：删除自愈，按 miss 重新走校验取词
+                // 无法证明缓存属于当前曲目：删除自愈，按 miss 重新走校验取词
                 runCatching { file.delete() }
                     .onFailure { Log.w(TAG, "QQ 歌词缓存删除失败: id=${track.id}", it) }
                 Log.i(
@@ -724,12 +764,33 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 )
                 return null
             }
-            return runCatching { toSong(track, payload) }.getOrNull()
+            // QQ 关联的在线 ID 已知且与缓存所用的版本不同：不先显示可能错开的旧版本，
+            // 由本次任务核对后重新下载并覆盖缓存
+            if (track.appLinkedSongId != null && payload.songId != null &&
+                payload.songId != QQMusicSongMidResolver.sanitizeNumericSongId(track.appLinkedSongId)
+            ) {
+                return null
+            }
+            val song = runCatching { toSong(track, payload) }.getOrNull() ?: return null
+            return CachedLyric(song, payload.songId)
         }
 
-        private fun writeCache(id: String, payload: QQPayload) {
-            runCatching { File(cacheDir, "$id.json").writeText(payload.toJson().toString()) }
-                .onFailure { Log.w(TAG, "QQ 歌词缓存写入失败: id=$id", it) }
+        private fun writeCache(track: QQMusicLyricTrack, payload: QQPayload) {
+            runCatching { cacheFileOf(track).writeText(payload.toJson().toString()) }
+                .onFailure { Log.w(TAG, "QQ 歌词缓存写入失败: id=${track.id}", it) }
+        }
+
+        /**
+         * 1.0.34 起缓存按「会话 ID + 歌名 + 歌手」存放并记录所用在线 ID（[QQMusicLyricCachePolicy.cacheFileName]）。
+         * 旧缓存只按会话 ID 命名：本地库编号与在线 ID 同号时会互相覆盖，且不知道用的是哪个版本
+         * （含按歌名匹配选错版本的条目），一律删除重取。
+         */
+        private fun purgeLegacyCache() {
+            val legacy = legacyCacheDir.listFiles { file -> file.isFile && file.name.endsWith(".json") }
+                ?: return
+            if (legacy.isEmpty()) return
+            val deleted = legacy.count { runCatching { it.delete() }.getOrDefault(false) }
+            Log.i(TAG, "QQ 旧版歌词缓存已清除: files=$deleted/${legacy.size}")
         }
     }
 
@@ -860,6 +921,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 val snapshot = resolver.resolve()
                 if (resolverGeneration.get() != generation) return
                 runtime?.onQueueSnapshot(snapshot)
+                forwardQueueHint(snapshot)
                 publish(snapshot)
                 snapshot
             }
@@ -908,6 +970,23 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         stopPolling(generation)
                     }
                 }
+        }
+
+        private var lastHint: String? = null
+        private var lastHintSentAtMs = 0L
+
+        /** 手机版歌词在 :QQPlayerService，快照转发过去；内容变化即发，否则按心跳补发（播放进程重启后能收到）。 */
+        private fun forwardQueueHint(snapshot: QQMusicQueueSnapshot?) {
+            if (playerPackage != QQMusicRuntimePlan.MOBILE_PACKAGE || snapshot == null) return
+            val encoded = QQMusicQueueHintChannel.encode(snapshot)
+            val now = SystemClock.elapsedRealtime()
+            if (encoded == lastHint && now - lastHintSentAtMs < NEXT_TRACK_HEARTBEAT_MS) return
+            runCatching { QQMusicQueueHintChannel.send(application, snapshot) }
+                .onSuccess {
+                    lastHint = encoded
+                    lastHintSentAtMs = now
+                }
+                .onFailure { Log.w(TAG, "QQ 队列快照转发失败", it) }
         }
 
         private fun reportNextTrackValidation(valid: Boolean, detail: String) {
@@ -969,6 +1048,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         val roma: String?,
         val name: String? = null,
         val singer: String? = null,
+        /** 这份歌词所用的在线歌曲 ID（v2 缓存起记录）。 */
+        val songId: String? = null,
     ) {
         fun toJson() = JSONObject().apply {
             putOpt("lyric", lyric)
@@ -976,6 +1057,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             putOpt("roma", roma)
             putOpt("name", name)
             putOpt("singer", singer)
+            putOpt("songId", songId)
         }
 
         companion object {
@@ -985,6 +1067,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 roma = json.optString("roma").takeIf(String::isNotBlank),
                 name = json.optString("name").takeIf(String::isNotBlank),
                 singer = json.optString("singer").takeIf(String::isNotBlank),
+                songId = json.optString("songId").takeIf(String::isNotBlank),
             )
         }
     }

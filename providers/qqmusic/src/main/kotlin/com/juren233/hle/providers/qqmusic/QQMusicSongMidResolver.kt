@@ -60,6 +60,7 @@ internal object QQMusicSongMidResolver {
 
     private val resolved = ConcurrentHashMap<String, SongMidResolution>()
     private val failedAt = ConcurrentHashMap<String, Long>()
+    private val rejectedAppLinked: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     internal var elapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime
 
@@ -83,8 +84,14 @@ internal object QQMusicSongMidResolver {
         artist: String?,
         durationMs: Long = 0L,
         trustedId: Boolean = false,
+        appLinkedSongId: String? = null,
     ): SongMidResolution {
-        if (isNumericSongId(id)) return resolveNumericId(id, title, artist, durationMs, trustedId)
+        if (isNumericSongId(id)) {
+            if (!trustedId && appLinkedSongId != null) {
+                resolveAppLinked(id, appLinkedSongId, title, artist)?.let { return it }
+            }
+            return resolveNumericId(id, title, artist, durationMs, trustedId)
+        }
         return resolveSongMid(id, title, artist, durationMs)
     }
 
@@ -146,6 +153,41 @@ internal object QQMusicSongMidResolver {
         resolved[failureKey] = resolution
         Log.i(TAG, "QQ 数字 ID 校验通过: id=$numericId -> songId=${resolution.numericSongId}")
         return resolution
+    }
+
+    /**
+     * QQ 自己关联的在线 ID（播放队列快照）优先于按歌名匹配：它就是 QQ 播放这首歌时自己显示歌词
+     * 所用的版本，按歌名匹配会在同名同歌手的 Remix/无专辑条目里选错（2026-11-09《Hello》
+     * 200672361 vs QQ 关联的 105345627）。快照里也可能是本地库编号（真机出现过 next=36），
+     * 所以同样要经详情核对歌名/歌手；不符或查不到返回 null，由调用方按原路径换算。
+     * 网络异常不记为不符，下次仍会再核对。
+     */
+    internal fun resolveAppLinked(
+        sessionId: String,
+        linkedId: String,
+        title: String?,
+        artist: String?,
+        detail: (String) -> DetailResult = QQMusicCatalogClient::fetchSongDetail,
+    ): SongMidResolution? {
+        val numericLinked = sanitizeNumericSongId(linkedId)
+        if (!isNumericSongId(numericLinked)) return null
+        val key = "linked|$numericLinked|$title|$artist"
+        resolved[key]?.let { return it }
+        if (key in rejectedAppLinked) return null
+        val verified = runCatching { verifyAlternative(numericLinked, title, artist, detail) }
+            .onFailure { Log.w(TAG, "QQ App 关联 ID 详情查询失败: linked=$numericLinked", it) }
+            .getOrElse { return null }
+        if (verified == null) {
+            rejectedAppLinked += key
+            Log.i(TAG, "QQ App 关联 ID 与会话不是同一首，不采用: id=$sessionId, linked=$numericLinked, title=$title")
+            return null
+        }
+        resolved[key] = verified
+        Log.i(
+            TAG,
+            "QQ 采用 App 关联的在线 ID: id=$sessionId -> songId=$numericLinked, name=${verified.songName}",
+        )
+        return verified
     }
 
     /** 核对一个按歌名匹配得到的候选；身份对不上或查不到时返回 null，网络异常抛出。 */

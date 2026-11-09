@@ -26,6 +26,12 @@ internal data class QQMusicLyricTrack(
      * 换算器必须先经标题/歌手搜索校验才能用于取词（issue #62）。
      */
     val idTrusted: Boolean = false,
+    /**
+     * QQ 音乐手机版自己给这首歌关联的在线歌曲 ID（主进程播放队列快照的 SongInfo ID，
+     * 经应用内广播转给播放进程）。只在快照的歌名/歌手与会话一致时附上；值可能是本地库编号
+     * （2026-11-09 真机快照出现过 next=36），换算器必须先用详情接口核对身份再用。
+     */
+    val appLinkedSongId: String? = null,
 )
 
 /** Keep songmid/numeric-ID upgrades on one lyric, but distinguish MIUI playback sessions. */
@@ -58,7 +64,9 @@ internal sealed interface QQMusicLyricTrackDecision {
  * published name/artist; a stale snapshot right after a track switch is rejected by the
  * SystemUI-side validation and self-heals on the next poll. An invalid snapshot (id<=0)
  * keeps the existing songmid conversion path as fallback.
- * QQ Music mobile retains its existing MediaSession ID behavior.
+ * QQ Music mobile keeps the MediaSession ID as the track ID (for local songs it is a local
+ * library number); a same-identity entry from the main-process queue snapshot only adds
+ * [QQMusicLyricTrack.appLinkedSongId], which the resolver verifies before use.
  */
 internal class QQMusicLyricTrackCoordinator(
     private val playerPackage: String,
@@ -73,10 +81,11 @@ internal class QQMusicLyricTrackCoordinator(
     }
 
     fun onQueueSnapshot(snapshot: QQMusicQueueSnapshot?): QQMusicLyricTrackDecision {
-        if (snapshot == null || playerPackage == QQMusicRuntimePlan.MOBILE_PACKAGE) {
-            return QQMusicLyricTrackDecision.Unchanged
-        }
+        if (snapshot == null) return QQMusicLyricTrackDecision.Unchanged
         queueSnapshot = snapshot
+        if (playerPackage == QQMusicRuntimePlan.MOBILE_PACKAGE) {
+            return mediaTrack?.let(::decide) ?: QQMusicLyricTrackDecision.Unchanged
+        }
         if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
             return mediaTrack?.let(::decide) ?: QQMusicLyricTrackDecision.Unchanged
         }
@@ -120,6 +129,7 @@ internal class QQMusicLyricTrackCoordinator(
                     )
                 }
                 ?: track
+            QQMusicRuntimePlan.MOBILE_PACKAGE -> track.copy(appLinkedSongId = appLinkedSongId(track))
             else -> track
         }
         return emit(resolved, track)
@@ -141,6 +151,19 @@ internal class QQMusicLyricTrackCoordinator(
         } else {
             QQMusicLyricTrackDecision.Load(resolved)
         }
+    }
+
+    /**
+     * 手机版：快照的当前曲或下一首与会话同曲时取其 SongInfo ID。切歌瞬间快照可能还停在上一首
+     * （轮询间隔 1.5 s），此时上一份快照的「下一首」往往正是新歌；都不同曲就不附 ID。
+     */
+    private fun appLinkedSongId(track: QQMusicLyricTrack): String? {
+        val snapshot = queueSnapshot ?: return null
+        return listOfNotNull(snapshot.current, snapshot.next)
+            .firstOrNull { candidate ->
+                candidate.id.toLongOrNull()?.let { it > 0L } == true && sameIdentity(track, candidate)
+            }
+            ?.id
     }
 
     private fun sameIdentity(
@@ -179,6 +202,10 @@ internal class QQMusicLyricTrackCoordinator(
         if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
             append('|')
             append(sessionMediaId.orEmpty())
+        }
+        if (playerPackage == QQMusicRuntimePlan.MOBILE_PACKAGE) {
+            append('|')
+            append(appLinkedSongId.orEmpty())
         }
     }
 

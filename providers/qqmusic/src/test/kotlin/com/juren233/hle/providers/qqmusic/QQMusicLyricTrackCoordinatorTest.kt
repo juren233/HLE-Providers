@@ -8,6 +8,7 @@ package com.juren233.hle.providers.qqmusic
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -142,6 +143,91 @@ class QQMusicLyricTrackCoordinatorTest {
         assertEquals("368304013", decision.track.id)
         // 手机版 MEDIA_ID 原值未经应用内数据验证，换算器必须搜索校验（issue #62）
         assertFalse(decision.track.idTrusted)
+    }
+
+    // ---- 手机版 App 关联 ID（2026-11-09：主进程快照经广播转给播放进程）----
+
+    @Test
+    fun `mobile attaches app linked ID when snapshot current is the same song`() {
+        // 2026-11-09 真机：本地《Hello》会话 ID 46，QQ 自己关联的在线 ID 105345627
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MOBILE_PACKAGE)
+
+        coordinator.onMetadata(track("46", "Hello", "Adele"))
+        val decision = coordinator.onQueueSnapshot(
+            snapshot("105345627", "Hello", "Adele"),
+        ) as QQMusicLyricTrackDecision.Load
+
+        // 会话 ID 仍是本地库编号；关联 ID 只附带，换算器核对后才采用
+        assertEquals("46", decision.track.id)
+        assertEquals("105345627", decision.track.appLinkedSongId)
+        assertFalse(decision.track.idTrusted)
+    }
+
+    @Test
+    fun `mobile attaches snapshot next ID right after a track switch`() {
+        // 切歌瞬间快照还停在上一首（轮询间隔 1.5 s），上一份快照的「下一首」正是新歌
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MOBILE_PACKAGE)
+
+        coordinator.onQueueSnapshot(
+            QQMusicQueueSnapshot(
+                current = QQMusicTrackSnapshot("233201", "Lavender Haze", "Taylor Swift"),
+                next = QQMusicTrackSnapshot("105345627", "Hello", "Adele"),
+            ),
+        )
+        val decision = coordinator.onMetadata(track("47", "Hello", "Adele"))
+            as QQMusicLyricTrackDecision.Load
+
+        assertEquals("47", decision.track.id)
+        assertEquals("105345627", decision.track.appLinkedSongId)
+    }
+
+    @Test
+    fun `mobile keeps no app linked ID when snapshot is another song`() {
+        // 快照同曲判断必须歌名与歌手都对上；只撞 ID 空间（如本地编号 36）不附 ID
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MOBILE_PACKAGE)
+
+        coordinator.onQueueSnapshot(snapshot("36", "爱上你只是我的错", "dMDM"))
+        val decision = coordinator.onMetadata(track("46", "Hello", "Adele"))
+            as QQMusicLyricTrackDecision.Load
+
+        assertEquals("46", decision.track.id)
+        assertNull(decision.track.appLinkedSongId)
+    }
+
+    @Test
+    fun `mobile ignores invalid snapshot ID even for the same song`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MOBILE_PACKAGE)
+
+        coordinator.onQueueSnapshot(snapshot("0", "Hello", "Adele"))
+        val decision = coordinator.onMetadata(track("46", "Hello", "Adele"))
+            as QQMusicLyricTrackDecision.Load
+
+        assertNull(decision.track.appLinkedSongId)
+    }
+
+    @Test
+    fun `repeated mobile snapshot with same linked ID does not reload`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MOBILE_PACKAGE)
+        val snap = snapshot("105345627", "Hello", "Adele")
+
+        coordinator.onMetadata(track("46", "Hello", "Adele"))
+        assertTrue(coordinator.onQueueSnapshot(snap) is QQMusicLyricTrackDecision.Load)
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snap),
+        )
+    }
+
+    @Test
+    fun `mobile publication identity ignores app linked ID`() {
+        // 发布身份只看歌名/歌手：同一首歌先按歌名匹配、后收到关联 ID 时走「升级替换」，
+        // 不先清屏（QQMusicPluginEntry.load 的 upgrade 分支）
+        val plain = track("46", "Hello", "Adele")
+        val linked = plain.copy(appLinkedSongId = "105345627")
+        assertEquals(
+            plain.publishedIdentityKey(QQMusicRuntimePlan.MOBILE_PACKAGE),
+            linked.publishedIdentityKey(QQMusicRuntimePlan.MOBILE_PACKAGE),
+        )
     }
 
     @Test

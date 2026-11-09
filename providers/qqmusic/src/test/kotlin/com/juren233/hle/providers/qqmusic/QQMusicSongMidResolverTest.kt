@@ -355,4 +355,112 @@ class QQMusicSongMidResolverTest {
             },
         )
     }
+
+    // ---- App 关联 ID（2026-11-09：主进程快照的 SongInfo ID 经广播转给播放进程）----
+
+    @Test
+    fun `app linked ID is adopted when its detail is the same song`() {
+        // 2026-11-09 真机：QQ 给《Hello》关联的是 105345627，按歌名匹配会选错 200672361
+        val resolution = QQMusicSongMidResolver.resolveAppLinked(
+            "46", "105345627", "Hello", "Adele",
+            detail = { detailOf(it, "Hello", "Adele") },
+        )!!
+        assertEquals("105345627", resolution.numericSongId)
+        assertEquals("Hello", resolution.songName)
+        assertEquals("Adele", resolution.singerName)
+    }
+
+    @Test
+    fun `app linked ID mismatching identity is rejected and negatively cached`() {
+        // 快照里也可能是本地库编号（真机出现过 next=36）：详情核对不过就不采用
+        var details = 0
+        repeat(2) {
+            assertNull(
+                QQMusicSongMidResolver.resolveAppLinked(
+                    "46", "36", "Hello", "Adele",
+                    detail = {
+                        details++
+                        detailOf(it, "爱上你只是我的错", "dMDM")
+                    },
+                ),
+            )
+        }
+        // 第二次命中负缓存，不再查详情
+        assertEquals(1, details)
+    }
+
+    @Test
+    fun `app linked ID network failure returns null without negative cache`() {
+        var details = 0
+        repeat(2) {
+            assertNull(
+                QQMusicSongMidResolver.resolveAppLinked(
+                    "987021", "987022", "Hello", "Adele",
+                    detail = {
+                        details++
+                        throw java.io.IOException("network down")
+                    },
+                ),
+            )
+        }
+        // 网络异常不记为「不是同一首」，下次仍会再核对
+        assertEquals(2, details)
+    }
+
+    @Test
+    fun `app linked ID is sanitized before verification`() {
+        // 快照 ID 可能带 SDK 标志位（songId | 0x2000000000000000）
+        var looked: String? = null
+        val resolution = QQMusicSongMidResolver.resolveAppLinked(
+            "46", "2305843009321456028", "虚拟", "陈粒",
+            detail = {
+                looked = it
+                detailOf(it, "虚拟", "陈粒")
+            },
+        )!!
+        assertEquals("107762076", looked)
+        assertEquals("107762076", resolution.numericSongId)
+    }
+
+    @Test
+    fun `non numeric app linked ID is not verified`() {
+        assertNull(
+            QQMusicSongMidResolver.resolveAppLinked(
+                "46", "003iXtVK2B6Zk6", "Hello", "Adele",
+                detail = { throw AssertionError("不应查询详情") },
+            ),
+        )
+    }
+
+    @Test
+    fun `verified app linked resolution is cached per song identity`() {
+        // resolve() 无法注入依赖：这里验证已核对过的关联 ID 命中换算缓存后，
+        // 后续同曲换算直接复用、不再发请求
+        val first = QQMusicSongMidResolver.resolveAppLinked(
+            "987020", "105345627", "Hello", "Adele",
+            detail = { detailOf(it, "Hello", "Adele") },
+        )!!
+        var details = 0
+        val second = QQMusicSongMidResolver.resolveAppLinked(
+            "987020", "105345627", "Hello", "Adele",
+            detail = {
+                details++
+                detailOf(it, "Hello", "Adele")
+            },
+        )!!
+        assertEquals(first, second)
+        assertEquals(0, details)
+    }
+
+    @Test
+    fun `trusted id passthrough ignores app linked ID`() {
+        // HD/MIUI 的快照 ID 已经换算器信任：不因附带关联 ID 多打一次详情请求
+        val resolution = QQMusicSongMidResolver.resolve(
+            "463324123", "this is what winter feels like", "JVKE",
+            trustedId = true,
+            appLinkedSongId = "105345627",
+        )
+        assertEquals("463324123", resolution.numericSongId)
+        assertNull(resolution.songName)
+    }
 }
