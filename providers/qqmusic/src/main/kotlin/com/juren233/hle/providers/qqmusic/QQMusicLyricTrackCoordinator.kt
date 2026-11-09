@@ -62,8 +62,10 @@ internal sealed interface QQMusicLyricTrackDecision {
  * title into the current lyric line (also truncating long titles). The in-app
  * SongInfomation from MusicPlayer.getCurSong() is the player's authoritative current song,
  * so whenever it carries a usable numeric ID it replaces the songmid and provides the
- * published name/artist; a stale snapshot right after a track switch is rejected by the
- * SystemUI-side validation and self-heals on the next poll. An invalid snapshot (id<=0)
+ * published name/artist. When metadata switches first and the snapshot still holds the song
+ * already confirmed for the previous MediaSession ID, the snapshot is stale: publish a
+ * placeholder and wait for the next snapshot instead of reloading the previous song's lyrics
+ * (2026-11-09 device log). An invalid snapshot (id<=0)
  * keeps the existing songmid conversion path as fallback.
  * QQ Music mobile keeps the MediaSession ID as the track ID (for local songs it is a local
  * library number); the main-process queue snapshot only adds candidate online IDs
@@ -75,6 +77,10 @@ internal class QQMusicLyricTrackCoordinator(
     private var mediaTrack: QQMusicLyricTrack? = null
     private var queueSnapshot: QQMusicQueueSnapshot? = null
     private var lastDecisionKey: String? = null
+
+    /** 小米音乐：最近一次与元数据确认同曲的快照当前曲 ID，及当时的会话 MEDIA_ID。 */
+    private var miuiConfirmedSnapshotId: String? = null
+    private var miuiConfirmedSessionId: String? = null
 
     /** 仅供 Debug 诊断：最近一次会话元数据（歌名/歌手）。 */
     internal val diagnosticMediaTrack: QQMusicLyricTrack? get() = mediaTrack
@@ -119,11 +125,19 @@ internal class QQMusicLyricTrackCoordinator(
             QQMusicRuntimePlan.MIUI_PACKAGE -> queueSnapshot?.current
                 ?.takeIf { it.id.toLongOrNull()?.let { id -> id > 0L } == true }
                 ?.let { current ->
-                    // 快照 getCurSong() 是播放器当前曲：无条件信任其数字 ID 与权威真名/真歌手。
+                    // 快照 getCurSong() 是播放器当前曲：信任其数字 ID 与权威真名/真歌手。
                     // 切歌时快照可能先于 MediaSession 更新；旧曲的 sessionMediaId
                     // 不能随新曲歌词一起发布，否则 SystemUI 会持续拒收。
                     val metadataMatchesCurrent = sameMiuiMediaTrack(track, current) ||
                         current.songMid?.equals(track.id, ignoreCase = true) == true
+                    if (metadataMatchesCurrent && !track.sessionMediaId.isNullOrBlank()) {
+                        miuiConfirmedSnapshotId = current.id
+                        miuiConfirmedSessionId = track.sessionMediaId
+                    } else if (isStaleMiuiSnapshot(current, track)) {
+                        // 元数据先于快照切到新歌：快照仍是上一首，不能按它取词（否则会把上一首
+                        // 的歌词重新下载、发布一遍）。先发新歌占位，等下一份快照
+                        return emit(null, track)
+                    }
                     track.copy(
                         id = QQMusicSongMidResolver.sanitizeNumericSongId(current.id),
                         title = current.title.takeIf { normalize(it).isNotEmpty() } ?: track.title,
@@ -179,6 +193,19 @@ internal class QQMusicLyricTrackCoordinator(
             metadataArtist.isNotEmpty() &&
             metadataTitle == normalize(snapshot.title) &&
             metadataArtist == normalize(snapshot.artist)
+    }
+
+    /**
+     * 小米音乐快照过期的正向证据：快照当前曲正是此前已与另一个会话 MEDIA_ID 确认同曲的那首，
+     * 而新元数据换了 MEDIA_ID 且与快照对不上。不按标题判断（车载歌词会把标题改成歌词行）；
+     * 快照从未与元数据确认过时没有证据，照旧采用快照。
+     */
+    private fun isStaleMiuiSnapshot(
+        current: QQMusicTrackSnapshot,
+        metadata: QQMusicLyricTrack,
+    ): Boolean {
+        val session = metadata.sessionMediaId?.takeIf(String::isNotBlank) ?: return false
+        return current.id == miuiConfirmedSnapshotId && session != miuiConfirmedSessionId
     }
 
     private fun sameMiuiMediaTrack(

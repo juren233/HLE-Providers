@@ -128,6 +128,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             Thread(task, "HLE-QQMusic-Lyrics").apply { isDaemon = true }
         }
 
+        /** 只在 [executor] 线程上读写。 */
+        private val recentDownload =
+            QQMusicRecentDownload<Pair<QQMusicSongMidResolver.SongMidResolution, QQPayload>>()
+
         /**
          * 本地文件歌词单独一个线程：不排在上一首的在线换算/下载后面，切歌后能立刻读文件。
          * 读不到内嵌歌词时再把在线取词任务交给 [executor]。
@@ -686,7 +690,16 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     Log.i(TAG, "QQ 关联 ID 与已上屏版本一致，不重新下载: id=${track.id}")
                     return@execute
                 }
-                runCatching { fetchWithAlternatives(track, resolution) }
+                val downloadKey = track.downloadKey()
+                val reused = recentDownload.find(downloadKey, resolution.numericSongId)
+                if (reused != null) {
+                    Log.i(TAG, "QQ 复用刚下载的歌词: id=${track.id}, songId=${reused.first.numericSongId}")
+                }
+                runCatching {
+                    reused ?: fetchWithAlternatives(track, resolution).also {
+                        recentDownload.remember(downloadKey, resolution.numericSongId, it)
+                    }
+                }
                     .onSuccess { (chosen, payload) ->
                         Log.i(
                             TAG,
@@ -851,6 +864,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
         private fun QQMusicLyricTrack.loadKey(): String =
             "$id\u0000$title\u0000$artist\u0000${sessionMediaId.orEmpty()}"
+
+        /** 下载结果只取决于曲目本身，不含会话 ID（见 [QQMusicRecentDownload]）。 */
+        private fun QQMusicLyricTrack.downloadKey(): String = "$id\u0000$title\u0000$artist"
 
         private fun refreshDisplayPreference(provider: LyriconProvider?) {
             val target = provider ?: return

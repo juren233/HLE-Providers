@@ -503,6 +503,75 @@ class QQMusicLyricTrackCoordinatorTest {
     }
 
     @Test
+    fun `MIUI metadata switching before the snapshot waits instead of reloading the previous song`() {
+        // 2026-11-09 真机（小米音乐 4.48.0.1）：新歌元数据先到、快照约 1 s 后才更新，
+        // 原先会按快照里的上一首重新下载并发布
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+        coordinator.onMetadata(
+            track("0019GXTz1OM6Wu", "半岛铁盒", "周杰伦").copy(sessionMediaId = "0019GXTz1OM6Wu"),
+        )
+        val previous = coordinator.onQueueSnapshot(
+            snapshot("2305843009213791713", "半岛铁盒", "周杰伦"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("0019GXTz1OM6Wu", previous.track.sessionMediaId)
+
+        val next = track("003EjrkZ2y6gOo", "Getting Over You", "LAUV")
+            .copy(sessionMediaId = "003EjrkZ2y6gOo")
+        val waiting = coordinator.onMetadata(next) as QQMusicLyricTrackDecision.AwaitingVerifiedId
+        assertEquals("Getting Over You", waiting.track.title)
+        assertEquals("003EjrkZ2y6gOo", waiting.track.sessionMediaId)
+        // 下一轮轮询快照仍未更新：不重复发占位
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("2305843009213791713", "半岛铁盒", "周杰伦")),
+        )
+
+        val loaded = coordinator.onQueueSnapshot(
+            snapshot("2305843009427741615", "Getting Over You", "LAUV"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("214047663", loaded.track.id)
+        assertEquals("003EjrkZ2y6gOo", loaded.track.sessionMediaId)
+    }
+
+    @Test
+    fun `MIUI polluted metadata on the same session keeps using the confirmed snapshot`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+        coordinator.onMetadata(
+            track("002OPrTT20AJLy", "House Tour", "Sabrina Carpenter")
+                .copy(sessionMediaId = "002OPrTT20AJLy"),
+        )
+        coordinator.onQueueSnapshot(snapshot("2305843009813697348", "House Tour", "Sabrina Carpenter"))
+
+        // 车载歌词把标题改成歌词行，会话 MEDIA_ID 没变：不是切歌，不进入等待
+        val decision = coordinator.onMetadata(
+            track("002OPrTT20AJLy", "Lyrics by：Jack Antonoff/John", "Sabrina Carpenter")
+                .copy(sessionMediaId = "002OPrTT20AJLy"),
+        )
+        assertFalse(decision is QQMusicLyricTrackDecision.AwaitingVerifiedId)
+    }
+
+    @Test
+    fun `MIUI unconfirmed snapshot is still adopted when metadata switches first`() {
+        // 快照从未与元数据确认同曲（例如冷启动时元数据已被污染）：没有过期证据，照旧采用快照
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.MIUI_PACKAGE)
+        coordinator.onMetadata(
+            track("001AzzRc42NBVo", "看着我坠啊坠啊坠落到云里", "陈粒").copy(sessionMediaId = "s1"),
+        )
+        val adopted = coordinator.onQueueSnapshot(
+            snapshot("107762076", "虚拟", "陈粒"),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("107762076", adopted.track.id)
+
+        // 与已发出的快照取词身份相同（未确认时会话 ID 本就不随附），不进入等待也不重复下载
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onMetadata(
+                track("0039MnYb0qxYhV", "晴天", "周杰伦").copy(sessionMediaId = "s2"),
+            ),
+        )
+    }
+
+    @Test
     fun `MIUI publication identity changes with session while HD identity does not`() {
         val first = track("songmid", "再见", "G.E.M.邓紫棋")
             .copy(sessionMediaId = "old-session")
