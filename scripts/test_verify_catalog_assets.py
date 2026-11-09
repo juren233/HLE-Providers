@@ -5,6 +5,7 @@ import io
 import json
 import pathlib
 import unittest
+import urllib.error
 import zipfile
 from unittest import mock
 
@@ -12,6 +13,8 @@ from backfill_catalog_releases import apply_backfill, seed_release
 from update_catalog_release import main as update_catalog_release_main
 from verify_catalog_assets import (
     disable_missing_assets,
+    fetch_pack_bytes,
+    mirror_asset_url,
     recompute_top_level,
     refresh_top_levels,
     validate_provider_structure,
@@ -815,6 +818,60 @@ class BackfillCatalogReleasesTest(unittest.TestCase):
         errors = apply_backfill(catalog, manifests, history_entries=[])
 
         self.assertTrue(any("下限" in error for error in errors))
+
+
+class PackDownloadRetryTest(unittest.TestCase):
+    URL = "https://github.com/juren233/HLE-Providers/releases/download/qqmusic-v1.0.33/qqmusic-1.0.33.hlp"
+    MIRROR = "https://hleplugins.juren233.top/releases/download/qqmusic-v1.0.33/qqmusic-1.0.33.hlp"
+
+    @staticmethod
+    def http_error(code: int) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError("u", code, "e", None, None)
+
+    def test_mirror_url_keeps_release_object_key(self) -> None:
+        self.assertEqual(mirror_asset_url(self.URL), self.MIRROR)
+        self.assertIsNone(mirror_asset_url("https://example.com/a.hlp"))
+
+    def test_retries_transient_error_then_succeeds_without_mirror(self) -> None:
+        calls: list[str] = []
+        waits: list[float] = []
+
+        def http_get(url: str) -> bytes:
+            calls.append(url)
+            if len(calls) < 3:
+                raise self.http_error(504)
+            return b"pack"
+
+        data = fetch_pack_bytes(self.URL, http_get=http_get, sleep=waits.append)
+
+        self.assertEqual(data, b"pack")
+        self.assertEqual(calls, [self.URL] * 3)
+        self.assertEqual(waits, [10, 30])
+
+    def test_falls_back_to_mirror_after_three_transient_failures(self) -> None:
+        calls: list[str] = []
+
+        def http_get(url: str) -> bytes:
+            calls.append(url)
+            if url == self.URL:
+                raise urllib.error.URLError(TimeoutError("timed out"))
+            return b"mirror"
+
+        data = fetch_pack_bytes(self.URL, http_get=http_get, sleep=lambda _s: None)
+
+        self.assertEqual(data, b"mirror")
+        self.assertEqual(calls, [self.URL] * 3 + [self.MIRROR])
+
+    def test_not_found_is_neither_retried_nor_mirrored(self) -> None:
+        calls: list[str] = []
+
+        def http_get(url: str) -> bytes:
+            calls.append(url)
+            raise self.http_error(404)
+
+        with self.assertRaises(urllib.error.HTTPError):
+            fetch_pack_bytes(self.URL, http_get=http_get, sleep=lambda _s: None)
+        self.assertEqual(calls, [self.URL])
 
 
 if __name__ == "__main__":

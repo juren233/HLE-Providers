@@ -20,6 +20,8 @@ import json
 import os
 import pathlib
 import re
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +44,13 @@ MULTI_DEX_MIN_CORE_VERSION_CODE = 230006
 DEFAULT_LEGACY_PLUGIN_API = 3
 DEFAULT_MIN_SUPPORTED_CORE = 160102
 
+# GitHub 偶发 5xx / 超时会让整次发布失败（2026-11-09 qqmusic-v1.0.33 实证：目录校验下载
+# 各插件包全部 504）。网络错误与 5xx 先在原地址重试（共 3 次，间隔 10 秒、30 秒）；插件包
+# 仍失败时改从 R2 镜像读同一文件，sha256 照旧与目录比对，校验强度不变。404 不重试也不换源，
+# 资产缺失照常由 disable_missing_assets 判定。
+RETRY_DELAYS_SECONDS = (10, 30)
+R2_MIRROR_BASE = "https://hleplugins.juren233.top"
+
 
 def parse_release_asset_url(url: str, repository: str) -> tuple[str, str] | None:
     parsed = urllib.parse.urlparse(url)
@@ -55,6 +64,63 @@ def parse_release_asset_url(url: str, repository: str) -> tuple[str, str] | None
     return urllib.parse.unquote(tag), urllib.parse.unquote(asset_name)
 
 
+def is_transient_network_error(error: BaseException) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500
+    return isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
+def with_retries(
+    action: Callable[[], object],
+    description: str,
+    delays: tuple[int, ...] = RETRY_DELAYS_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+):
+    for attempt, delay in enumerate((*delays, None), start=1):
+        try:
+            return action()
+        except Exception as error:  # noqa: BLE001 - 只对网络类错误重试，其余原样抛出
+            if delay is None or not is_transient_network_error(error):
+                raise
+            print(
+                f"{description} 第 {attempt} 次失败（{error}），{delay} 秒后重试",
+                file=sys.stderr,
+            )
+            sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def mirror_asset_url(url: str) -> str | None:
+    """GitHub Release 资产地址 → R2 镜像地址（对象键复刻 releases/download/<tag>/<file>）。"""
+    match = re.fullmatch(r"https://github\.com/[^/]+/[^/]+/(releases/download/[^/]+/[^/]+)", url)
+    return f"{R2_MIRROR_BASE}/{match.group(1)}" if match else None
+
+
+def http_get_bytes(url: str) -> bytes:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "HLE-Providers-catalog-verifier"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+
+def fetch_pack_bytes(
+    url: str,
+    _token: str | None = None,
+    http_get: Callable[[str], bytes] = http_get_bytes,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bytes:
+    try:
+        return with_retries(lambda: http_get(url), f"下载 {url}", sleep=sleep)
+    except Exception as error:  # noqa: BLE001
+        mirror = mirror_asset_url(url)
+        if mirror is None or not is_transient_network_error(error):
+            raise
+        print(f"GitHub 下载仍失败（{error}），改从 R2 镜像读取 {mirror}", file=sys.stderr)
+        return http_get(mirror)
+
+
 def fetch_release_assets(repository: str, tag: str, token: str | None) -> set[str] | None:
     encoded_tag = urllib.parse.quote(tag, safe="")
     request = urllib.request.Request(
@@ -65,9 +131,12 @@ def fetch_release_assets(repository: str, tag: str, token: str | None) -> set[st
             **({"Authorization": f"Bearer {token}"} if token else {}),
         },
     )
-    try:
+    def load() -> dict:
         with urllib.request.urlopen(request, timeout=20) as response:
-            release = json.load(response)
+            return json.load(response)
+
+    try:
+        release = with_retries(load, f"查询 Release {tag}")
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
@@ -300,13 +369,7 @@ def verify_packs(
       发行版，不能因为旧 App 用不了就跳过包校验。
     """
     if fetch_bytes is None:
-        def fetch_bytes(url: str, _token: str | None) -> bytes:
-            request = urllib.request.Request(
-                url,
-                headers={"User-Agent": "HLE-Providers-catalog-verifier"},
-            )
-            with urllib.request.urlopen(request, timeout=60) as response:
-                return response.read()
+        fetch_bytes = fetch_pack_bytes
 
     errors: list[str] = []
     for provider in catalog.get("providers", []):

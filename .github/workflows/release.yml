@@ -39,6 +39,20 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # Gradle 本体与依赖（含 Kotlin 编译器，Maven Central 会把它重定向到 GitHub Releases）都经
+      # github.com 下载，GitHub 504 时整次构建失败（2026-11-09 qqmusic-v1.0.33 连续多次实证）。
+      # 命中缓存后不再访问 github.com。发版会改插件的 build.gradle.kts，键随之变化，靠前缀恢复上一份。
+      - name: Restore Gradle cache
+        id: gradle-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.gradle/wrapper/dists
+            ~/.gradle/caches/modules-2
+            !~/.gradle/caches/modules-2/*.lock
+          key: gradle-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties', 'gradle.properties', '**/*.gradle.kts') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
       # runner 镜像已预装 Android SDK（license 预接受，AGP 自动补缺组件）。
       # android-actions/setup-android@v4 因镜像下线废弃的 `tools` 包而在 sdkmanager 阶段
       # 必然失败（2026-09-15 qqmusic-v1.0.14 首次构建实证），故不再使用。
@@ -100,6 +114,16 @@ jobs:
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
           echo "sha256=$pack_sha" >> "$GITHUB_OUTPUT"
+      # actions/cache 自带的保存只在作业成功时执行；失败后重跑正需要已下载的部分，所以单独保存。
+      - name: Save Gradle cache
+        if: always() && steps.gradle-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.gradle/wrapper/dists
+            ~/.gradle/caches/modules-2
+            !~/.gradle/caches/modules-2/*.lock
+          key: ${{ steps.gradle-cache.outputs.cache-primary-key }}
       - name: Publish Release asset
         env:
           GH_TOKEN: ${{ github.token }}
