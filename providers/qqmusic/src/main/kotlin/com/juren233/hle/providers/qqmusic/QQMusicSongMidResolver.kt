@@ -56,6 +56,8 @@ internal object QQMusicSongMidResolver {
          * [verifyAlternative] 逐个核对后再取词。
          */
         val alternatives: List<String> = emptyList(),
+        /** 来自 QQ 自己关联的在线 ID（播放队列快照）并经详情核对，即 QQ 显示歌词所用的版本。 */
+        val appLinked: Boolean = false,
     )
 
     private val resolved = ConcurrentHashMap<String, SongMidResolution>()
@@ -84,11 +86,11 @@ internal object QQMusicSongMidResolver {
         artist: String?,
         durationMs: Long = 0L,
         trustedId: Boolean = false,
-        appLinkedSongId: String? = null,
+        appLinkedSongIds: List<String> = emptyList(),
     ): SongMidResolution {
         if (isNumericSongId(id)) {
-            if (!trustedId && appLinkedSongId != null) {
-                resolveAppLinked(id, appLinkedSongId, title, artist)?.let { return it }
+            if (!trustedId) {
+                resolveAppLinkedCandidates(id, appLinkedSongIds, title, artist)?.let { return it }
             }
             return resolveNumericId(id, title, artist, durationMs, trustedId)
         }
@@ -155,11 +157,23 @@ internal object QQMusicSongMidResolver {
         return resolution
     }
 
+    /** 依次核对候选，返回第一个与会话同一首的；都不符或都查不到时返回 null。 */
+    fun resolveAppLinkedCandidates(
+        sessionId: String,
+        candidates: List<String>,
+        title: String?,
+        artist: String?,
+        detail: (String) -> DetailResult = QQMusicCatalogClient::fetchSongDetail,
+    ): SongMidResolution? = candidates.firstNotNullOfOrNull { linkedId ->
+        resolveAppLinked(sessionId, linkedId, title, artist, detail)
+    }
+
     /**
      * QQ 自己关联的在线 ID（播放队列快照）优先于按歌名匹配：它就是 QQ 播放这首歌时自己显示歌词
      * 所用的版本，按歌名匹配会在同名同歌手的 Remix/无专辑条目里选错（2026-11-09《Hello》
-     * 200672361 vs QQ 关联的 105345627）。快照里也可能是本地库编号（真机出现过 next=36），
-     * 所以同样要经详情核对歌名/歌手；不符或查不到返回 null，由调用方按原路径换算。
+     * 200672361 vs QQ 关联的 105345627）。候选可能是本地库编号（真机出现过 next=36），也可能是
+     * 切歌瞬间滞后快照里的上一首/下一首，所以一律经详情核对歌名/歌手；不符或查不到返回 null，
+     * 由调用方试下一个候选或按原路径换算。
      * 网络异常不记为不符，下次仍会再核对。
      */
     internal fun resolveAppLinked(
@@ -182,12 +196,13 @@ internal object QQMusicSongMidResolver {
             Log.i(TAG, "QQ App 关联 ID 与会话不是同一首，不采用: id=$sessionId, linked=$numericLinked, title=$title")
             return null
         }
-        resolved[key] = verified
+        val linked = verified.copy(appLinked = true)
+        resolved[key] = linked
         Log.i(
             TAG,
             "QQ 采用 App 关联的在线 ID: id=$sessionId -> songId=$numericLinked, name=${verified.songName}",
         )
-        return verified
+        return linked
     }
 
     /** 核对一个按歌名匹配得到的候选；身份对不上或查不到时返回 null，网络异常抛出。 */

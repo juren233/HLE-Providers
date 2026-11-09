@@ -139,6 +139,9 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
         /** 当前上屏歌词所用的在线歌曲 ID；QQ 关联 ID 与它不同时才替换歌词。 */
         private var publishedSongId: String? = null
+
+        /** 已上屏歌词来自 QQ 关联 ID（含其缓存）：按歌名匹配的结果不能覆盖它。 */
+        private var publishedAppLinked = false
         private var loadGeneration = 0L
 
         private fun identityKeyOf(track: QQMusicLyricTrack): String =
@@ -515,7 +518,30 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
         @Synchronized
         fun onQueueSnapshot(snapshot: QQMusicQueueSnapshot?) {
-            applyTrackDecision(trackCoordinator.onQueueSnapshot(snapshot))
+            val decision = trackCoordinator.onQueueSnapshot(snapshot)
+            if (BuildConfig.DEBUG && playerPackage == QQMusicRuntimePlan.MOBILE_PACKAGE && snapshot != null) {
+                logQueueSnapshotMatch(snapshot, decision)
+            }
+            applyTrackDecision(decision)
+        }
+
+        private var lastQueueSnapshotDiagKey: String? = null
+
+        /** Debug：手机版快照与会话逐字段对照，只在内容或判定变化时输出。 */
+        private fun logQueueSnapshotMatch(
+            snapshot: QQMusicQueueSnapshot,
+            decision: QQMusicLyricTrackDecision,
+        ) {
+            val media = trackCoordinator.diagnosticMediaTrack
+            fun QQMusicTrackSnapshot.describe() = "id=$id title=「$title」 artist=「$artist」"
+            val message = "QQ 快照对照: process=${Application.getProcessName()} " +
+                "session=[id=${media?.id} title=「${media?.title}」 artist=「${media?.artist}」] " +
+                "current=[${snapshot.current.describe()}] " +
+                "next=[${snapshot.next?.describe() ?: "none"}] " +
+                "decision=${decision::class.java.simpleName}"
+            if (message == lastQueueSnapshotDiagKey) return
+            lastQueueSnapshotDiagKey = message
+            Log.i(TAG, message)
         }
 
         private fun applyTrackDecision(decision: QQMusicLyricTrackDecision) {
@@ -524,6 +550,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                     activeLoadKey = null
                     publishedLyricIdentity = null
                     publishedSongId = null
+                    publishedAppLinked = false
                     if (BuildConfig.DEBUG && playerPackage == QQMusicRuntimePlan.HD_PACKAGE) {
                         Log.i(
                             TAG,
@@ -550,11 +577,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private fun load(track: QQMusicLyricTrack) {
             val identity = identityKeyOf(track)
             val sameSongShowing = publishedLyricIdentity == identity
-            // 同一首歌已带歌词上屏：只有 QQ 关联 ID 新到且与上屏所用的在线 ID 不同时才重新换算，
+            // 同一首歌已带歌词上屏：只有快照候选 ID 都不是上屏所用的在线 ID 时才尝试升级，
             // 且不先发占位/缓存（避免歌词闪掉），换算或下载失败也保留现有歌词。
-            if (sameSongShowing &&
-                (track.appLinkedSongId == null || track.appLinkedSongId == publishedSongId)
-            ) {
+            val linkedIds = track.appLinkedSongIds.map(QQMusicSongMidResolver::sanitizeNumericSongId)
+            if (sameSongShowing && (linkedIds.isEmpty() || publishedSongId in linkedIds)) {
                 return
             }
             val upgrade = sameSongShowing
@@ -565,12 +591,14 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             if (!upgrade) {
                 publishedLyricIdentity = null
                 publishedSongId = null
+                publishedAppLinked = false
                 val cached = loadCached(track)
                 if (cached != null) {
                     val published = publish(cached.song)
                     if (published && !cached.song.lyrics.isNullOrEmpty()) {
                         publishedLyricIdentity = identity
                         publishedSongId = cached.songId
+                        publishedAppLinked = cached.appLinked
                     }
                 } else {
                     publish(placeholder(track))
@@ -583,14 +611,28 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 // 歌曲次数输出）用于在真机日志里直接定位卡住的阶段。
                 Log.i(TAG, "QQ 歌词任务开始: id=${track.id}, title=${track.title}")
                 val resolution = runCatching {
-                    QQMusicSongMidResolver.resolve(
-                        id = track.id,
-                        title = track.title,
-                        artist = track.artist,
-                        durationMs = track.duration,
-                        trustedId = track.idTrusted,
-                        appLinkedSongId = track.appLinkedSongId,
-                    )
+                    if (upgrade) {
+                        // 升级只认核对通过的快照候选：候选都不符（例如 QQ 已切到下一首、会话
+                        // 元数据还没到）时不能退回按歌名匹配，否则会把已上屏的正确版本换掉
+                        QQMusicSongMidResolver.resolveAppLinkedCandidates(
+                            sessionId = track.id,
+                            candidates = track.appLinkedSongIds,
+                            title = track.title,
+                            artist = track.artist,
+                        ) ?: run {
+                            Log.i(TAG, "QQ 歌词任务结束(快照候选无同曲，保留现有歌词): id=${track.id}")
+                            return@execute
+                        }
+                    } else {
+                        QQMusicSongMidResolver.resolve(
+                            id = track.id,
+                            title = track.title,
+                            artist = track.artist,
+                            durationMs = track.duration,
+                            trustedId = track.idTrusted,
+                            appLinkedSongIds = track.appLinkedSongIds,
+                        )
+                    }
                 }
                     .onFailure { error ->
                         Log.w(TAG, "QQ 歌曲 ID 换算失败: id=${track.id}", error)
@@ -602,6 +644,23 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         return@execute
                     }
                 Log.i(TAG, "QQ 换算完成: id=${track.id}, songId=${resolution.numericSongId}")
+                // 切歌瞬间快照可能还停在上一首，候选都核对不过而退回按歌名匹配；此时若已上屏的是
+                // QQ 关联 ID 核对过的版本（通常来自缓存），不能用按歌名匹配的结果把它覆盖
+                // （2026-11-09 16:41 真机：缓存 105345627 被按歌名匹配的 200672361 覆盖并固定下来）
+                if (!resolution.appLinked) {
+                    val keepLinked = synchronized(this@QQRuntime) {
+                        activeLoadKey == loadKey && publishedAppLinked &&
+                            publishedLyricIdentity == identity
+                    }
+                    if (keepLinked) {
+                        Log.i(
+                            TAG,
+                            "QQ 已上屏 QQ 关联版本，不用按歌名匹配结果覆盖: id=${track.id}, " +
+                                "kept=$publishedSongId, matched=${resolution.numericSongId}",
+                        )
+                        return@execute
+                    }
+                }
                 if (upgrade && resolution.numericSongId == publishedSongId) {
                     Log.i(TAG, "QQ 关联 ID 与已上屏版本一致，不重新下载: id=${track.id}")
                     return@execute
@@ -617,6 +676,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                             name = chosen.songName,
                             singer = chosen.singerName,
                             songId = chosen.numericSongId,
+                            appLinked = chosen.appLinked,
                         )
                         val song = toSong(track, enriched)
                         Log.i(TAG, "QQ 歌词解析完成: id=${track.id}, lines=${song.lyrics?.size ?: 0}")
@@ -646,6 +706,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                                 if (published) {
                                     publishedLyricIdentity = identityKeyOf(track)
                                     publishedSongId = chosen.numericSongId
+                                    publishedAppLinked = chosen.appLinked
                                 } else {
                                     Log.i(TAG, "QQ 发布未成功，保留重试机会: id=${track.id}")
                                 }
@@ -736,7 +797,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             }
         }
 
-        private class CachedLyric(val song: Song, val songId: String?)
+        private class CachedLyric(val song: Song, val songId: String?, val appLinked: Boolean)
 
         private fun cacheFileOf(track: QQMusicLyricTrack): File =
             File(cacheDir, QQMusicLyricCachePolicy.cacheFileName(track.id, track.title, track.artist))
@@ -764,15 +825,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 )
                 return null
             }
-            // QQ 关联的在线 ID 已知且与缓存所用的版本不同：不先显示可能错开的旧版本，
-            // 由本次任务核对后重新下载并覆盖缓存
-            if (track.appLinkedSongId != null && payload.songId != null &&
-                payload.songId != QQMusicSongMidResolver.sanitizeNumericSongId(track.appLinkedSongId)
-            ) {
-                return null
-            }
+            // 不按快照候选跳过缓存：候选可能是滞后快照里的上一首/下一首，无法离线判断哪个属于
+            // 本曲。缓存先上屏，本次任务核对候选后若版本不同会重新下载并覆盖。
             val song = runCatching { toSong(track, payload) }.getOrNull() ?: return null
-            return CachedLyric(song, payload.songId)
+            return CachedLyric(song, payload.songId, payload.appLinked)
         }
 
         private fun writeCache(track: QQMusicLyricTrack, payload: QQPayload) {
@@ -893,6 +949,13 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 playerPackageName = playerPackage,
             ).also { it.register() }
             nextTrackRuntime = this
+            if (BuildConfig.DEBUG) {
+                Log.i(
+                    TAG,
+                    "QQ 队列快照方法: process=${Application.getProcessName()} " +
+                        targets.joinToString { "${it.className}.${it.methodName}():${it.returnTypeName}" },
+                )
+            }
             pollingTask?.cancel(false)
             val generation = resolverGeneration.incrementAndGet()
             pollingTask = scheduler.scheduleWithFixedDelay(
@@ -1050,6 +1113,8 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         val singer: String? = null,
         /** 这份歌词所用的在线歌曲 ID（v2 缓存起记录）。 */
         val songId: String? = null,
+        /** 这份歌词来自 QQ 关联 ID 核对过的版本。 */
+        val appLinked: Boolean = false,
     ) {
         fun toJson() = JSONObject().apply {
             putOpt("lyric", lyric)
@@ -1058,6 +1123,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             putOpt("name", name)
             putOpt("singer", singer)
             putOpt("songId", songId)
+            if (appLinked) put("appLinked", true)
         }
 
         companion object {
@@ -1068,6 +1134,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 name = json.optString("name").takeIf(String::isNotBlank),
                 singer = json.optString("singer").takeIf(String::isNotBlank),
                 songId = json.optString("songId").takeIf(String::isNotBlank),
+                appLinked = json.optBoolean("appLinked", false),
             )
         }
     }

@@ -133,6 +133,8 @@ class QQMusicSongMidResolverTest {
         assertEquals("Broken", resolution.songName)
         assertEquals("林峯", resolution.singerName)
         assertEquals(listOf("4907722", "107770907"), resolution.alternatives)
+        // 按歌名匹配的结果不是 QQ 关联版本，不能覆盖已上屏的关联版本
+        assertFalse(resolution.appLinked)
     }
 
     @Test
@@ -453,12 +455,49 @@ class QQMusicSongMidResolverTest {
     }
 
     @Test
+    fun `app linked candidates skip the lagging previous song and take the current one`() {
+        // 切歌瞬间快照 current 还是上一首《Paris》、next 才是本曲：前者核对不符，取后者
+        val looked = mutableListOf<String>()
+        val resolution = QQMusicSongMidResolver.resolveAppLinkedCandidates(
+            "987030", listOf("379779882", "378883308"), "Lavender Haze (Explicit)", "Taylor Swift",
+            detail = {
+                looked += it
+                when (it) {
+                    "379779882" -> detailOf(it, "Paris", "Taylor Swift")
+                    else -> detailOf(it, "Lavender Haze", "Taylor Swift")
+                }
+            },
+        )!!
+        assertEquals(listOf("379779882", "378883308"), looked)
+        assertEquals("378883308", resolution.numericSongId)
+        // 标记来源：加载逻辑据此保护已上屏的 QQ 关联版本不被按歌名匹配覆盖
+        assertTrue(resolution.appLinked)
+    }
+
+    @Test
+    fun `app linked candidates return null when none is the same song`() {
+        // 升级路径据此保留已上屏歌词，不退回按歌名匹配
+        assertNull(
+            QQMusicSongMidResolver.resolveAppLinkedCandidates(
+                "987031", listOf("378883306", "379779881"), "Hello", "Adele",
+                detail = {
+                    if (it == "378883306") {
+                        detailOf(it, "Midnight Rain", "Taylor Swift")
+                    } else {
+                        detailOf(it, "High Infidelity", "Taylor Swift")
+                    }
+                },
+            ),
+        )
+    }
+
+    @Test
     fun `trusted id passthrough ignores app linked ID`() {
         // HD/MIUI 的快照 ID 已经换算器信任：不因附带关联 ID 多打一次详情请求
         val resolution = QQMusicSongMidResolver.resolve(
             "463324123", "this is what winter feels like", "JVKE",
             trustedId = true,
-            appLinkedSongId = "105345627",
+            appLinkedSongIds = listOf("105345627"),
         )
         assertEquals("463324123", resolution.numericSongId)
         assertNull(resolution.songName)
