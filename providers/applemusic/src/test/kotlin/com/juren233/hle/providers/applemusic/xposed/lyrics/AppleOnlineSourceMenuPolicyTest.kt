@@ -14,6 +14,8 @@ import com.juren233.hle.providers.applemusic.xposed.isMissingLyricsSourceSelecta
 import com.juren233.hle.providers.applemusic.xposed.missingLyricsSourceMenuLabel
 import com.juren233.hle.providers.applemusic.xposed.missingLyricsSourceStatusLabel
 import com.juren233.hle.providers.applemusic.xposed.sourceMenuLabel
+import com.juren233.hle.providers.applemusic.xposed.sourceMenuIconInsets
+import com.juren233.hle.providers.applemusic.xposed.sourceMenuRowHasDivider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.After
@@ -166,5 +168,23 @@ class AppleOnlineSourceMenuPolicyTest {
         assertEquals(false, isMissingLyricsSourceSelectable(found, selected = true))
         assertEquals(false, isMissingLyricsSourceSelectable(missing, selected = false))
         assertEquals(true, isMissingLyricsSourceSelectable(onDemand, selected = false))
+    }
+
+    @Test
+    fun `every row except the last has a divider`() {
+        assertEquals(true, sourceMenuRowHasDivider(0, 5))
+        assertEquals(true, sourceMenuRowHasDivider(3, 5))
+        assertEquals(false, sourceMenuRowHasDivider(4, 5))
+        assertEquals(false, sourceMenuRowHasDivider(0, 1))
+        assertEquals(false, sourceMenuRowHasDivider(0, 0))
+        assertEquals(false, sourceMenuRowHasDivider(-1, 3))
+    }
+
+    @Test
+    fun `icons are centered in the widest icon slot`() {
+        assertEquals(6 to 6, sourceMenuIconInsets(slotWidth = 84, iconWidth = 72))
+        assertEquals(0 to 0, sourceMenuIconInsets(slotWidth = 84, iconWidth = 84))
+        assertEquals(2 to 3, sourceMenuIconInsets(slotWidth = 77, iconWidth = 72))
+        assertEquals(0 to 0, sourceMenuIconInsets(slotWidth = 72, iconWidth = 84))
     }
 }

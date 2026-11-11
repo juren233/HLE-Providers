@@ -381,6 +381,8 @@ internal class AppleOnlineSourceMenuHooks(
             menu.addView(createMenuItem(menu, songId, "translation", translationPresentation))
         }
         normalizeTextItems(menu)
+        applyRowDividers(menu)
+        alignRowIconCenters(menu)
         if (AppleProviderEnvironment.diagnosticsEnabled) {
             ProviderLogger.diagnostic(
                 "Apple Music 三方歌词来源菜单诊断: stage=rendered, songId=$songId, " +
@@ -395,7 +397,11 @@ internal class AppleOnlineSourceMenuHooks(
         }
         updateBounds(popup, menu, anchor, nativeMinimumWidth)
         menu.post {
-            if (popup.isShowing) updateBounds(popup, menu, anchor, nativeMinimumWidth)
+            if (popup.isShowing) {
+                applyRowDividers(menu)
+                alignRowIconCenters(menu)
+                updateBounds(popup, menu, anchor, nativeMinimumWidth)
+            }
         }
     }
 
@@ -412,9 +418,6 @@ internal class AppleOnlineSourceMenuHooks(
         )
         val item = LayoutInflater.from(menu.context).inflate(layoutId, menu, false) as TextView
         item.tag = ONLINE_SOURCE_MENU_ITEM_TAG
-        item.background = menu.getChildAt(0)?.background
-            ?.constantState
-            ?.newDrawable(menu.resources)
         item.text = sourceMenuLabel(presentation.source, contentType, presentation.status)
         val iconId = sequenceOf(
             "ic_nowplaying_repeat",
@@ -452,9 +455,6 @@ internal class AppleOnlineSourceMenuHooks(
         )
         val item = LayoutInflater.from(menu.context).inflate(layoutId, menu, false) as TextView
         item.tag = ONLINE_SOURCE_MENU_ITEM_TAG
-        item.background = menu.getChildAt(0)?.background
-            ?.constantState
-            ?.newDrawable(menu.resources)
         item.text = missingLyricsSourceMenuLabel(source)
         val iconId = runtime.application.resources.getIdentifier(
             "actionsheet_info",

@@ -128,6 +128,17 @@ internal fun currentLyricsMenuSongId(
 ): String? = playbackSongId?.trim()?.takeIf(String::isNotEmpty)
     ?: visibleLyricsSongId?.trim()?.takeIf(String::isNotEmpty)
 
+/** 原生规则：除最后一行外每行底部有分隔线。 */
+internal fun sourceMenuRowHasDivider(index: Int, rowCount: Int): Boolean =
+    index in 0 until rowCount - 1
+
+/** 图标在宽 [slotWidth] 的槽位里水平居中时左右两侧的留白；图标不窄于槽位时不留白。 */
+internal fun sourceMenuIconInsets(slotWidth: Int, iconWidth: Int): Pair<Int, Int> {
+    val spare = (slotWidth - iconWidth).coerceAtLeast(0)
+    val left = spare / 2
+    return left to spare - left
+}
+
 internal fun sourceMenuWidth(vararg candidates: Int): Int =
     candidates.asSequence().filter { it > 0 }.maxOrNull() ?: 1
 

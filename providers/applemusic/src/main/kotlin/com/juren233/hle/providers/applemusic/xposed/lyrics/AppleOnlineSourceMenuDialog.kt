@@ -46,6 +46,8 @@ import com.juren233.hle.providers.applemusic.xposed.missingLyricsSourceMenuLabel
 import com.juren233.hle.providers.applemusic.xposed.missingLyricsSourceStatusLabel
 import com.juren233.hle.providers.applemusic.xposed.sourceMenuLabel
 import com.juren233.hle.providers.applemusic.xposed.sourceMenuPresentation
+import com.juren233.hle.providers.applemusic.xposed.sourceMenuIconInsets
+import com.juren233.hle.providers.applemusic.xposed.sourceMenuRowHasDivider
 import com.juren233.hle.providers.applemusic.xposed.sourceMenuWidth
 import java.lang.ref.WeakReference
 import kotlin.math.roundToInt
@@ -514,12 +516,68 @@ internal fun AppleOnlineSourceMenuHooks.normalizeTextItems(menu: LinearLayout) {
         item.ellipsize = null
         item.maxWidth = Int.MAX_VALUE
         item.setHorizontallyScrolling(true)
+        // 与原生条目一致：撑满菜单宽度，end 方向图标才会右对齐，背景分隔线才会等长。
         item.layoutParams?.let { layoutParams ->
-            if (layoutParams.width != ViewGroup.LayoutParams.WRAP_CONTENT) {
-                layoutParams.width = ViewGroup.LayoutParams.WRAP_CONTENT
+            if (layoutParams.width != ViewGroup.LayoutParams.MATCH_PARENT) {
+                layoutParams.width = ViewGroup.LayoutParams.MATCH_PARENT
                 item.layoutParams = layoutParams
             }
         }
+    }
+}
+
+/**
+ * 分隔线的唯一来源：除最后一行外每行设置分隔线背景，最后一行背景置空。
+ * 分隔线 drawable 从菜单里第一个带背景的行克隆（原生第一项带分隔线），
+ * 没有任何行带背景时用 Apple Music 的 bg_menu_item_lyrics_translations 资源。
+ */
+internal fun AppleOnlineSourceMenuHooks.applyRowDividers(menu: LinearLayout) {
+    val rows = (0 until menu.childCount).mapNotNull { menu.getChildAt(it) as? TextView }
+    if (rows.isEmpty()) return
+    val resources = menu.resources
+    val source = rows.firstNotNullOfOrNull { it.background?.constantState }
+        ?: resources.getIdentifier("bg_menu_item_lyrics_translations", "drawable", APPLE_MUSIC_PACKAGE)
+            .takeIf { it != 0 }
+            ?.let { id ->
+                runCatching { menu.context.getDrawable(id)?.constantState }.getOrNull()
+            }
+    if (source == null) {
+        ProviderLogger.diagnostic("Apple Music 三方歌词来源菜单诊断: stage=row_divider_unavailable, rows=${rows.size}")
+        return
+    }
+    rows.forEachIndexed { index, row ->
+        row.background = if (sourceMenuRowHasDivider(index, rows.size)) {
+            source.newDrawable(resources)
+        } else {
+            null
+        }
+    }
+}
+
+/** 把图标放进统一宽度的槽位并水平居中；槽位宽度取菜单里最宽的图标。 */
+private class CenteredMenuIconDrawable(
+    val icon: android.graphics.drawable.Drawable,
+    left: Int,
+    right: Int,
+) : android.graphics.drawable.InsetDrawable(icon, left, 0, right, 0)
+
+/**
+ * 各行 end 方向图标宽度不一（切换源图标 28dp，其余 24dp），只靠右对齐时图标中心不在一条竖线上。
+ * 这里按最宽图标统一槽位宽度，让所有图标中心对齐。
+ */
+internal fun AppleOnlineSourceMenuHooks.alignRowIconCenters(menu: LinearLayout) {
+    val rows = (0 until menu.childCount).mapNotNull { menu.getChildAt(it) as? TextView }
+    val icons = rows.map { row ->
+        val current = row.compoundDrawablesRelative[2]
+        row to ((current as? CenteredMenuIconDrawable)?.icon ?: current)
+    }
+    val slotWidth = icons.maxOfOrNull { (_, icon) -> icon?.intrinsicWidth ?: 0 } ?: return
+    if (slotWidth <= 0) return
+    icons.forEach { (row, icon) ->
+        if (icon == null) return@forEach
+        val (left, right) = sourceMenuIconInsets(slotWidth, icon.intrinsicWidth)
+        val target = if (left == 0 && right == 0) icon else CenteredMenuIconDrawable(icon, left, right)
+        row.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, target, null)
     }
 }
 
