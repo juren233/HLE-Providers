@@ -113,6 +113,8 @@ internal class AppleLyricsSupplementHooks(
     internal val applyConfiguredContentUiLanguageCallback: () -> Unit,
     internal val recordLyricsRequestSource: (String, String) -> Unit,
     internal val currentPlaybackQueueMediaId: () -> String?,
+    /** 歌词页确认可见歌曲后取播放歌曲 ID（回调在主线程）；无活动播放器时先发布与之一致的队列项再回调。 */
+    internal val withPlaybackSongIdForVisibleLyrics: (String?, (String?) -> Unit) -> Unit,
     internal val registeredPlaybackItems: (String) -> List<Any>,
     internal val registeredPlaybackItemId: (Any) -> String?,
     private val epoxyDataBindingFromHolderCallback: (Any?) -> Any?,
@@ -406,7 +408,21 @@ internal class AppleLyricsSupplementHooks(
         if (contentType == "translation" && missingLyricsSupplement().hasTranslation(songId)) {
             return true
         }
-        if (!isNativeOnlineTranslationEnabled()) return false
+        val presented = if (contentType == "pronunciation") {
+            presentsOnlinePronunciation(songId)
+        } else {
+            presentsOnlineTranslation(songId)
+        }
+        if (!presented) return false
+        // 手动选的来源正在替换官方内容：它就是当前来源，不必再逐行找官方缺失的行。
+        if (contentType == "translation" && overridesNativeTranslation(songId)) return true
+        if (
+            contentType == "pronunciation" &&
+            overridesNativePronunciation(songId) &&
+            !shouldHideMandarinPronunciation(songId = songId)
+        ) {
+            return true
+        }
         val songNative = currentAppleLyricsNativeSong(songId) ?: return false
         val lines = currentAppleLyricsNativeLines(songNative)
         if (lines.isEmpty()) return false

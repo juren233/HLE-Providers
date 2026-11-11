@@ -83,12 +83,17 @@ internal enum class AppleLyricsSourcePresentationAction {
     REFRESH_ONLY,
 }
 
+/**
+ * [manualOverNative]：用户手动选了一个三方来源来替换 Apple 原生歌词。它与目录源走同一条
+ * 「补充模型替换原生模型」的呈现路径，[hasTtmlCatalogPointer] 此时指该来源的补充模型指针。
+ */
 internal fun appleLyricsSourcePresentationAction(
     source: String,
     hasTtmlCatalogPointer: Boolean,
     hasAppleNativePointer: Boolean,
+    manualOverNative: Boolean = false,
 ): AppleLyricsSourcePresentationAction = when {
-    Source.isTtmlCatalogName(source) -> if (hasTtmlCatalogPointer) {
+    Source.isTtmlCatalogName(source) || manualOverNative -> if (hasTtmlCatalogPointer) {
         AppleLyricsSourcePresentationAction.PRESENT_TTML_CATALOG
     } else {
         AppleLyricsSourcePresentationAction.BUILD_TTML_CATALOG

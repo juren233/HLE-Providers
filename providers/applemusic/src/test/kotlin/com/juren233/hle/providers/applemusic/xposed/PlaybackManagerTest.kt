@@ -47,6 +47,32 @@ class PlaybackManagerTest {
     }
 
     @Test
+    fun visibleLyricsWithoutAnyPlaybackIdentityAreNotPublished() {
+        // 冷启动恢复到暂停歌曲：没有播放歌曲 ID 时歌词页可见歌曲不能直接发布；
+        // 由 shouldAdoptIdleQueueItem 先把与之一致的队列项发布为当前歌曲后，才进入上面的采用分支。
+        assertEquals(
+            false,
+            PlaybackManager.shouldPublishBuiltLyrics(
+                songId = "1455151646",
+                currentSongId = null,
+                visibleSongId = "1455151646",
+                playbackSongId = null,
+                source = "apple",
+            )
+        )
+        assertEquals(
+            true,
+            PlaybackManager.shouldPublishBuiltLyrics(
+                songId = "1455151646",
+                currentSongId = "1455151646",
+                visibleSongId = "1455151646",
+                playbackSongId = "1455151646",
+                source = "apple",
+            )
+        )
+    }
+
+    @Test
     fun staleVisibleAppleLyricsCannotReplaceCurrentQueueSong() {
         assertEquals(
             false,

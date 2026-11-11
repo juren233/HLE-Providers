@@ -258,6 +258,8 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
             },
             currentPlaybackQueueMediaId =
                 playbackMetadataCoordinator::currentPlaybackQueueMediaId,
+            withPlaybackSongIdForVisibleLyrics =
+                playbackMetadataCoordinator::withPlaybackSongIdForVisibleLyrics,
             registeredPlaybackItems = inAppMetadataRegistry::livePlaybackItems,
             registeredPlaybackItemId = inAppMetadataRegistry::playbackItemId,
             epoxyDataBindingFromHolderCallback = { holder ->
@@ -418,6 +420,12 @@ internal class AppleOrchestratorLyricsPlaybackAssembly(
                 com.juren233.hyperlyricsenhanced.online.OnlineTranslationSourcePreferences
                     .orderedSources(catalogLanguage.contentUiLanguagePrefs)
                     .map { it.name }
+            },
+            alwaysShowSourceSwitch = lyricsHooks::isAlwaysShowSourceSwitchEnabled,
+            hasNativeLyrics = { songId ->
+                !songId.isNullOrBlank() &&
+                    this::missingLyricsHooks.isInitialized &&
+                    missingLyricsHooks.hasKnownNativeLyricsFor(songId)
             },
             availableLyricsSources = { songId ->
                 if (this::missingLyricsHooks.isInitialized) {

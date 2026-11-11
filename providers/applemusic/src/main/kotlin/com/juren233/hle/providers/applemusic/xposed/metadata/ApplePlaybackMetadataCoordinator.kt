@@ -6,6 +6,9 @@
 
 package com.juren233.hle.providers.applemusic.xposed
 
+import android.os.Handler
+import android.os.Looper
+
 
 internal interface ApplePlaybackMetadataCoordinatorHost {
     fun activePlayer(): Any?
@@ -85,6 +88,7 @@ internal class ApplePlaybackMetadataCoordinator(
     }
     private var currentRefresh: PlaybackMetadataRefresh? = null
     private var currentMediaId: String? = null
+    private val idleQueueItem = AppleIdleQueueItem()
 
     fun currentMetadataId(): String? = currentMediaId
 
@@ -99,6 +103,9 @@ internal class ApplePlaybackMetadataCoordinator(
 
     fun refreshCurrentQueueItemIfActive(mediaPlayer: Any?, source: String) {
         if (!isActivePlaybackCallback(mediaPlayer, host.activePlayer())) {
+            // 还没有任何播放器播放过时（冷启动恢复到暂停歌曲），队列项不能当作当前歌曲发布，
+            // 只记住它；歌词页确认可见歌曲与它一致后才发布。
+            rememberIdleQueueItem(mediaPlayer, source)
             ProviderLogger.debug(
                 "忽略非活动播放器的歌曲元数据：source=$source, " +
                     "callback=${mediaPlayer?.let(System::identityHashCode)}, " +
@@ -173,6 +180,7 @@ internal class ApplePlaybackMetadataCoordinator(
             if (publishAsCurrent) {
                 val previousCurrentId = currentMediaId
                 currentMediaId = mediaId
+                idleQueueItem.clear()
                 host.setMetadataPlaybackMediaId(mediaId)
                 host.onCurrentPlaybackItem(
                     mediaId = mediaId,
@@ -282,6 +290,64 @@ internal class ApplePlaybackMetadataCoordinator(
             publishedMediaId = publishedMediaId,
             observedQueueMediaId = observedQueueMediaId,
         )
+    }
+
+    /**
+     * 歌词页刚确认可见歌曲后，取播放歌曲 ID 并交给 [action]（在主线程执行）。没有活动播放器、而可见歌曲
+     * 正是播放器回调所观察到的当前队列项时，先按正常的队列项路径发布它（带标题、歌手等元数据），
+     * 发布完成后才调用 [action]，所以 [currentPlaybackQueueMediaId] 此时已返回该 ID。
+     * 发布在记录队列项时所在线程的 Looper 上执行，与正常切歌路径是同一线程；活动播放器仍只在真正播放时
+     * 确立，这里不改变它，也不发布播放状态。
+     */
+    fun withPlaybackSongIdForVisibleLyrics(visibleSongId: String?, action: (String?) -> Unit) {
+        if (!shouldAdoptIdleQueueItem(
+                activePlayerPresent = host.activePlayer() != null,
+                idleMediaId = idleQueueItem.mediaId(),
+                visibleSongId = visibleSongId,
+                publishedMediaId = currentMediaId,
+            )
+        ) {
+            action(currentPlaybackQueueMediaId())
+            return
+        }
+        val taken = idleQueueItem.take() ?: run {
+            action(currentPlaybackQueueMediaId())
+            return
+        }
+        ProviderLogger.info(
+            "歌词页可见歌曲与无活动播放器时的当前队列项一致，按当前歌曲发布：id=$visibleSongId"
+        )
+        val publish = {
+            handleQueueItem(taken.queueItem, "visible_lyrics_idle_queue_item")
+        }
+        val looper = taken.looper
+        if (looper == null || looper == Looper.myLooper()) {
+            publish()
+            action(currentPlaybackQueueMediaId())
+            return
+        }
+        // 发布完成后再回到主线程继续，保证 onLyricsBuilt 看到的播放歌曲 ID 已就绪。
+        val posted = Handler(looper).post {
+            publish()
+            Handler(Looper.getMainLooper()).post { action(currentPlaybackQueueMediaId()) }
+        }
+        if (!posted) {
+            // 该线程已退出：在当前线程发布，仍保持先发布后继续的顺序。
+            publish()
+            action(currentPlaybackQueueMediaId())
+        }
+    }
+
+    private fun rememberIdleQueueItem(mediaPlayer: Any?, source: String) {
+        if (mediaPlayer == null || host.activePlayer() != null) return
+        runCatching {
+            val queueItem = currentQueueItem(mediaPlayer) ?: return@runCatching
+            val mediaId = queueItemMediaId(queueItem) ?: return@runCatching
+            idleQueueItem.remember(mediaId, queueItem, Looper.myLooper())
+            ProviderLogger.debug("已记录无活动播放器时的当前队列项：source=$source, id=$mediaId")
+        }.onFailure {
+            ProviderLogger.error("记录无活动播放器时的当前队列项失败：source=$source", it)
+        }
     }
 
     private fun resolveCatalogMetadata(

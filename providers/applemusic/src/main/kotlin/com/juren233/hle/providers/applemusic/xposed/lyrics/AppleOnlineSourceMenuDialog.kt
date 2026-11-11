@@ -54,18 +54,59 @@ internal fun AppleOnlineSourceMenuHooks.lyricsSourceStatus(
     songId: String,
     source: String,
 ): AppleMissingLyricsSourceStatus {
+    val alwaysShow = alwaysShowSourceSwitch()
     if (source == APPLE_NATIVE_SOURCE) {
         return AppleMissingLyricsSourceStatus(
             source = source,
             searched = true,
-            found = true,
+            // 常驻弹窗对无原生歌词的歌曲也列出这一行，此时它没有内容可切换。
+            found = !alwaysShow || hasNativeLyrics(songId),
         )
     }
-    return missingLyricsSourceInfo(songId)
+    val fetched = missingLyricsSourceInfo(songId)
         ?.statuses
         ?.firstOrNull { it.source == source }
-        ?: AppleMissingLyricsSourceStatus(source, searched = false, found = false)
+    if (fetched?.searched == true || !alwaysShow) {
+        return fetched ?: AppleMissingLyricsSourceStatus(source, searched = false, found = false)
+    }
+    val hinted = searchHintedLyricsStatus(songId, source)
+    return when {
+        hinted == null -> fetched ?: AppleMissingLyricsSourceStatus(source, searched = false, found = false)
+        // 翻译检索没命中不代表取词一定失败（两者的时长、专辑参数不同）：保持可点。
+        !hinted.found -> hinted.copy(searched = false)
+        else -> hinted
+    }
 }
+
+/**
+ * 原生有歌词的歌曲没有补充载荷，各来源有没有歌词只能借翻译检索的结果得知。
+ * 这只是提示：手动切换时核心会用歌词检索自己的参数再取一次。
+ */
+private fun AppleOnlineSourceMenuHooks.searchHintedLyricsStatus(
+    songId: String,
+    source: String,
+): AppleMissingLyricsSourceStatus? =
+    nativeTranslationStore.lyricsSourceStatuses(songId).firstOrNull { it.source == source && it.searched }
+
+internal fun AppleOnlineSourceMenuHooks.lyricsSourceRowLabel(
+    songId: String,
+    source: String,
+    status: AppleMissingLyricsSourceStatus,
+): String {
+    val retryHint = !status.searched && source != APPLE_NATIVE_SOURCE &&
+        alwaysShowSourceSwitch() &&
+        searchHintedLyricsStatus(songId, source)?.found == false
+    return if (retryHint) {
+        AppleMenuText.pick("上次检索未找到歌词 · 点击重试", "No lyrics found last time · Tap to retry")
+    } else {
+        missingLyricsSourceStatusLabel(status)
+    }
+}
+
+/** 菜单与弹窗里显示的当前来源：常驻模式下没有三方来源在用时，翻译与发音就是 Apple Music 原生。 */
+internal fun AppleOnlineSourceMenuHooks.displayedSource(songId: String?, contentType: String): String? =
+    currentSource(songId, contentType)
+        ?: APPLE_NATIVE_SOURCE.takeIf { contentType != "lyrics" && alwaysShowSourceSwitch() }
 
 internal fun AppleOnlineSourceMenuHooks.refreshActiveLyricsSourceDialog(songId: String) {
     val active = activeLyricsSourceDialog ?: return
@@ -76,7 +117,7 @@ internal fun AppleOnlineSourceMenuHooks.refreshActiveLyricsSourceDialog(songId: 
         return
     }
     val isLyricsSourceDialog = active.contentType == "lyrics"
-    val selected = currentSource(songId, active.contentType)
+    val selected = displayedSource(songId, active.contentType)
     val pending = pendingSwitches[active.contentType]?.takeIf { it.songId == songId }
     val failed = failedSwitches[active.contentType]?.takeIf { it.songId == songId }
     active.rows.forEach { (source, row) ->
@@ -115,7 +156,7 @@ internal fun AppleOnlineSourceMenuHooks.refreshActiveLyricsSourceDialog(songId: 
         row.subtitle.text = contentRow?.subtitle ?: when {
             isPending -> AppleMenuText.pick("获取中…", "Fetching…")
             isFailed -> AppleMenuText.pick("切换失败", "Switch failed")
-            else -> missingLyricsSourceStatusLabel(status!!)
+            else -> lyricsSourceRowLabel(songId, source, status!!)
         }
         row.subtitle.setTextColor(active.onSurfaceVariantColor)
         row.indicator.text = when {
@@ -147,6 +188,16 @@ internal fun AppleOnlineSourceMenuHooks.contentSourceRow(
     isFailedSwitch: Boolean,
     anyPending: Boolean,
 ): ContentSourceRow {
+    if (source == APPLE_NATIVE_SOURCE) {
+        return nativeContentSourceRow(
+            songId = songId,
+            contentType = contentType,
+            isSelected = isSelected,
+            isPending = isPending,
+            isFailedSwitch = isFailedSwitch,
+            anyPending = anyPending,
+        )
+    }
     val percentage = contentMatchPercentage(songId, contentType, source)
     val state = nativeTranslationStore.sourceContentState(songId, source)
         ?: missingLyricsSourceContentState(songId, source)
@@ -168,6 +219,44 @@ internal fun AppleOnlineSourceMenuHooks.contentSourceRow(
     return ContentSourceRow(
         selectable = !anyPending && !isSelected && kind != OnlineSourceRowKind.NO_CONTENT,
         dimmed = !isPending && kind == OnlineSourceRowKind.NO_CONTENT,
+        subtitle = subtitle,
+    )
+}
+
+/**
+ * 「Apple Music 原生」一行：选它就是不用三方来源。原生没有该内容时仍可选（用来关掉三方内容），
+ * 只在副标题里说明。
+ */
+private fun AppleOnlineSourceMenuHooks.nativeContentSourceRow(
+    songId: String,
+    contentType: String,
+    isSelected: Boolean,
+    isPending: Boolean,
+    isFailedSwitch: Boolean,
+    anyPending: Boolean,
+): ContentSourceRow {
+    val pronunciation = contentType == "pronunciation"
+    val state = nativeTranslationStore.sourceContentState(songId, APPLE_NATIVE_SOURCE)
+        ?: missingLyricsSourceContentState(songId, APPLE_NATIVE_SOURCE)
+    val hasContent = state?.let { if (pronunciation) it.hasPronunciation else it.hasTranslation }
+    val noContent = if (pronunciation) {
+        AppleMenuText.pick("暂无发音", "No pronunciation")
+    } else {
+        AppleMenuText.pick("暂无翻译", "No translation")
+    }
+    val inUse = AppleMenuText.pick("当前使用", "In use")
+    val subtitle = when {
+        isPending -> AppleMenuText.pick("切换中…", "Switching…")
+        isFailedSwitch -> AppleMenuText.pick("切换失败", "Switch failed")
+        isSelected && hasContent == false -> "$inUse · $noContent"
+        isSelected -> inUse
+        hasContent == false -> noContent
+        pronunciation -> AppleMenuText.pick("Apple Music 自带发音", "Apple Music's own pronunciation")
+        else -> AppleMenuText.pick("Apple Music 自带翻译", "Apple Music's own translation")
+    }
+    return ContentSourceRow(
+        selectable = !anyPending && !isSelected,
+        dimmed = false,
         subtitle = subtitle,
     )
 }
@@ -274,7 +363,7 @@ internal fun AppleOnlineSourceMenuHooks.requestOnlineSourceSwitch(
 }
 
 internal fun AppleOnlineSourceMenuHooks.sourceMenuSourceName(source: String): String = when (source) {
-    APPLE_NATIVE_SOURCE -> AppleMenuText.pick("Apple Music 原生歌词", "Apple Music native lyrics")
+    APPLE_NATIVE_SOURCE -> AppleMenuText.pick("Apple Music 原生", "Apple Music Native")
     "LB" -> "LunaBeat"
     "AMLL" -> "AMLL"
     "NE" -> AppleMenuText.pick("网易云音乐", "NetEase Cloud Music")

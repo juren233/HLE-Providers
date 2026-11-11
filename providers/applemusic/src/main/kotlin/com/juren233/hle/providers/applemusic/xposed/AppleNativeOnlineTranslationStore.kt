@@ -1,5 +1,7 @@
 package com.juren233.hle.providers.applemusic.xposed
 
+import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceMetadata
+import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceStatus
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 import com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.OnlineTranslationContentPolicy
@@ -41,6 +43,11 @@ internal class AppleNativeOnlineTranslationStore {
         val translationMatchStats: Map<String, OnlineTranslationMatchStat>,
         val pronunciationMatchStats: Map<String, OnlineTranslationMatchStat>,
         val sourceStates: Map<String, OnlineSourceContentState>,
+        /** The user's hand-picked source replaces Apple's own content instead of filling its gaps. */
+        val translationOverridesNative: Boolean,
+        val pronunciationOverridesNative: Boolean,
+        /** Lyric search outcome per source, for the lyrics source dialog of a track with Apple lyrics. */
+        val lyricsSourceStatuses: List<AppleMissingLyricsSourceStatus>,
     )
 
     @Volatile
@@ -56,18 +63,27 @@ internal class AppleNativeOnlineTranslationStore {
         val update: AppleLyricsPresentationUpdate,
     )
 
-    fun update(song: Song): Boolean = receive(song).updated
+    fun update(song: Song, acceptContentless: Boolean = false): Boolean =
+        receive(song, acceptContentless).updated
 
     /**
      * Comparison, mutation and revision capture share the store monitor.
      * Source-only changes advance revision for source menus, while unchanged line content
      * does not request a full-page presentation (including RACE_FIRST/RACE_FINAL receipts).
+     *
+     * [acceptContentless] is set while the always-visible source dialogs are enabled: a payload
+     * without any translation or pronunciation then still carries the per-source states the
+     * dialogs list, and replaces content the user switched back to Apple Music's own.
      */
     @Synchronized
-    fun receive(song: Song): Receipt {
-        val next = buildOverlay(song)
-        val displayChanged = next != null &&
-            (overlay == null || overlay?.exactContent != next.exactContent)
+    fun receive(song: Song, acceptContentless: Boolean = false): Receipt {
+        val next = buildOverlay(song, acceptContentless)
+        val previous = overlay
+        val displayChanged = next != null && (
+            previous?.exactContent.orEmpty() != next.exactContent ||
+                (previous?.translationOverridesNative == true) != next.translationOverridesNative ||
+                (previous?.pronunciationOverridesNative == true) != next.pronunciationOverridesNative
+            )
         val updated = next != null && overlay != next
         if (updated) {
             overlay = next
@@ -80,7 +96,7 @@ internal class AppleNativeOnlineTranslationStore {
         )
     }
 
-    private fun buildOverlay(song: Song): Overlay? {
+    private fun buildOverlay(song: Song, acceptContentless: Boolean): Overlay? {
         val songId = song.id?.takeIf(String::isNotBlank) ?: return null
         val entries = song.lyrics.orEmpty().mapNotNull { line ->
             val content = Content(
@@ -93,7 +109,7 @@ internal class AppleNativeOnlineTranslationStore {
             val timing = TimingKey(line.begin, line.end)
             LineKey(timing, normalizeText(line.text)) to content
         }
-        if (entries.isEmpty()) return null
+        if (entries.isEmpty() && !acceptContentless) return null
         return Overlay(
             songId = songId,
             exactContent = entries.toMap(),
@@ -116,6 +132,17 @@ internal class AppleNativeOnlineTranslationStore {
             sourceStates = OnlineSourceContentStatesCodec.decode(
                 song.metadata?.getString(LyricMetadataKeys.ONLINE_SOURCE_CONTENT_STATES)
             ),
+            translationOverridesNative = song.metadata
+                ?.getString(LyricMetadataKeys.ONLINE_TRANSLATION_OVERRIDES_NATIVE)
+                .toBoolean(),
+            pronunciationOverridesNative = song.metadata
+                ?.getString(LyricMetadataKeys.ONLINE_PRONUNCIATION_OVERRIDES_NATIVE)
+                .toBoolean(),
+            lyricsSourceStatuses = AppleMissingLyricsSourceMetadata.decode(
+                selectedSource = null,
+                encodedStatuses = song.metadata
+                    ?.getString(LyricMetadataKeys.ONLINE_LYRICS_SOURCE_STATUSES),
+            )?.statuses.orEmpty(),
         )
     }
 
@@ -179,6 +206,15 @@ internal class AppleNativeOnlineTranslationStore {
 
     fun pronunciationSource(songId: String?): String? =
         overlay?.takeIf { it.songId == songId && it.hasPronunciation }?.pronunciationSource
+
+    fun translationOverridesNative(songId: String?): Boolean =
+        overlay?.let { it.songId == songId && it.translationOverridesNative } == true
+
+    fun pronunciationOverridesNative(songId: String?): Boolean =
+        overlay?.let { it.songId == songId && it.pronunciationOverridesNative } == true
+
+    fun lyricsSourceStatuses(songId: String?): List<AppleMissingLyricsSourceStatus> =
+        overlay?.takeIf { it.songId == songId }?.lyricsSourceStatuses.orEmpty()
 
     fun translation(
         songId: String?,

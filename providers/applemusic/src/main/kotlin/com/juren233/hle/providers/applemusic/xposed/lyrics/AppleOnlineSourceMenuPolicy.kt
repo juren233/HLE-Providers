@@ -105,6 +105,7 @@ internal fun missingLyricsSourceMenuLabel(source: String?): String =
  */
 internal fun missingLyricsSourceStatusLabel(status: AppleMissingLyricsSourceStatus): String =
     when {
+        status.source == "APPLE" && !status.found -> AppleMenuText.pick("暂无歌词", "No lyrics")
         status.source == "APPLE" -> AppleMenuText.pick("Apple Music 原生歌词", "Apple Music native lyrics")
         status.searched && status.found ->
             "${if (status.wordTimed) AppleMenuText.pick("逐字歌词", "Word-synced") else AppleMenuText.pick("逐行歌词", "Line-synced")} · " +

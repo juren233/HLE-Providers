@@ -234,7 +234,7 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
                     method = name,
                     songId = songId,
                     original = original == true,
-                    nativeStore = isNativeOnlineTranslationEnabled() &&
+                    nativeStore = presentsOnlineTranslation(songId) &&
                         nativeOnlineTranslationStore.hasTranslation(songId),
                     supplement = missingLyricsSupplement().hasTranslation(songId),
                     ttmlCatalog = missingLyricsSupplement().hasTtmlCatalogSource(songId),
@@ -276,7 +276,7 @@ internal fun AppleLyricsSupplementHooks.ensureAppleNativeOnlineTranslationHooks(
             ) {
                 return@installResultOverrideHook false
             }
-            val hasOnlineRomanization = isNativeOnlineTranslationEnabled() &&
+            val hasOnlineRomanization = presentsOnlinePronunciation(songId) &&
                 nativeOnlineTranslationStore.hasPronunciation(songId)
             val resolved = hasOnlineRomanization ||
                 (original == true && hasValidOfficialRomanization(chain.thisObject))
@@ -416,8 +416,8 @@ internal fun AppleLyricsSupplementHooks.thirdPartyPronunciationFallbackLanguage(
             pronunciationLanguages = listOfNotNull(systemLanguage),
         )
     ) return null
-    if (!isNativeOnlineTranslationEnabled()) return null
     val songId = currentAppleLyricsSongId
+    if (!presentsOnlinePronunciation(songId)) return null
     if (!nativeOnlineTranslationStore.hasPronunciation(songId)) return null
     return systemLanguage
         ?.takeIf(RomanizationPolicy::isLatinLanguageTag)

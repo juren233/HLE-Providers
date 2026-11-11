@@ -320,16 +320,20 @@ internal fun AppleLyricsSupplementHooks.receiveNativeOnlineTranslation(compresse
                     songId = song.id,
                     details = "lyrics=${song.lyrics.orEmpty().size}, " +
                         "romanizedLines=$romanizedLineCount, " +
-                        "featureEnabled=${isNativeOnlineTranslationEnabled()}",
+                        "featureEnabled=${isNativeOnlineTranslationEnabled()}, " +
+                        "sourceSwitch=${isAlwaysShowSourceSwitchEnabled()}",
                 )
-                if (!isNativeOnlineTranslationEnabled()) return@post
+                if (!acceptsOnlineContent()) return@post
                 val storeStartedAtNanos = SystemClock.elapsedRealtimeNanos()
                 AppleSourceSwitchPerformanceDiagnostics.stageForSong(
                     songId = song.id,
                     stage = "translation_store_update_started",
                     details = "thread=${Thread.currentThread().name}"
                 )
-                val receipt = nativeOnlineTranslationStore.receive(song)
+                val receipt = nativeOnlineTranslationStore.receive(
+                    song = song,
+                    acceptContentless = isAlwaysShowSourceSwitchEnabled(),
+                )
                 val displayContentChanged = receipt.displayContentChanged
                 val updated = receipt.updated
                 AppleSourceSwitchPerformanceDiagnostics.stageForSong(

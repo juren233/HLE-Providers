@@ -47,12 +47,17 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_LINE_TEXT_METHOD)
             as? String
     }
-    return nativeOnlineTranslationStore.translation(
-        songId = currentAppleLyricsSongId,
-        begin = begin,
-        end = end,
-        text = text,
-    ) ?: missingLyricsSupplement().translationForLine(
+    val storeTranslation = if (presentsOnlineTranslation(currentAppleLyricsSongId)) {
+        nativeOnlineTranslationStore.translation(
+            songId = currentAppleLyricsSongId,
+            begin = begin,
+            end = end,
+            text = text,
+        )
+    } else {
+        null
+    }
+    return storeTranslation ?: missingLyricsSupplement().translationForLine(
         songId = currentAppleLyricsSongId,
         begin = begin,
         end = end,
@@ -61,7 +66,7 @@ internal fun AppleLyricsSupplementHooks.onlineTranslationForNativeLine(line: Any
 }
 
 internal fun AppleLyricsSupplementHooks.hasAnyOnlineTranslation(songId: String?): Boolean =
-    (isNativeOnlineTranslationEnabled() && nativeOnlineTranslationStore.hasTranslation(songId)) ||
+    (presentsOnlineTranslation(songId) && nativeOnlineTranslationStore.hasTranslation(songId)) ||
         missingLyricsSupplement().hasTranslation(songId)
 // 注意：这里刻意不计入 hasTtmlCatalogSource。LB 来源的歌曲靠
 // ensureMissingLyricsTranslationButtonVisible（hasSupplementContent）强制保留
@@ -69,7 +74,7 @@ internal fun AppleLyricsSupplementHooks.hasAnyOnlineTranslation(songId: String?)
 // 翻译可用性，Apple 会在无翻译的 LB 歌曲菜单里渲染无效的「隐藏翻译」项。
 
 internal fun AppleLyricsSupplementHooks.onlinePronunciationForNativeLine(line: Any?): String? {
-    if (line == null || !isNativeOnlineTranslationEnabled()) return null
+    if (line == null || !presentsOnlinePronunciation(currentAppleLyricsSongId)) return null
     if (shouldHideMandarinPronunciation()) return null
     val begin = (
         lyricsNativeCall(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD) as? Number

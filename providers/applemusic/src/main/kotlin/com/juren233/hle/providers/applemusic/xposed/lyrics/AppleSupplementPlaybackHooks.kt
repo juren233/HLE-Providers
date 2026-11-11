@@ -264,13 +264,15 @@ internal fun AppleLyricsSupplementHooks.hookLyricBuildMethod() {
                 }
             postWhenMainIdle(mainHandler, LYRICS_PARSE_IDLE_MAX_DELAY_MS) { waitedMs, viaIdle ->
                 logLyricsParseDeferred("build", resolvedSongId, waitedMs, viaIdle)
-                PlaybackManager.onLyricsBuilt(
-                    nativeSongObj = songNative,
-                    source = contentSource,
-                    visibleSongId = visibleSongId,
-                    playbackSongId = currentPlaybackQueueMediaId(),
-                    trigger = "build",
-                )
+                withPlaybackSongIdForVisibleLyrics(visibleSongId) { playbackSongId ->
+                    PlaybackManager.onLyricsBuilt(
+                        nativeSongObj = songNative,
+                        source = contentSource,
+                        visibleSongId = visibleSongId,
+                        playbackSongId = playbackSongId,
+                        trigger = "build",
+                    )
+                }
                 if (
                     optimizationEnabled &&
                     requestSource == APPLE_LYRICS_REQUEST_SOURCE_APPLE &&
@@ -448,17 +450,22 @@ internal fun AppleLyricsSupplementHooks.hookAppleNativeLyricsPresentation() {
                 dismissAppleLyricsLoadingOverlay(fragment)
                 ensureMissingLyricsTranslationButtonVisible(fragment)
                 scheduleSupplementActiveLineUpdate()
+            } else if (isAlwaysShowSourceSwitchEnabled()) {
+                // 原生歌词页：Apple 在没有翻译与发音时隐藏该按钮，来源弹窗的入口随之消失。
+                ensureMissingLyricsTranslationButtonVisible(fragment)
             }
             onAppleLyricsPresentationCompleted(fragment, songId)
             postWhenMainIdle(mainHandler, LYRICS_PARSE_IDLE_MAX_DELAY_MS) { waitedMs, viaIdle ->
                 logLyricsParseDeferred("presentation", songId, waitedMs, viaIdle)
-                PlaybackManager.onLyricsBuilt(
-                    nativeSongObj = songNative,
-                    source = "apple",
-                    visibleSongId = songId,
-                    playbackSongId = currentPlaybackQueueMediaId(),
-                    trigger = "presentation",
-                )
+                withPlaybackSongIdForVisibleLyrics(songId) { playbackSongId ->
+                    PlaybackManager.onLyricsBuilt(
+                        nativeSongObj = songNative,
+                        source = "apple",
+                        visibleSongId = songId,
+                        playbackSongId = playbackSongId,
+                        trigger = "presentation",
+                    )
+                }
             }
         },
     )

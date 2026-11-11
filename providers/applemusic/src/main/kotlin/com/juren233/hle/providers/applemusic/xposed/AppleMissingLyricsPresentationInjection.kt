@@ -80,7 +80,7 @@ internal fun AppleMissingLyricsHooks.rewriteNativeModelArgs(chain: OfficialProvi
     val songId = currentPlaybackQueueMediaId()?.takeIf(String::isNotBlank)
         ?: currentSupplementSongId()
     if (isSupplementPointer(originalPointer)) {
-        if (shouldPreferTtmlCatalog(songId)) return null
+        if (shouldPreferSupplementOverNative(songId)) return null
         val nativePointer = songId?.let { nativeAlternatives.pointer(it) }
             ?.takeIf { readNativeLineCount(it) > 0 }
             ?: return null
@@ -94,8 +94,9 @@ internal fun AppleMissingLyricsHooks.rewriteNativeModelArgs(chain: OfficialProvi
     if (hasNativeLyrics && !songId.isNullOrBlank()) {
         nativeAlternatives.rememberPointer(songId, requireNotNull(originalPointer))
     }
-    // TTML 目录源被临时选择时允许替换 Apple 原生模型；其他补充来源仍只服务无歌词歌曲。
-    if (hasNativeLyrics && !shouldPreferTtmlCatalog(songId)) return null
+    // TTML 目录源被临时选择、或用户手动选了某个来源时允许替换 Apple 原生模型；
+    // 其余情况补充来源只服务无歌词歌曲。
+    if (hasNativeLyrics && !shouldPreferSupplementOverNative(songId)) return null
     val supplementPointer = supplementPointerForInjection() ?: return null
     ProviderLogger.debug(
         "Apple Music 无歌词补充注入原生模型: " +
@@ -105,13 +106,13 @@ internal fun AppleMissingLyricsHooks.rewriteNativeModelArgs(chain: OfficialProvi
 }
 
 internal fun AppleMissingLyricsHooks.supplementPointerForInjection(): Any? {
-    if (!isEnabled()) return null
     val songId = currentPlaybackQueueMediaId()?.takeIf(String::isNotBlank)
         ?: currentSupplementSongId()
         ?: return null
+    if (!isEnabledFor(songId)) return null
     if (!candidates.isAccepted(songId)) return null
     val identity = store.playbackIdentity(songId) ?: return null
-    if (hasKnownNativeLyrics(songId, identity.adamId) && !shouldPreferTtmlCatalog(songId)) return null
+    if (hasKnownNativeLyrics(songId, identity.adamId) && !shouldPreferSupplementOverNative(songId)) return null
     val pointer = store.nativeSongInfoPointer(songId) ?: return null
     if (!store.hasContent(songId)) return null
     return pointer

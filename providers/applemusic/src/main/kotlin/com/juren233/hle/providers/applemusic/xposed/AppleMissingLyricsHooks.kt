@@ -273,11 +273,11 @@ internal class AppleMissingLyricsHooks(
 
     /** 歌词页可见且当前歌曲具备补充歌词时，主动用补充歌词指针触发原生呈现。 */
     private fun maybeRequestInjectedPresentation(fragment: Any? = null) {
-        if (!isEnabled()) return
         val songId = currentSupplementSongId() ?: return
+        if (!isEnabledFor(songId)) return
         if (!shouldPresentSupplementOnLyricsPageResume(
                 hasKnownNativeLyrics = hasKnownNativeLyrics(songId),
-                shouldPreferTtmlCatalog = shouldPreferTtmlCatalog(songId),
+                shouldPreferTtmlCatalog = shouldPreferSupplementOverNative(songId),
             )
         ) {
             return
@@ -299,7 +299,19 @@ internal class AppleMissingLyricsHooks(
         requestPresentationRefresh(pointer, fragment, currentPlaybackItem(songId))
     }
 
+    /** 自动补充（无歌词补充、逐行转逐字）是否开启；手动选来源不看这个开关，见 [isEnabledFor]。 */
     fun isEnabled(): Boolean = isFillMissingLyricsEnabled() || isLineToWordLyricsEnabled()
+
+    /** 补充链是否服务这首歌：自动补充开启，或用户在来源弹窗里为它手动选了歌词来源。 */
+    internal fun isEnabledFor(songId: String?): Boolean =
+        isEnabled() || shouldPreferManualLyricsSource(songId)
+
+    /** 「始终显示切换源按钮」：歌词来源可由用户手动选择，并可替换 Apple 原生歌词。 */
+    internal fun isAlwaysShowSourceSwitchEnabled(): Boolean =
+        preferences()?.getBoolean(
+            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_ALWAYS_SHOW_SOURCE_SWITCH,
+            AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_ALWAYS_SHOW_SOURCE_SWITCH,
+        ) == true
 
     private fun isFillMissingLyricsEnabled(): Boolean =
         preferences()?.getBoolean(
@@ -388,6 +400,8 @@ internal class AppleMissingLyricsHooks(
     internal fun takeoverDecision(songId: String): AppleNativeLyricsTakeoverDecision =
         if (shouldPreferTtmlCatalog(songId)) {
             AppleNativeLyricsTakeoverDecision(true, "ttml_catalog_selected")
+        } else if (shouldPreferManualLyricsSource(songId)) {
+            AppleNativeLyricsTakeoverDecision(true, "manual_lyrics_source_selected")
         } else if (hasKnownNativeLyrics(songId)) {
             AppleNativeLyricsTakeoverDecision(false, "native_lyrics_present")
         } else {
@@ -431,7 +445,7 @@ internal class AppleMissingLyricsHooks(
             songId = songId,
             event = "activation_query_$trigger",
         )
-        if (!isEnabled() || currentSupplementSongId() != songId) return false
+        if (!isEnabledFor(songId) || currentSupplementSongId() != songId) return false
         val decision = takeoverDecision(songId)
         if (!decision.allowed) {
             if (AppleProviderEnvironment.diagnosticsEnabled) {

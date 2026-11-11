@@ -77,9 +77,20 @@ internal fun AppleMusicProviderOrchestrator.initializeContentUiLanguage() {
             AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_MATCH_ONLINE_TRANSLATION,
             AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_NATIVE_ONLINE_TRANSLATION -> {
                 if (!lyricsPlayback.lyricsHooks.isNativeOnlineTranslationEnabled()) {
-                    lyricsPlayback.lyricsHooks.nativeOnlineTranslationStore.clear()
+                    // 来源弹窗开着时，Store 里的来源状态与手动选择仍要保留；自动补全的内容
+                    // 靠呈现判断停用，这里只刷新歌词页。
+                    if (!lyricsPlayback.lyricsHooks.acceptsOnlineContent()) {
+                        lyricsPlayback.lyricsHooks.nativeOnlineTranslationStore.clear()
+                    }
                     lyricsPlayback.lyricsHooks.refreshAppleLyricsSupplementPresentation()
                 }
+            }
+            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_ALWAYS_SHOW_SOURCE_SWITCH -> {
+                if (!lyricsPlayback.lyricsHooks.acceptsOnlineContent()) {
+                    lyricsPlayback.lyricsHooks.nativeOnlineTranslationStore.clear()
+                }
+                lyricsPlayback.missingLyricsHooks.onAlwaysShowSourceSwitchChanged()
+                lyricsPlayback.lyricsHooks.refreshAppleLyricsSupplementPresentation()
             }
             AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS,
             AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LINE_TO_WORD_LYRICS ->

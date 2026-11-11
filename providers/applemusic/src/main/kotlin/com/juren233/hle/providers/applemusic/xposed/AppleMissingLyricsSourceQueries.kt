@@ -173,17 +173,58 @@ internal fun AppleMissingLyricsHooks.shouldPreferTtmlCatalog(songId: String?): B
         isTtmlCatalogTakeoverAllowed(contentSongId)
 }
 
+/** 补充歌词载荷标注的来源。 */
+internal fun AppleMissingLyricsHooks.supplementSource(song: Song): String? =
+    song.metadata
+        ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE)
+
+/**
+ * [source] 是否是用户在来源弹窗里为这首歌手动选的三方歌词来源（需开启「始终显示切换源按钮」）。
+ * 点选瞬间记下的请求与核心确认后的选择都算：补充载荷先于切换结果到达。
+ */
+internal fun AppleMissingLyricsHooks.isManualLyricsSourceChoice(songId: String, source: String?): Boolean {
+    if (source.isNullOrBlank() || source == AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE) return false
+    if (!isAlwaysShowSourceSwitchEnabled()) return false
+    return lyricsSourceSelection.selected(songId) == source ||
+        lyricsSourceSelection.requested(songId) == source
+}
+
+/**
+ * Store 里的补充歌词正是用户手动选的来源：它替换 Apple 原生歌词，不受「为无歌词的歌曲补充歌词」
+ * 「逐行转逐字」两个自动开关以及目录源资格限制。选回「Apple Music 原生」或切歌后不再成立。
+ */
+internal fun AppleMissingLyricsHooks.shouldPreferManualLyricsSource(songId: String?): Boolean {
+    val contentSongId = songId?.takeIf(String::isNotBlank) ?: return false
+    if (!isAlwaysShowSourceSwitchEnabled() || !store.hasContent(contentSongId)) return false
+    return isManualLyricsSourceChoice(contentSongId, store.sourceInfo(contentSongId)?.selectedSource)
+}
+
+/** 补充歌词模型是否应替换 Apple 原生模型：目录源被选中并符合资格，或用户手动选了该来源。 */
+internal fun AppleMissingLyricsHooks.shouldPreferSupplementOverNative(songId: String?): Boolean =
+    shouldPreferTtmlCatalog(songId) || shouldPreferManualLyricsSource(songId)
+
 internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
     songId: String?,
     source: String?,
     successful: Boolean,
 ): String? {
     val contentSongId = songId?.takeIf(String::isNotBlank) ?: return null
-    if (!successful || (source != AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE && !Source.isTtmlCatalogName(source))) {
+    // 原生有歌词的歌曲上手动选了三方来源：与目录源一样由这里驱动模型构建与呈现。
+    // 原生无歌词的歌曲换补充来源仍走补充载荷自己的接管链路。
+    val manualOverNative = isAlwaysShowSourceSwitchEnabled() &&
+        !source.isNullOrBlank() &&
+        source != AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE &&
+        hasKnownNativeLyrics(contentSongId)
+    if (
+        !successful ||
+        (source != AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE &&
+            !Source.isTtmlCatalogName(source) && !manualOverNative)
+    ) {
         return null
     }
     val effectiveSource = if (
-        Source.isTtmlCatalogName(source) && !isTtmlCatalogEligibleForSong(contentSongId)
+        Source.isTtmlCatalogName(source) && !manualOverNative &&
+        !isTtmlCatalogEligibleForSong(contentSongId)
     ) {
         if (AppleProviderEnvironment.diagnosticsEnabled) {
             ProviderLogger.diagnostic(
@@ -203,6 +244,7 @@ internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
         source = effectiveSource,
         hasTtmlCatalogPointer = ttmlCatalogPointer != null,
         hasAppleNativePointer = appleNativePointer != null,
+        manualOverNative = manualOverNative,
     )
     when (action) {
         AppleLyricsSourcePresentationAction.PRESENT_TTML_CATALOG -> {
@@ -292,6 +334,8 @@ internal fun AppleMissingLyricsHooks.timingDebugSnapshot(songId: String?): Strin
 
 internal fun AppleMissingLyricsHooks.hasSupplementContent(songId: String?): Boolean {
     val contentSongId = songId?.takeIf(String::isNotBlank) ?: return false
+    // 用户手动选的来源正在替换原生歌词：歌词页显示的就是补充模型。
+    if (shouldPreferManualLyricsSource(contentSongId)) return true
     // 冷启动时来源菜单可能先于可用性回调查询 Store；此处同样允许磁盘恢复。
     restoreCachedSupplement(contentSongId)
     maybeActivateSupplement(contentSongId, trigger = "source_menu_query")
@@ -358,7 +402,7 @@ internal fun AppleMissingLyricsHooks.onNativeLyricsState(songId: String?, hasLin
         if (songId != contentSongId) {
             nativeTakeoverGate.onNativeResult(songId, hasLyrics = true)
         }
-        if (shouldPreferTtmlCatalog(contentSongId)) {
+        if (shouldPreferSupplementOverNative(contentSongId)) {
             candidates.accept(contentSongId)
             scheduleNativeLyricsModel(contentSongId)
             mainHandler.post { refreshNowPlaying(contentSongId) }
@@ -453,6 +497,30 @@ internal fun AppleMissingLyricsHooks.discardSupplementForConfirmedNativeLyrics(
     }
 }
 
+/**
+ * 「始终显示切换源按钮」被关闭：当前歌曲上手动替换原生歌词的来源随之失效，歌词页回到原生歌词。
+ * 重新呈现原生模型后，原生歌词状态回调会撤销 Store 里的补充并通知核心。
+ */
+internal fun AppleMissingLyricsHooks.onAlwaysShowSourceSwitchChanged() {
+    if (isAlwaysShowSourceSwitchEnabled()) return
+    val songId = currentPlaybackQueueMediaId()?.takeIf(String::isNotBlank) ?: return
+    val chosen = lyricsSourceSelection.selected(songId) ?: lyricsSourceSelection.requested(songId)
+    if (
+        chosen == null ||
+        chosen == AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE ||
+        !hasKnownNativeLyrics(songId) ||
+        shouldPreferTtmlCatalog(songId)
+    ) {
+        return
+    }
+    lyricsSourceSelection.noteRequest(songId, AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE)
+    onLyricsSourceSelectionChanged(
+        songId = songId,
+        source = AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE,
+        successful = true,
+    )
+}
+
 /** 当前歌曲已确认 Apple 原生歌词时，阻止旧缓存迁移为补充歌词。 */
 internal fun AppleMissingLyricsHooks.hasKnownNativeLyricsFor(songId: String): Boolean = hasKnownNativeLyrics(songId)
 
@@ -478,10 +546,14 @@ internal fun AppleMissingLyricsHooks.onLyricsItem(item: Any?) {
  * PlaybackItem 身份，避免“按钮可进入后才调用 loadLyrics()”的循环依赖。
  */
 internal fun AppleMissingLyricsHooks.onCurrentPlaybackItem(contentSongId: String, item: Any?, queueId: Long) {
-    if (!isEnabled() || contentSongId.isBlank()) return
+    if (contentSongId.isBlank()) return
+    val enabled = isEnabled()
+    // 手动选的来源只对本次播放有效；自动补充关闭时也要在切歌时清掉。
+    if (!enabled && !isAlwaysShowSourceSwitchEnabled()) return
     if (lyricsSourceSelection.beginPlayback(contentSongId)) {
         nativeAlternatives.retainTrack(contentSongId)
     }
+    if (!enabled) return
     nativeTakeoverGate.observe(contentSongId)
     scheduleTakeoverRecheck(contentSongId)
     restoreCachedSupplement(contentSongId)

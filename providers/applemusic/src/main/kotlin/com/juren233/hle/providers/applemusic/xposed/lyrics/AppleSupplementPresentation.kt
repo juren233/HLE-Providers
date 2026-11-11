@@ -255,17 +255,22 @@ internal fun AppleLyricsSupplementHooks.dismissAppleLyricsLoadingOverlay(fragmen
     }
 }
 
+/** translations_button 是否必须保持可见：补充歌词页，或开启了「始终显示切换源按钮」。 */
+internal fun AppleLyricsSupplementHooks.shouldKeepTranslationButtonVisible(songId: String?): Boolean =
+    isAlwaysShowSourceSwitchEnabled() || missingLyricsSupplement().hasSupplementContent(songId)
+
 /**
  * 无歌词补充歌曲的播放页必须始终保留 translations_button，否则用户无法进入
  * 来源菜单选择歌词来源。Apple 会在翻译尚未回传时把该按钮置 GONE，这里在补充页
  * 呈现成功后强制恢复 VISIBLE，并持续监听布局变化。
+ * 开启「始终显示切换源按钮」后，对所有歌曲同样处理。
  */
 internal fun AppleLyricsSupplementHooks.ensureMissingLyricsTranslationButtonVisible(fragment: Any?) {
     fragment ?: return
     val songId = currentAppleLyricsSongId
         ?: currentPlaybackQueueMediaId()
         ?: return
-    if (!missingLyricsSupplement().hasSupplementContent(songId)) return
+    if (!shouldKeepTranslationButtonVisible(songId)) return
     val root = runCatching {
         AppleReflection.call(
             fragment,
@@ -288,31 +293,35 @@ internal fun AppleLyricsSupplementHooks.ensureMissingLyricsTranslationButtonVisi
                 forced += 1
             }
             if (viewTracking.markTranslationButtonForcedIfNew(view)) {
-                view.addOnLayoutChangeListener(
-                    object : View.OnLayoutChangeListener {
-                        override fun onLayoutChange(
-                            changedView: View,
-                            left: Int,
-                            top: Int,
-                            right: Int,
-                            bottom: Int,
-                            oldLeft: Int,
-                            oldTop: Int,
-                            oldRight: Int,
-                            oldBottom: Int,
-                        ) {
+                view.addOnLayoutChangeListener { changedView, _, _, _, _, _, _, _, _ ->
+                    if (
+                        shouldKeepTranslationButtonVisible(songId) &&
+                        changedView.visibility != View.VISIBLE
+                    ) {
+                        changedView.visibility = View.VISIBLE
+                        changedView.isEnabled = true
+                        changedView.isClickable = true
+                    }
+                }
+                // 按钮被置 GONE 后自身不再参与布局，上面的监听收不到；父布局此时仍会重新布局。
+                // 回调处于布局过程中，恢复可见会再次请求布局，所以排到本轮布局之后。
+                (view.parent as? View)?.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                    if (
+                        view.visibility != View.VISIBLE &&
+                        shouldKeepTranslationButtonVisible(songId)
+                    ) {
+                        view.post {
                             if (
-                                missingLyricsSupplement()
-                                    .hasSupplementContent(songId) &&
-                                changedView.visibility != View.VISIBLE
+                                view.visibility != View.VISIBLE &&
+                                shouldKeepTranslationButtonVisible(songId)
                             ) {
-                                changedView.visibility = View.VISIBLE
-                                changedView.isEnabled = true
-                                changedView.isClickable = true
+                                view.visibility = View.VISIBLE
+                                view.isEnabled = true
+                                view.isClickable = true
                             }
                         }
                     }
-                )
+                }
             }
         }
         (view as? ViewGroup)?.let { group ->
@@ -646,6 +655,38 @@ internal fun AppleLyricsSupplementHooks.isNativeOnlineTranslationEnabled(): Bool
         AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_NATIVE_ONLINE_TRANSLATION,
     )
 }
+
+/** 「始终显示切换源按钮」：歌词页的翻译按钮与三个来源切换项对所有歌曲常驻。 */
+internal fun AppleLyricsSupplementHooks.isAlwaysShowSourceSwitchEnabled(): Boolean {
+    val prefs = contentUiLanguagePrefs ?: return false
+    return prefs.getBoolean(
+        AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_ALWAYS_SHOW_SOURCE_SWITCH,
+        AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_ALWAYS_SHOW_SOURCE_SWITCH,
+    )
+}
+
+/** 核心回传的在线内容是否要接收：自动补全开着，或来源弹窗需要它的来源状态与手动选择结果。 */
+internal fun AppleLyricsSupplementHooks.acceptsOnlineContent(): Boolean =
+    isNativeOnlineTranslationEnabled() || isAlwaysShowSourceSwitchEnabled()
+
+/**
+ * 已接收的在线翻译能否呈现到歌词页。自动补全关闭时，只有用户在来源弹窗里手动选的来源
+ * （核心以覆盖标记回传）才呈现；自动补全的内容不会因为开了来源弹窗而出现在歌词页。
+ */
+internal fun AppleLyricsSupplementHooks.presentsOnlineTranslation(songId: String?): Boolean =
+    isNativeOnlineTranslationEnabled() || overridesNativeTranslation(songId)
+
+internal fun AppleLyricsSupplementHooks.presentsOnlinePronunciation(songId: String?): Boolean =
+    isNativeOnlineTranslationEnabled() || overridesNativePronunciation(songId)
+
+/** 用户手动选的翻译来源正在替换 Apple 自带翻译：该来源有内容的行优先于官方文本。 */
+internal fun AppleLyricsSupplementHooks.overridesNativeTranslation(songId: String?): Boolean =
+    isAlwaysShowSourceSwitchEnabled() &&
+        nativeOnlineTranslationStore.translationOverridesNative(songId)
+
+internal fun AppleLyricsSupplementHooks.overridesNativePronunciation(songId: String?): Boolean =
+    isAlwaysShowSourceSwitchEnabled() &&
+        nativeOnlineTranslationStore.pronunciationOverridesNative(songId)
 
 internal fun AppleLyricsSupplementHooks.isHideMandarinPinyinEnabled(): Boolean {
     val prefs = contentUiLanguagePrefs ?: return false

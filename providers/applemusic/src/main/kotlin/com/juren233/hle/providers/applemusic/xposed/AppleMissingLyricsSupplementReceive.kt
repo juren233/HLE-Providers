@@ -24,7 +24,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
-    if (!isEnabled()) {
+    val manualChoice = song.id?.takeIf(String::isNotBlank)
+        ?.let { isManualLyricsSourceChoice(it, supplementSource(song)) } == true
+    if (!isEnabled() && !manualChoice) {
         ProviderLogger.debug("Apple Music 无歌词补充被忽略: reason=feature_disabled")
         return
     }
@@ -63,7 +65,9 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
     AppleCrashTrace.record {
         "supplement_received song=$songId lines=${incomingLines.size} ttml=$ttmlCatalogSupplement"
     }
-    if (hasKnownNativeLyrics(songId) && !ttmlCatalogSupplement) {
+    // 用户手动选的来源替换原生歌词：只对本次播放有效，不写磁盘缓存。
+    val manualOverNative = manualChoice && hasKnownNativeLyrics(songId) && !ttmlCatalogSupplement
+    if (hasKnownNativeLyrics(songId) && !ttmlCatalogSupplement && !manualOverNative) {
         ProviderLogger.info(
             "Apple Music 无歌词补充被原生歌词拒绝: id=$songId, " +
                 "reason=native_lyrics_present"
@@ -71,7 +75,7 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
         discardSupplementForConfirmedNativeLyrics(songId, supplementOffered = true)
         return
     }
-    if (ttmlCatalogSupplement) {
+    if (ttmlCatalogSupplement || manualOverNative) {
         candidates.accept(songId)
     }
     clearSupplementRevoked(songId)
@@ -108,12 +112,12 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
                 "lines=${incomingLines.size}, wordLines=$incomingWordLines"
         )
         val diskWriteStartedAtNanos = SystemClock.elapsedRealtimeNanos()
-        val diskSaved = DiskSongManager.saveMissingLyrics(song)
+        val diskSaved = manualOverNative || DiskSongManager.saveMissingLyrics(song)
         AppleSourceSwitchPerformanceDiagnostics.record(
             songId = songId,
             event = "disk_cache_write",
             durationNanos = SystemClock.elapsedRealtimeNanos() - diskWriteStartedAtNanos,
-            details = "saved=$diskSaved,contentChanged=true",
+            details = "saved=$diskSaved,contentChanged=true,manualOverNative=$manualOverNative",
         )
         if (!diskSaved) {
             ProviderLogger.debug(
@@ -150,7 +154,7 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
     }
     // 正文/时间轴没有变化时保留现有 native pointer。翻译变化只重绑当前可见行，
     // 元数据变化只持久化，完全相同的竞速载荷不再写盘或刷新播放页。
-    if (updateResult.shouldPersist && store.hasContent(songId)) {
+    if (updateResult.shouldPersist && store.hasContent(songId) && !manualOverNative) {
         val diskWriteStartedAtNanos = SystemClock.elapsedRealtimeNanos()
         AppleSourceSwitchPerformanceDiagnostics.stageForSong(
             songId = songId,
@@ -276,7 +280,8 @@ internal fun AppleMissingLyricsHooks.onPreferenceChanged() {
     val currentIsTtmlCatalog = Source.isTtmlCatalogName(
         store.sourceInfo(store.contentSongId())?.selectedSource
     )
-    if (!isLineToWordLyricsEnabled() && currentIsTtmlCatalog) {
+    val manualSelection = shouldPreferManualLyricsSource(currentSongId)
+    if (!isLineToWordLyricsEnabled() && currentIsTtmlCatalog && !manualSelection) {
         currentSongId?.let {
             lyricsSourceSelection.remove(it)
             candidates.revokeAcceptance(it)
@@ -285,7 +290,7 @@ internal fun AppleMissingLyricsHooks.onPreferenceChanged() {
         if (store.clear()) refreshNowPlaying(currentSongId)
         return
     }
-    if (!isEnabled()) {
+    if (!isEnabled() && !manualSelection) {
         val songId = currentSongId
         songId?.let {
             candidates.revokeAcceptance(it)
@@ -393,10 +398,10 @@ internal fun AppleMissingLyricsHooks.buildNativeLyricsModel(key: AppleMissingLyr
     val identity = key.identity
     val songId = identity.contentSongId
     val totalStartedAtNanos = SystemClock.elapsedRealtimeNanos()
-    if (!isEnabled() || key.contentRevision != store.revision()) return
+    if (!isEnabledFor(songId) || key.contentRevision != store.revision()) return
     if (!candidates.isAccepted(songId)) return
     if (!store.isCurrentIdentity(identity)) return
-    if (hasKnownNativeLyrics(songId, identity.adamId) && !shouldPreferTtmlCatalog(songId)) {
+    if (hasKnownNativeLyrics(songId, identity.adamId) && !shouldPreferSupplementOverNative(songId)) {
         ProviderLogger.debug(
             "Apple Music 无歌词补充跳过原生模型构建: reason=native_lyrics_present"
         )

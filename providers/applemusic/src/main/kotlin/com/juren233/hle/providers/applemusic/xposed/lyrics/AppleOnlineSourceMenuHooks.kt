@@ -68,6 +68,9 @@ internal class AppleOnlineSourceMenuHooks(
     private val availableLyricsSources: (String?) -> List<String> = { emptyList() },
     internal val missingLyricsSourceContentState: (String?, String) ->
     com.juren233.hyperlyricsenhanced.common.lyric.OnlineSourceContentState? = { _, _ -> null },
+    /** 「始终显示切换源按钮」：三个来源切换项对所有歌曲常驻，弹窗顶部固定为 Apple Music 原生。 */
+    internal val alwaysShowSourceSwitch: () -> Boolean = { false },
+    internal val hasNativeLyrics: (String?) -> Boolean = { false },
 ) {
     private var activeMenu: ActiveOnlineSourceMenu? = null
     internal var activeLyricsSourceDialog: ActiveLyricsSourceDialog? = null
@@ -276,7 +279,7 @@ internal class AppleOnlineSourceMenuHooks(
             )
             return
         }
-        if (menu.childCount < 2) {
+        if (menu.childCount < 2 && !alwaysShowSourceSwitch()) {
             reportDiagnostic(
                 stage = "native_items_insufficient",
                 clickListener = clickListener,
@@ -336,9 +339,10 @@ internal class AppleOnlineSourceMenuHooks(
             }
         }
         normalizeTextItems(menu)
-        val pronunciationSource = currentSource(songId, "pronunciation")
+        val alwaysShow = alwaysShowSourceSwitch()
+        val pronunciationSource = displayedSource(songId, "pronunciation")
         val pronunciationPresentation = presentation(songId, "pronunciation", pronunciationSource)
-        val translationSource = currentSource(songId, "translation")
+        val translationSource = displayedSource(songId, "translation")
         val translationPresentation = presentation(songId, "translation", translationSource)
         val pronunciationSelected = PreferencesMonitor.isPronunciationSelected()
         val pronunciationHidden = shouldHideMandarinPronunciation(songId)
@@ -353,7 +357,8 @@ internal class AppleOnlineSourceMenuHooks(
             menu = menu,
             songId = songId,
         )
-        if (hasLyricsSupplement) {
+        val showLyricsItem = hasLyricsSupplement || alwaysShow
+        if (showLyricsItem) {
             menu.addView(
                 createLyricsSourceMenuItem(
                     menu = menu,
@@ -365,15 +370,14 @@ internal class AppleOnlineSourceMenuHooks(
         }
         if (
             pronunciationPresentation != null &&
-            pronunciationSelected &&
-            !pronunciationHidden
+            (alwaysShow || (pronunciationSelected && !pronunciationHidden))
         ) {
             menu.addView(
                 createMenuItem(menu, songId, "pronunciation", pronunciationPresentation),
-                if (hasLyricsSupplement) 2 else 1,
+                (if (showLyricsItem) 2 else 1).coerceAtMost(menu.childCount),
             )
         }
-        if (translationPresentation != null && translationSelected) {
+        if (translationPresentation != null && (alwaysShow || translationSelected)) {
             menu.addView(createMenuItem(menu, songId, "translation", translationPresentation))
         }
         normalizeTextItems(menu)
@@ -385,6 +389,7 @@ internal class AppleOnlineSourceMenuHooks(
                     "pronunciationPresentation=$pronunciationPresentation, " +
                     "pronunciationSelected=$pronunciationSelected, pronunciationHidden=$pronunciationHidden, " +
                     "lyrics=[hasSupplement=$hasLyricsSupplement,source=$lyricsSource,info=$lyricsInfo], " +
+                    "alwaysShow=$alwaysShow, " +
                     "finalChildren=${menu.childCount}, viewTree=${debugViewTree(menu)}"
             )
         }
@@ -510,7 +515,9 @@ internal class AppleOnlineSourceMenuHooks(
         list.addView(title)
         list.addView(
             TextView(context).apply {
-                text = if (isLyricsSourceDialog) {
+                text = if (isLyricsSourceDialog && alwaysShowSourceSwitch()) {
+                    AppleMenuText.pick("选择歌词页显示的歌词来源", "Choose the lyrics source shown on this page")
+                } else if (isLyricsSourceDialog) {
                     AppleMenuText.pick("选择补充歌词使用的在线来源", "Choose the online source for supplemental lyrics")
                 } else {
                     AppleMenuText.pick("缺失行将从其余源自动补全", "Missing lines are filled from the other sources")
@@ -520,7 +527,7 @@ internal class AppleOnlineSourceMenuHooks(
                 setPadding(0, 0, 0, dp(context, 14))
             }
         )
-        val selected = currentSource(songId, contentType)
+        val selected = displayedSource(songId, contentType)
         val dialog = Dialog(context).apply {
             requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         }
@@ -530,10 +537,12 @@ internal class AppleOnlineSourceMenuHooks(
             clipToOutline = true
         }
         val rows = linkedMapOf<String, LyricsSourceDialogRow>()
-        val sourceOrder = if (isLyricsSourceDialog) {
-            availableLyricsSources(songId)
-        } else {
-            configuredOrderedSources()
+        val sourceOrder = when {
+            // 顶部固定为 Apple Music 原生，其后是「三方在线源配置」里启用的全部来源。
+            alwaysShowSourceSwitch() ->
+                (listOf(APPLE_NATIVE_SOURCE) + configuredOrderedSources()).distinct()
+            isLyricsSourceDialog -> availableLyricsSources(songId)
+            else -> configuredOrderedSources()
         }
         if (sourceOrder.isEmpty()) {
             group.addView(
@@ -615,7 +624,7 @@ internal class AppleOnlineSourceMenuHooks(
                 val rowSubtitle = TextView(context).apply {
                     text = contentRow?.subtitle ?: when {
                         isPending -> AppleMenuText.pick("获取中…", "Fetching…")
-                        else -> missingLyricsSourceStatusLabel(status!!)
+                        else -> lyricsSourceRowLabel(songId, source, status!!)
                     }
                     textSize = 12.5f
                     setTextColor(onSurfaceVariantColor)
@@ -631,7 +640,7 @@ internal class AppleOnlineSourceMenuHooks(
                     } else {
                         null
                     }
-                    val currentlySelected = source == currentSource(songId, contentType)
+                    val currentlySelected = source == displayedSource(songId, contentType)
                     val currentlySelectable = if (currentStatus != null) {
                         isMissingLyricsSourceSelectable(currentStatus, currentlySelected)
                     } else {
@@ -719,6 +728,20 @@ internal class AppleOnlineSourceMenuHooks(
             onSurfaceVariantColor = onSurfaceVariantColor,
         )
         refreshActiveLyricsSourceDialog(songId)
+        if (alwaysShowSourceSwitch()) requestSourceStatuses(songId)
+    }
+
+    /** 来源弹窗打开时让核心检索全部已启用来源；各来源状态随在线内容载荷回传，没有单独的应答。 */
+    private fun requestSourceStatuses(songId: String) {
+        val accepted = requestOnlineSource(
+            ++requestSequence,
+            songId,
+            com.juren233.hyperlyricsenhanced.contract.AppleDirectBridgeContract.CONTENT_TYPE_SOURCE_STATUS,
+            "",
+        )
+        ProviderLogger.diagnostic(
+            "Apple Music 来源状态请求投递: songId=$songId, accepted=$accepted"
+        )
     }
 
 }

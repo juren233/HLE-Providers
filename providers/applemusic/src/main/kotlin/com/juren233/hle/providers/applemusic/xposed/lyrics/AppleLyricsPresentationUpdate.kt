@@ -47,7 +47,19 @@ internal data class AppleMissingLyricsPresentationUpdate(val songId: String?, va
 /** Sanitization stays with each lane; official content is authoritative and fallback is lazy. */
 internal data class AppleLyricsSelectedText(val text: String?, val fromFallback: Boolean)
 
-internal fun selectAppleLyricsText(official: String?, fallback: () -> String?): AppleLyricsSelectedText {
+/**
+ * [preferFallback] is set while the user's hand-picked source replaces Apple's own content: the
+ * online text then wins on every line it covers and the official text only fills the rest.
+ */
+internal fun selectAppleLyricsText(
+    official: String?,
+    preferFallback: Boolean = false,
+    fallback: () -> String?,
+): AppleLyricsSelectedText {
+    if (preferFallback) {
+        val text = fallback() ?: return AppleLyricsSelectedText(official, false)
+        return AppleLyricsSelectedText(text, text != official)
+    }
     if (official != null) return AppleLyricsSelectedText(official, false)
     val text = fallback()
     return AppleLyricsSelectedText(text, text != null)

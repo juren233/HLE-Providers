@@ -40,6 +40,7 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
             ) -> {
                 val text = selectAppleLyricsText(
                     official = AppleNativeOnlineTranslationStore.sanitizeContent(originalText),
+                    preferFallback = overridesNativeTranslation(currentAppleLyricsSongId),
                     fallback = { onlineTranslationForNativeLine(chain.thisObject) },
                 ).text
                 val result = AppleLyricTextTransform.transform(text) ?: original
@@ -61,7 +62,10 @@ internal fun AppleLyricsSupplementHooks.hookAppleLyricTextGetter(clazz: Class<*>
                     originalText = nativeOriginalLineText(chain.thisObject),
                     pronunciation = originalText,
                 )
-                val selection = selectAppleLyricsText(officialText) {
+                val selection = selectAppleLyricsText(
+                    official = officialText,
+                    preferFallback = overridesNativePronunciation(currentAppleLyricsSongId),
+                ) {
                     onlinePronunciationForNativeLine(chain.thisObject)
                 }
                 val onlineText = selection.text.takeIf { selection.fromFallback }
@@ -275,12 +279,19 @@ private fun AppleLyricsSupplementHooks.hookApplePronunciationWordsGetter(
                 *chain.args.toTypedArray(),
             )
         }.getOrNull()
-        val hasCompatibleOfficialWords = hasValidOfficialWords &&
+        // 用户手动选的发音来源在这一行给出了不同于官方的发音：改用主句时间轴渲染它，
+        // 官方逐字发音与它的文本对不上。
+        val onlineReplacesOfficial = onlinePronunciation != null &&
+            overridesNativePronunciation(currentAppleLyricsSongId) &&
+            AppleNativeOnlineTranslationStore.normalizeText(onlinePronunciation) !=
+            AppleNativeOnlineTranslationStore.normalizeText(officialPronunciation)
+        val hasCompatibleOfficialWords = !onlineReplacesOfficial && hasValidOfficialWords &&
             ApplePronunciationPolicy.hasCompatibleOfficialWordTiming(
                 mainWordBegins = nativeRenderableWordBegins(mainWords),
                 pronunciationWordBegins = nativeRenderableWordBegins(original),
             )
         val mainTimingPronunciation = when {
+            onlineReplacesOfficial -> onlinePronunciation
             officialPronunciation != null && !hasCompatibleOfficialWords -> {
                 reportApplePronunciationRuntimeDiagnostic(
                     stage = "official_word_timing_fallback",
