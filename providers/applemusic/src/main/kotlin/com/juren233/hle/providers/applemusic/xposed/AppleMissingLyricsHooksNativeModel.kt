@@ -328,7 +328,17 @@ internal fun AppleMissingLyricsHooks.readNativeLineCount(pointer: Any): Int {
     return totalLines
 }
 
-internal fun AppleMissingLyricsHooks.readNativeWordTimedLineCount(pointer: Any): Int {
+/** 原生模型的逐字行数与是否存在行时间轴；指针无法读取时返回 null。 */
+internal data class AppleNativeLineTiming(
+    val wordTimedLineCount: Int,
+    val lineTimingPresent: Boolean,
+)
+
+/**
+ * 读取逐字行数，并判断是否存在行时间轴（某行 `end > begin`）。行时间轴只读到第一条有时间的行为止，
+ * 有时间轴的歌曲通常首行即命中，只有整首无时间轴的歌曲才会读完全部行。
+ */
+internal fun AppleMissingLyricsHooks.readNativeLineTiming(pointer: Any): AppleNativeLineTiming? {
     val songNative = runCatching {
         AppleReflection.call(
             pointer,
@@ -336,7 +346,7 @@ internal fun AppleMissingLyricsHooks.readNativeWordTimedLineCount(pointer: Any):
                 AppleMusicRuntimeMember.LYRICS_NATIVE_POINTER_GET_METHOD
             ),
         )
-    }.getOrNull() ?: return -1
+    }.getOrNull() ?: return null
     val sections = runCatching {
         AppleReflection.call(
             songNative,
@@ -344,10 +354,12 @@ internal fun AppleMissingLyricsHooks.readNativeWordTimedLineCount(pointer: Any):
                 AppleMusicRuntimeMember.LYRICS_NATIVE_SONG_SECTIONS_METHOD
             ),
         )
-    }.getOrNull() ?: return -1
+    }.getOrNull() ?: return null
     val sectionCount = nativeVectorSize(sections)
-    if (sectionCount < 0) return -1
+    if (sectionCount < 0) return null
     var wordTimedLines = 0
+    var lineTimingFound = false
+    var lineTimingUnreadable = false
     for (sectionIndex in 0 until sectionCount.coerceAtMost(16)) {
         val section = nativeVectorNativeItem(sections, sectionIndex) ?: continue
         val linesVector = runCatching {
@@ -371,10 +383,27 @@ internal fun AppleMissingLyricsHooks.readNativeWordTimedLineCount(pointer: Any):
                 )
             }.getOrNull() ?: continue
             if (nativeVectorSize(wordsVector) > 0) wordTimedLines += 1
+            if (lineTimingFound || lineTimingUnreadable) continue
+            val begin = nativeLineTime(line, AppleMusicRuntimeMember.LYRICS_NATIVE_BEGIN_METHOD)
+            val end = nativeLineTime(line, AppleMusicRuntimeMember.LYRICS_NATIVE_END_METHOD)
+            if (begin == null || end == null) {
+                lineTimingUnreadable = true
+            } else if (end > begin) {
+                lineTimingFound = true
+            }
         }
     }
-    return wordTimedLines
+    return AppleNativeLineTiming(
+        wordTimedLineCount = wordTimedLines,
+        // 有行读不到时间时不能断定整首无时间轴，按有时间轴处理。
+        lineTimingPresent = lineTimingFound || lineTimingUnreadable,
+    )
 }
+
+private fun AppleMissingLyricsHooks.nativeLineTime(line: Any, member: AppleMusicRuntimeMember): Long? =
+    runCatching {
+        (AppleReflection.call(line, lyricsNativeTarget.runtimeMemberName(member)) as? Number)?.toLong()
+    }.getOrNull()
 
 internal fun AppleMissingLyricsHooks.nativeVectorSize(vector: Any): Int = runCatching {
     (AppleReflection.call(

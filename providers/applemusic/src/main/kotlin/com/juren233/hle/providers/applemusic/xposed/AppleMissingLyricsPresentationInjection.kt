@@ -45,28 +45,48 @@ internal fun AppleMissingLyricsHooks.recordAppleNativePresentationResult(pointer
         ?: currentPlaybackQueueMediaId()?.takeIf(String::isNotBlank)
         ?: return
     val lineCount = pointer?.let(::readNativeLineCount) ?: 0
-    val wordTimedLineCount = pointer?.let(::readNativeWordTimedLineCount) ?: 0
-    if (lineCount > 0 && wordTimedLineCount >= 0) {
-        val stats = AppleNativeLyricsTimingStats(
-            lineCount = lineCount,
-            wordTimedLineCount = wordTimedLineCount,
-        )
-        val queueSongId = currentPlaybackQueueMediaId()?.takeIf(String::isNotBlank)
-        val identity = store.playbackIdentity(queueSongId)
-        val contentSongId = when {
-            identity?.adamId?.toString() == songId -> identity.contentSongId
-            queueSongId == songId -> queueSongId
-            else -> songId
-        }
-        nativeAlternatives.rememberTiming(songId, contentSongId, stats)
-    }
+    val stats = pointer?.takeIf { lineCount > 0 }?.let { rememberNativeLyricsTiming(songId, it, lineCount) }
     onNativeLyricsState(songId = songId, hasLines = lineCount > 0)
     if (AppleProviderEnvironment.diagnosticsEnabled) {
         ProviderLogger.diagnostic(
             "Apple Music 原生歌词主结果: id=$songId, lines=$lineCount, " +
-                "wordTimedLines=$wordTimedLineCount, pointer=${pointer != null}"
+                "wordTimedLines=${stats?.wordTimedLineCount ?: 0}, " +
+                "untimed=${stats?.isUntimed == true}, pointer=${pointer != null}"
         )
     }
+}
+
+/**
+ * 读取并记下 Apple 原生模型的时间统计（逐字行数、是否有行时间轴）。所有确认原生歌词存在的入口
+ * 都必须先调用它再调用 [onNativeLyricsState]，后者据此判断无时间轴原生是否由补充歌词替换。
+ * 原生模型没有歌词行或读取失败时返回 null。[lineCount] 已读取时传入，避免重复遍历。
+ */
+internal fun AppleMissingLyricsHooks.rememberNativeLyricsTiming(
+    songId: String,
+    pointer: Any,
+    lineCount: Int = readNativeLineCount(pointer),
+): AppleNativeLyricsTimingStats? {
+    if (lineCount <= 0 || isSupplementPointer(pointer)) return null
+    // 同一首歌的原生模型会经结果回调、构建与 I2 呈现多次到达；行数相同时沿用已读的统计，
+    // 避免在主线程重复遍历全部歌词行。
+    nativeAlternatives.timing(songId)
+        ?.takeIf { it.lineCount == lineCount && it.lineTimingPresent != null }
+        ?.let { return it }
+    val timing = readNativeLineTiming(pointer) ?: return null
+    val stats = AppleNativeLyricsTimingStats(
+        lineCount = lineCount,
+        wordTimedLineCount = timing.wordTimedLineCount,
+        lineTimingPresent = timing.lineTimingPresent,
+    )
+    val queueSongId = currentPlaybackQueueMediaId()?.takeIf(String::isNotBlank)
+    val identity = store.playbackIdentity(queueSongId)
+    val contentSongId = when {
+        identity?.adamId?.toString() == songId -> identity.contentSongId
+        queueSongId == songId -> queueSongId
+        else -> songId
+    }
+    nativeAlternatives.rememberTiming(songId, contentSongId, stats)
+    return stats
 }
 
 /**

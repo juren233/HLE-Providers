@@ -106,13 +106,32 @@ internal fun appleLyricsSourcePresentationAction(
     else -> AppleLyricsSourcePresentationAction.REFRESH_ONLY
 }
 
+/**
+ * [lineTimingPresent]：是否至少有一行 `end > begin`；null 表示未读取。
+ * 与 AppleSongMapper 标记 `APPLE_NATIVE_LYRICS_UNTIMED` 的规则一致：整首没有任何行或逐字时间轴才算无时间轴。
+ */
 internal data class AppleNativeLyricsTimingStats(
     val lineCount: Int,
     val wordTimedLineCount: Int,
+    val lineTimingPresent: Boolean? = null,
 ) {
     val isWordTimed: Boolean
         get() = wordTimedLineCount > 0
+
+    /** 原生歌词有正文但整首没有时间轴：Apple 歌词页只能静态显示，不随播放滚动。 */
+    val isUntimed: Boolean
+        get() = lineCount > 0 && wordTimedLineCount == 0 && lineTimingPresent == false
 }
+
+/**
+ * 「为无歌词的歌曲补充歌词」开启时，整首无时间轴的 Apple 原生歌词也由补充歌词替换；
+ * 用户在来源菜单里明确选回「Apple Music 原生」时让位。
+ */
+internal fun shouldReplaceUntimedAppleNativeLyrics(
+    fillMissingLyricsEnabled: Boolean,
+    nativeStats: AppleNativeLyricsTimingStats?,
+    userChoseAppleNative: Boolean,
+): Boolean = fillMissingLyricsEnabled && nativeStats?.isUntimed == true && !userChoseAppleNative
 
 internal fun shouldUseTtmlCatalogOverAppleNativeLyrics(
     nativeStats: AppleNativeLyricsTimingStats?,

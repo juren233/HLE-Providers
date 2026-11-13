@@ -313,7 +313,7 @@ internal class AppleMissingLyricsHooks(
             AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_ALWAYS_SHOW_SOURCE_SWITCH,
         ) == true
 
-    private fun isFillMissingLyricsEnabled(): Boolean =
+    internal fun isFillMissingLyricsEnabled(): Boolean =
         preferences()?.getBoolean(
             AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS,
             AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS,
@@ -402,6 +402,8 @@ internal class AppleMissingLyricsHooks(
             AppleNativeLyricsTakeoverDecision(true, "ttml_catalog_selected")
         } else if (shouldPreferManualLyricsSource(songId)) {
             AppleNativeLyricsTakeoverDecision(true, "manual_lyrics_source_selected")
+        } else if (shouldPreferUntimedNativeReplacement(songId)) {
+            AppleNativeLyricsTakeoverDecision(true, "untimed_native_replaced")
         } else if (hasKnownNativeLyrics(songId)) {
             AppleNativeLyricsTakeoverDecision(false, "native_lyrics_present")
         } else {

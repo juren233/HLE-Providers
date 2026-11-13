@@ -120,6 +120,9 @@ internal fun AppleLyricsSupplementHooks.reportNativeLyricsState(
     // 无歌词结果只接受 I2 主结果入口的明确完成信号；R2/时间轴构建中的空模型
     // 可能只是加载中间态，不能据此提前允许三方接管。
     if (!appleNativeSongHasLines(songNative)) return
+    if (songId != null && sourcePointer != null) {
+        missingLyricsSupplement().rememberNativeLyricsTiming(songId, sourcePointer)
+    }
     missingLyricsSupplement().onNativeLyricsState(
         songId = songId,
         hasLines = true,

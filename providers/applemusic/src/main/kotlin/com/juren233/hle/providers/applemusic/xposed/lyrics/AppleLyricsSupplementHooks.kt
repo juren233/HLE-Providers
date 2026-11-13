@@ -578,6 +578,9 @@ internal class AppleLyricsSupplementHooks(
                 "Apple Music 原生歌词请求结果已发射: id=${nativeSongId ?: songId}, " +
                     "hasLines=$hasLines"
             )
+            (nativeSongId ?: songId)?.takeIf { hasLines }?.let { id ->
+                missingLyricsSupplement().rememberNativeLyricsTiming(id, pointer)
+            }
             missingLyricsSupplement().onNativeLyricsState(
                 songId = nativeSongId ?: songId,
                 hasLines = hasLines,

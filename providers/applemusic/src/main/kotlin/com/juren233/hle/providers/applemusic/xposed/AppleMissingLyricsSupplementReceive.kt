@@ -67,7 +67,12 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
     }
     // 用户手动选的来源替换原生歌词：只对本次播放有效，不写磁盘缓存。
     val manualOverNative = manualChoice && hasKnownNativeLyrics(songId) && !ttmlCatalogSupplement
-    if (hasKnownNativeLyrics(songId) && !ttmlCatalogSupplement && !manualOverNative) {
+    // 原生歌词整首无时间轴：补充歌词替换它。核心每次播放都会重新检索，同样不写磁盘缓存，
+    // 避免下次播放在原生结果确认前把缓存当作无歌词补充先行发布。
+    val untimedOverNative = !manualOverNative && !ttmlCatalogSupplement &&
+        hasKnownNativeLyrics(songId) && isUntimedNativeReplacementAllowed(songId)
+    val replacesKnownNative = manualOverNative || untimedOverNative
+    if (hasKnownNativeLyrics(songId) && !ttmlCatalogSupplement && !replacesKnownNative) {
         ProviderLogger.info(
             "Apple Music 无歌词补充被原生歌词拒绝: id=$songId, " +
                 "reason=native_lyrics_present"
@@ -75,7 +80,7 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
         discardSupplementForConfirmedNativeLyrics(songId, supplementOffered = true)
         return
     }
-    if (ttmlCatalogSupplement || manualOverNative) {
+    if (ttmlCatalogSupplement || replacesKnownNative) {
         candidates.accept(songId)
     }
     clearSupplementRevoked(songId)
@@ -109,15 +114,17 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
     if (updateResult.requiresNativeRebuild) {
         ProviderLogger.info(
             "Apple Music 无歌词补充已接收: id=$songId, " +
-                "lines=${incomingLines.size}, wordLines=$incomingWordLines"
+                "lines=${incomingLines.size}, wordLines=$incomingWordLines, " +
+                "untimedOverNative=$untimedOverNative"
         )
         val diskWriteStartedAtNanos = SystemClock.elapsedRealtimeNanos()
-        val diskSaved = manualOverNative || DiskSongManager.saveMissingLyrics(song)
+        val diskSaved = replacesKnownNative || DiskSongManager.saveMissingLyrics(song)
         AppleSourceSwitchPerformanceDiagnostics.record(
             songId = songId,
             event = "disk_cache_write",
             durationNanos = SystemClock.elapsedRealtimeNanos() - diskWriteStartedAtNanos,
-            details = "saved=$diskSaved,contentChanged=true,manualOverNative=$manualOverNative",
+            details = "saved=$diskSaved,contentChanged=true,manualOverNative=$manualOverNative," +
+                "untimedOverNative=$untimedOverNative",
         )
         if (!diskSaved) {
             ProviderLogger.debug(
@@ -154,7 +161,7 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
     }
     // 正文/时间轴没有变化时保留现有 native pointer。翻译变化只重绑当前可见行，
     // 元数据变化只持久化，完全相同的竞速载荷不再写盘或刷新播放页。
-    if (updateResult.shouldPersist && store.hasContent(songId) && !manualOverNative) {
+    if (updateResult.shouldPersist && store.hasContent(songId) && !replacesKnownNative) {
         val diskWriteStartedAtNanos = SystemClock.elapsedRealtimeNanos()
         AppleSourceSwitchPerformanceDiagnostics.stageForSong(
             songId = songId,
@@ -200,6 +207,7 @@ internal fun AppleMissingLyricsHooks.receiveSupplement(song: Song) {
 
 internal fun AppleMissingLyricsHooks.clearSupplement(songId: String?) {
     candidates.invalidateRestoreWindow()
+    val untimedNativePointer = songId?.takeIf(String::isNotBlank)?.let(::untimedNativePointerToRestore)
     songId?.takeIf(String::isNotBlank)?.let { id ->
         candidates.revokeAcceptance(id)
         candidates.revokeAvailability(id)
@@ -210,6 +218,30 @@ internal fun AppleMissingLyricsHooks.clearSupplement(songId: String?) {
         ProviderLogger.debug("Apple Music 无歌词补充已清除: id=$songId")
         refreshNowPlaying(songId)
     }
+    if (songId != null && untimedNativePointer != null) {
+        restoreUntimedNativePresentation(songId, untimedNativePointer)
+    }
+}
+
+/**
+ * Store 里的补充歌词正在替换整首无时间轴的 Apple 原生歌词时，返回需要重新呈现的原生模型指针。
+ * 只看替换状态本身、不看开关：开关关闭后清除补充时同样要还原原生歌词页。
+ */
+internal fun AppleMissingLyricsHooks.untimedNativePointerToRestore(songId: String): Any? {
+    if (!store.hasContent(songId) || !hasKnownNativeLyrics(songId)) return null
+    if (nativeLyricsTimingStats(songId)?.isUntimed != true) return null
+    return nativeAlternatives.pointer(songId)?.takeIf { readNativeLineCount(it) > 0 }
+}
+
+/** 替换无时间轴原生的补充歌词被清除：撤销标记随后续原生发布告知核心，并让歌词页重新呈现原生模型。 */
+internal fun AppleMissingLyricsHooks.restoreUntimedNativePresentation(songId: String, nativePointer: Any) {
+    markSupplementRevoked(songId)
+    ProviderLogger.info("Apple Music 无时间轴原生歌词的补充替换已撤销，恢复原生歌词: id=$songId")
+    requestLyricsSourcePresentation(
+        songId = songId,
+        source = AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE,
+        pointer = nativePointer,
+    )
 }
 
 /** 全中文歌词不携带在线翻译：磁盘缓存恢复前剥离旧版本构建写入的翻译列。 */
@@ -292,6 +324,7 @@ internal fun AppleMissingLyricsHooks.onPreferenceChanged() {
     }
     if (!isEnabled() && !manualSelection) {
         val songId = currentSongId
+        val untimedNativePointer = songId?.takeIf(String::isNotBlank)?.let(::untimedNativePointerToRestore)
         songId?.let {
             candidates.revokeAcceptance(it)
             candidates.revokeAvailability(it)
@@ -300,6 +333,9 @@ internal fun AppleMissingLyricsHooks.onPreferenceChanged() {
         }
         if (store.clear()) {
             refreshNowPlaying(songId)
+        }
+        if (songId != null && untimedNativePointer != null) {
+            restoreUntimedNativePresentation(songId, untimedNativePointer)
         }
     }
 }

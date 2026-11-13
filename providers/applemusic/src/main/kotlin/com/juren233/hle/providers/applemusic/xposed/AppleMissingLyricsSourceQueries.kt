@@ -199,9 +199,35 @@ internal fun AppleMissingLyricsHooks.shouldPreferManualLyricsSource(songId: Stri
     return isManualLyricsSourceChoice(contentSongId, store.sourceInfo(contentSongId)?.selectedSource)
 }
 
-/** 补充歌词模型是否应替换 Apple 原生模型：目录源被选中并符合资格，或用户手动选了该来源。 */
+/**
+ * 这首歌的 Apple 原生歌词整首无时间轴，且「为无歌词的歌曲补充歌词」开启：补充歌词可以替换它。
+ * 只看原生时间统计与开关，不要求 Store 已有内容（接收补充载荷时用它决定是否接受）。
+ */
+internal fun AppleMissingLyricsHooks.isUntimedNativeReplacementAllowed(songId: String?): Boolean {
+    val contentSongId = songId?.takeIf(String::isNotBlank) ?: return false
+    // 以用户在来源菜单里最近一次点选为准：选回原生后再点三方来源，替换应恢复。
+    val latestChoice = lyricsSourceSelection.requested(contentSongId)
+        ?: lyricsSourceSelection.selected(contentSongId)
+    return shouldReplaceUntimedAppleNativeLyrics(
+        fillMissingLyricsEnabled = isFillMissingLyricsEnabled(),
+        nativeStats = nativeLyricsTimingStats(contentSongId),
+        userChoseAppleNative = latestChoice == AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE,
+    )
+}
+
+/** 无时间轴原生歌词正由 Store 里的补充歌词替换。 */
+internal fun AppleMissingLyricsHooks.shouldPreferUntimedNativeReplacement(songId: String?): Boolean {
+    val contentSongId = songId?.takeIf(String::isNotBlank) ?: return false
+    return store.hasContent(contentSongId) && isUntimedNativeReplacementAllowed(contentSongId)
+}
+
+/**
+ * 补充歌词模型是否应替换 Apple 原生模型：目录源被选中并符合资格、用户手动选了该来源，
+ * 或原生歌词整首无时间轴且开启了「为无歌词的歌曲补充歌词」。
+ */
 internal fun AppleMissingLyricsHooks.shouldPreferSupplementOverNative(songId: String?): Boolean =
-    shouldPreferTtmlCatalog(songId) || shouldPreferManualLyricsSource(songId)
+    shouldPreferTtmlCatalog(songId) || shouldPreferManualLyricsSource(songId) ||
+        shouldPreferUntimedNativeReplacement(songId)
 
 internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
     songId: String?,
@@ -334,8 +360,12 @@ internal fun AppleMissingLyricsHooks.timingDebugSnapshot(songId: String?): Strin
 
 internal fun AppleMissingLyricsHooks.hasSupplementContent(songId: String?): Boolean {
     val contentSongId = songId?.takeIf(String::isNotBlank) ?: return false
-    // 用户手动选的来源正在替换原生歌词：歌词页显示的就是补充模型。
-    if (shouldPreferManualLyricsSource(contentSongId)) return true
+    // 用户手动选的来源、或替换无时间轴原生的补充歌词正在显示：歌词页显示的就是补充模型。
+    if (shouldPreferManualLyricsSource(contentSongId) ||
+        shouldPreferUntimedNativeReplacement(contentSongId)
+    ) {
+        return true
+    }
     // 冷启动时来源菜单可能先于可用性回调查询 Store；此处同样允许磁盘恢复。
     restoreCachedSupplement(contentSongId)
     maybeActivateSupplement(contentSongId, trigger = "source_menu_query")
@@ -403,6 +433,11 @@ internal fun AppleMissingLyricsHooks.onNativeLyricsState(songId: String?, hasLin
             nativeTakeoverGate.onNativeResult(songId, hasLyrics = true)
         }
         if (shouldPreferSupplementOverNative(contentSongId)) {
+            // 补充载荷先于原生结果到达时按普通无歌词补充写过磁盘；无时间轴替换不留磁盘缓存，
+            // 与 receiveSupplement 已知原生时的处理一致。
+            if (shouldPreferUntimedNativeReplacement(contentSongId)) {
+                DiskSongManager.deleteMissingLyrics(contentSongId)
+            }
             candidates.accept(contentSongId)
             scheduleNativeLyricsModel(contentSongId)
             mainHandler.post { refreshNowPlaying(contentSongId) }
