@@ -6,6 +6,8 @@
 
 package com.juren233.hle.providers.applemusic.xposed
 
+import com.juren233.hle.providers.applemusic.xposed.SongRepository.applyCurrentMetadata
+import com.juren233.hle.providers.applemusic.xposed.model.AppleSong
 import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
 import io.github.proify.lyricon.lyric.model.Song
@@ -76,5 +78,38 @@ class SongRepositoryTest {
         )
 
         assertEquals(listOf("valid"), normalized.lyrics.orEmpty().map { it.text })
+    }
+
+    @Test
+    fun trackDurationReplacesNativeLyricsBodyDuration() {
+        // 《Young》id=1207120543：原生歌词时长 214270 ms，播放媒体项时长 224816 ms。
+        MediaMetadataCache.put(
+            MediaMetadataCache.Metadata(
+                id = "1207120543",
+                title = "Young",
+                artist = "The Chainsmokers",
+                genre = null,
+                duration = 224_816L,
+                queueId = 1L,
+            )
+        )
+        val song = AppleSong(adamId = "1207120543", duration = 214_270).applyCurrentMetadata()
+        assertEquals(224_816, song.duration)
+    }
+
+    @Test
+    fun nativeLyricsDurationStaysWhenTrackDurationIsUnknown() {
+        MediaMetadataCache.put(
+            MediaMetadataCache.Metadata(
+                id = "test-unknown-duration",
+                title = "Song",
+                artist = "Artist",
+                genre = null,
+                duration = 0L,
+                queueId = 1L,
+            )
+        )
+        val song = AppleSong(adamId = "test-unknown-duration", duration = 180_000).applyCurrentMetadata()
+        assertEquals(180_000, song.duration)
     }
 }

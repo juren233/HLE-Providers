@@ -142,7 +142,7 @@ object SongRepository {
         return song.copy(lyrics = normalizedLines)
     }
 
-    private fun AppleSong.applyCurrentMetadata(): AppleSong = apply {
+    internal fun AppleSong.applyCurrentMetadata(): AppleSong = apply {
         val metadata = adamId?.let(MediaMetadataCache::getMetadataById) ?: return@apply
         name = metadata.title
         artist = metadata.artist
@@ -151,6 +151,10 @@ object SongRepository {
         originalArtist = metadata.originalArtist
         originalAlbum = metadata.originalAlbum
         originalMetadataResolved = metadata.originalMetadataResolved
+        // 原生歌词对象的时长是歌词正文的长度，不是曲目时长（《Young》id=1207120543：歌词 214270、
+        // 曲目 224816），在线取词按它比对时长会偏向时长凑巧接近的 Remix。播放媒体项的
+        // getDuration 为毫秒（原包 MetadataUtil.itemDurationUs 将其乘 1000 得微秒），优先使用。
+        metadata.duration.takeIf { it > 0L }?.let { duration = it.toInt() }
     }
 
     private fun MediaMetadataCache.Metadata.toLyricMetadata() = lyricMetadataOf(
