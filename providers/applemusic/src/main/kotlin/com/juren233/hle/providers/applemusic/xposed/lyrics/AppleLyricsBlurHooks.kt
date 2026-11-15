@@ -741,6 +741,38 @@ internal class AppleLyricsBlurHooks(
         }
     }
 
+    /** debug 专用：见 [AppleLyricsTouchDiagnostics]，只读视图树并写日志。 */
+    private fun installLyricsTouchDiagnostics(
+        recyclerClass: Class<*>,
+        installedHooks: MutableList<String>,
+        failedHooks: MutableList<String>,
+    ) {
+        val diagnostics = AppleLyricsTouchDiagnostics(::isAppleLyricsRecyclerView)
+        listOf("onInterceptTouchEvent", "onTouchEvent").forEach { name ->
+            runCatching {
+                val method = AppleReflection.findMethod(recyclerClass, name, parameterCount = 1)
+                hookRegistrar.installHook(method, after = { chain, result ->
+                    diagnostics.onRecyclerEvent(name, chain.thisObject, chain.args.firstOrNull(), result)
+                })
+                installedHooks += "RecyclerView.$name(diag)"
+            }.onFailure { throwable ->
+                failedHooks += "RecyclerView.$name(diag):${throwable.javaClass.simpleName}"
+            }
+        }
+        runCatching {
+            val method = Activity::class.java.getMethod(
+                "dispatchTouchEvent",
+                android.view.MotionEvent::class.java,
+            )
+            hookRegistrar.installHook(method, after = { chain, _ ->
+                diagnostics.onActivityTouch(chain.thisObject, chain.args.firstOrNull())
+            })
+            installedHooks += "Activity.dispatchTouchEvent(diag)"
+        }.onFailure { throwable ->
+            failedHooks += "Activity.dispatchTouchEvent(diag):${throwable.javaClass.simpleName}"
+        }
+    }
+
     fun hookAppleLyricsBlurEffect() {
         runCatching {
             val recyclerClass = classLoader.loadClass("androidx.recyclerview.widget.RecyclerView")
@@ -857,6 +889,10 @@ internal class AppleLyricsBlurHooks(
                 }.onFailure { throwable ->
                     failedHooks += "RecyclerView.$name:${throwable.javaClass.simpleName}"
                 }
+            }
+
+            if (AppleProviderEnvironment.diagnosticsEnabled) {
+                installLyricsTouchDiagnostics(recyclerClass, installedHooks, failedHooks)
             }
 
             hookResolver.resolveClasses(AppleMusicHookPoint.LYRICS_RECYCLER_ADAPTER)

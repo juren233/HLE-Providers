@@ -271,9 +271,10 @@ internal fun AppleMissingLyricsHooks.restoreCachedSupplement(songId: String) {
     }
     // 全中文翻译门禁同样适用于磁盘恢复：旧版本构建写入的缓存可能携带在线假翻译。
     val cached = stripFullyChineseTranslations(loaded)
-    val cachedIsTtmlCatalog = Source.isTtmlCatalogName(
+    val cachedIsTtmlCatalog = isLineToWordSource(
         cached.metadata
-            ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE)
+            ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE),
+        songId,
     )
     val cachedTtmlCatalogEligible = cachedIsTtmlCatalog && isTtmlCatalogTakeoverAllowed(
         songId = songId,
@@ -309,11 +310,19 @@ internal fun AppleMissingLyricsHooks.restoreCachedSupplement(songId: String) {
 internal fun AppleMissingLyricsHooks.onPreferenceChanged() {
     candidates.resetRestoreAttempts()
     val currentSongId = currentPlaybackQueueMediaId()
-    val currentIsTtmlCatalog = Source.isTtmlCatalogName(
-        store.sourceInfo(store.contentSongId())?.selectedSource
-    )
+    val currentContentSongId = store.contentSongId()
+    val currentSource = store.sourceInfo(currentContentSongId)?.selectedSource
+    val currentIsTtmlCatalog = isLineToWordSource(currentSource, currentContentSongId)
     val manualSelection = shouldPreferManualLyricsSource(currentSongId)
-    if (!isLineToWordLyricsEnabled() && currentIsTtmlCatalog && !manualSelection) {
+    // 「所有来源」改回别的模式后，原生歌词上由搜索源完成的逐字升级不再成立。
+    val staleSearchUpgrade = !currentIsTtmlCatalog &&
+        !currentSource.isNullOrBlank() &&
+        currentSource != AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE &&
+        Source.entries.any { it.name == currentSource } &&
+        !currentContentSongId.isNullOrBlank() &&
+        hasKnownNativeLyrics(currentContentSongId) &&
+        !shouldPreferUntimedNativeReplacement(currentContentSongId)
+    if (((!isLineToWordLyricsEnabled() && currentIsTtmlCatalog) || staleSearchUpgrade) && !manualSelection) {
         currentSongId?.let {
             lyricsSourceSelection.remove(it)
             candidates.revokeAcceptance(it)

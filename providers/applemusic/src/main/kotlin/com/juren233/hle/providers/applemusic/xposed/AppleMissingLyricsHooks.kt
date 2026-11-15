@@ -16,13 +16,14 @@ import com.juren233.hyperlyricsenhanced.contract.AppleMusicPreferenceKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.AppleMissingLyricsSourceInfo
 import com.juren233.hyperlyricsenhanced.common.lyric.ChineseLyricsPolicy
 import com.juren233.hyperlyricsenhanced.lyric.model.Song
+import com.juren233.hyperlyricsenhanced.online.model.Source
 import com.juren233.hyperlyricsenhanced.provider.OfficialProviderCall
 import com.juren233.hle.providers.applemusic.xposed.internal.ThreadLocalStack
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 「为无歌词的歌曲补充歌词」功能在 Apple Music 进程内的实现：
+ * 「无歌词/无时间轴歌曲使用三方歌词」功能在 Apple Music 进程内的实现：
  *
  * 1. 接收 SystemUI 回传的三方在线源歌词；
  * 2. 编译成 Apple Music 原生 TTML，通过 Apple 自己的 TTMLParserNative
@@ -319,11 +320,29 @@ internal class AppleMissingLyricsHooks(
             AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_FILL_MISSING_LYRICS,
         ) == true
 
+    /** 「原生逐行歌词转用三方逐字歌词」的来源范围：不开启 / 仅 TTML 源 / 所有来源。 */
+    internal fun lineToWordSourceMode(): Int =
+        preferences()?.getInt(
+            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LINE_TO_WORD_SOURCE_MODE,
+            AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LINE_TO_WORD_SOURCE_MODE,
+        ) ?: AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LINE_TO_WORD_SOURCE_MODE
+
     internal fun isLineToWordLyricsEnabled(): Boolean =
-        preferences()?.getBoolean(
-            AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LINE_TO_WORD_LYRICS,
-            AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LINE_TO_WORD_LYRICS,
-        ) == true
+        lineToWordSourceMode() != AppleMusicPreferenceKeys.APPLE_MUSIC_LINE_TO_WORD_SOURCE_MODE_OFF
+
+    /**
+     * [name] 是否是逐行转逐字可选用的来源：TTML 目录源始终可以；「所有来源」下，其余已知来源只在这首歌
+     * 已确认有 Apple 原生歌词时才算（原生没有歌词时它们走普通补充链路，不是对原生的升级）。
+     */
+    internal fun isLineToWordSource(name: String?, songId: String?): Boolean {
+        if (name.isNullOrBlank()) return false
+        if (Source.isTtmlCatalogName(name)) return true
+        if (lineToWordSourceMode() != AppleMusicPreferenceKeys.APPLE_MUSIC_LINE_TO_WORD_SOURCE_MODE_ALL) {
+            return false
+        }
+        if (Source.entries.none { it.name == name }) return false
+        return !songId.isNullOrBlank() && hasKnownNativeLyrics(songId)
+    }
 
     /**
      * 当前补充链应服务的歌曲 ID。队列身份未发布时，歌词页已确认的可见歌曲 ID

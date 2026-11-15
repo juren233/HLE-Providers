@@ -92,8 +92,9 @@ internal fun appleLyricsSourcePresentationAction(
     hasTtmlCatalogPointer: Boolean,
     hasAppleNativePointer: Boolean,
     manualOverNative: Boolean = false,
+    isLineToWordSource: (String) -> Boolean = Source::isTtmlCatalogName,
 ): AppleLyricsSourcePresentationAction = when {
-    Source.isTtmlCatalogName(source) || manualOverNative -> if (hasTtmlCatalogPointer) {
+    isLineToWordSource(source) || manualOverNative -> if (hasTtmlCatalogPointer) {
         AppleLyricsSourcePresentationAction.PRESENT_TTML_CATALOG
     } else {
         AppleLyricsSourcePresentationAction.BUILD_TTML_CATALOG
@@ -124,7 +125,7 @@ internal data class AppleNativeLyricsTimingStats(
 }
 
 /**
- * 「为无歌词的歌曲补充歌词」开启时，整首无时间轴的 Apple 原生歌词也由补充歌词替换；
+ * 「无歌词/无时间轴歌曲使用三方歌词」开启时，整首无时间轴的 Apple 原生歌词也由补充歌词替换；
  * 用户在来源菜单里明确选回「Apple Music 原生」时让位。
  */
 internal fun shouldReplaceUntimedAppleNativeLyrics(
@@ -155,18 +156,21 @@ internal fun shouldAllowTtmlCatalogTakeover(
 internal fun shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
     ttmlCatalogEnabled: Boolean,
     storedSourceInfo: AppleMissingLyricsSourceInfo?,
+    isLineToWordSource: (String) -> Boolean = Source::isTtmlCatalogName,
 ): Boolean = ttmlCatalogEnabled && storedSourceInfo?.statuses.orEmpty().any {
-    Source.isTtmlCatalogName(it.source) && it.found && it.wordTimed
+    isLineToWordSource(it.source) && it.found && it.wordTimed
 }
 
 internal fun shouldShowStoredSupplementSourceMenu(
     normalSupplementMenu: Boolean,
     ttmlCatalogEnabled: Boolean,
     storedSourceInfo: AppleMissingLyricsSourceInfo?,
+    isLineToWordSource: (String) -> Boolean = Source::isTtmlCatalogName,
 ): Boolean = normalSupplementMenu ||
     shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
         ttmlCatalogEnabled = ttmlCatalogEnabled,
         storedSourceInfo = storedSourceInfo,
+        isLineToWordSource = isLineToWordSource,
     )
 
 /**

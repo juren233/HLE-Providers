@@ -118,7 +118,7 @@ internal fun AppleMissingLyricsHooks.isTtmlCatalogEligibleForSong(
 ): Boolean {
     if (!isLineToWordLyricsEnabled()) return false
     val status = sourceInfo?.statuses.orEmpty().firstOrNull {
-        Source.isTtmlCatalogName(it.source) && it.found && it.wordTimed
+        isLineToWordSource(it.source, songId) && it.found && it.wordTimed
     }
     val ttmlCatalogLineCount = lineCountOverride ?: status?.lineCount ?: return false
     return shouldUseTtmlCatalogOverAppleNativeLyrics(
@@ -158,10 +158,12 @@ internal fun AppleMissingLyricsHooks.nativeLyricsTimingStats(songId: String): Ap
     return identity?.adamId?.toString()?.let({ nativeAlternatives.timing(it) })
 }
 
+/** 补充歌词是否来自逐行转逐字的来源（TTML 目录源；「所有来源」下含原生已有歌词的歌曲上的搜索源）。 */
 internal fun AppleMissingLyricsHooks.isTtmlCatalogSupplement(song: Song): Boolean =
-    Source.isTtmlCatalogName(
+    isLineToWordSource(
         song.metadata
-            ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE)
+            ?.getString(com.juren233.hyperlyricsenhanced.common.lyric.LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE),
+        song.id,
     )
 
 internal fun AppleMissingLyricsHooks.shouldPreferTtmlCatalog(songId: String?): Boolean {
@@ -169,7 +171,7 @@ internal fun AppleMissingLyricsHooks.shouldPreferTtmlCatalog(songId: String?): B
     if (!isLineToWordLyricsEnabled() || !store.hasContent(contentSongId)) return false
     val selectedSource = lyricsSourceSelection.selected(contentSongId)
         ?: store.sourceInfo(contentSongId)?.selectedSource
-    return Source.isTtmlCatalogName(selectedSource) &&
+    return isLineToWordSource(selectedSource, contentSongId) &&
         isTtmlCatalogTakeoverAllowed(contentSongId)
 }
 
@@ -190,7 +192,7 @@ internal fun AppleMissingLyricsHooks.isManualLyricsSourceChoice(songId: String, 
 }
 
 /**
- * Store 里的补充歌词正是用户手动选的来源：它替换 Apple 原生歌词，不受「为无歌词的歌曲补充歌词」
+ * Store 里的补充歌词正是用户手动选的来源：它替换 Apple 原生歌词，不受「无歌词/无时间轴歌曲使用三方歌词」
  * 「逐行转逐字」两个自动开关以及目录源资格限制。选回「Apple Music 原生」或切歌后不再成立。
  */
 internal fun AppleMissingLyricsHooks.shouldPreferManualLyricsSource(songId: String?): Boolean {
@@ -200,7 +202,7 @@ internal fun AppleMissingLyricsHooks.shouldPreferManualLyricsSource(songId: Stri
 }
 
 /**
- * 这首歌的 Apple 原生歌词整首无时间轴，且「为无歌词的歌曲补充歌词」开启：补充歌词可以替换它。
+ * 这首歌的 Apple 原生歌词整首无时间轴，且「无歌词/无时间轴歌曲使用三方歌词」开启：补充歌词可以替换它。
  * 只看原生时间统计与开关，不要求 Store 已有内容（接收补充载荷时用它决定是否接受）。
  */
 internal fun AppleMissingLyricsHooks.isUntimedNativeReplacementAllowed(songId: String?): Boolean {
@@ -223,7 +225,7 @@ internal fun AppleMissingLyricsHooks.shouldPreferUntimedNativeReplacement(songId
 
 /**
  * 补充歌词模型是否应替换 Apple 原生模型：目录源被选中并符合资格、用户手动选了该来源，
- * 或原生歌词整首无时间轴且开启了「为无歌词的歌曲补充歌词」。
+ * 或原生歌词整首无时间轴且开启了「无歌词/无时间轴歌曲使用三方歌词」。
  */
 internal fun AppleMissingLyricsHooks.shouldPreferSupplementOverNative(songId: String?): Boolean =
     shouldPreferTtmlCatalog(songId) || shouldPreferManualLyricsSource(songId) ||
@@ -244,12 +246,12 @@ internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
     if (
         !successful ||
         (source != AppleMissingLyricsHooks.Companion.SourceName.APPLE_NATIVE &&
-            !Source.isTtmlCatalogName(source) && !manualOverNative)
+            !isLineToWordSource(source, contentSongId) && !manualOverNative)
     ) {
         return null
     }
     val effectiveSource = if (
-        Source.isTtmlCatalogName(source) && !manualOverNative &&
+        isLineToWordSource(source, contentSongId) && !manualOverNative &&
         !isTtmlCatalogEligibleForSong(contentSongId)
     ) {
         if (AppleProviderEnvironment.diagnosticsEnabled) {
@@ -271,6 +273,7 @@ internal fun AppleMissingLyricsHooks.onLyricsSourceSelectionChanged(
         hasTtmlCatalogPointer = ttmlCatalogPointer != null,
         hasAppleNativePointer = appleNativePointer != null,
         manualOverNative = manualOverNative,
+        isLineToWordSource = { isLineToWordSource(it, contentSongId) },
     )
     when (action) {
         AppleLyricsSourcePresentationAction.PRESENT_TTML_CATALOG -> {
@@ -384,6 +387,7 @@ internal fun AppleMissingLyricsHooks.hasSupplementContent(songId: String?): Bool
             songId = storedSongId,
             sourceInfo = store.sourceInfo(storedSongId),
         ),
+        isLineToWordSource = { isLineToWordSource(it, storedSongId) },
     )
 }
 
@@ -450,6 +454,7 @@ internal fun AppleMissingLyricsHooks.onNativeLyricsState(songId: String?, hasLin
                 shouldRetainTtmlCatalogAlternativeAfterNativePresentation(
                     ttmlCatalogEnabled = isLineToWordLyricsEnabled(),
                     storedSourceInfo = storedSourceInfo,
+                    isLineToWordSource = { isLineToWordSource(it, contentSongId) },
                 )
             candidates.revokeAcceptance(contentSongId)
             candidates.revokeAvailability(contentSongId)
