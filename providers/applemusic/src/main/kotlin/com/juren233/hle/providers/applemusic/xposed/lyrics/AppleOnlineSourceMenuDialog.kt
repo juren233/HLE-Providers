@@ -29,6 +29,7 @@ import com.juren233.hle.providers.applemusic.xposed.AppleMusicHookTarget
 import com.juren233.hle.providers.applemusic.xposed.AppleMusicProviderRuntime
 import com.juren233.hle.providers.applemusic.xposed.AppleMusicRuntimeMember
 import com.juren233.hle.providers.applemusic.xposed.AppleNativeOnlineTranslationStore
+import com.juren233.hyperlyricsenhanced.contract.AppleDirectBridgeContract
 import com.juren233.hyperlyricsenhanced.contract.AppleSourceSwitchPerformanceDiagnostics
 import com.juren233.hle.providers.applemusic.xposed.AppleReflection
 import com.juren233.hle.providers.applemusic.xposed.ConfirmedOnlineSourceSelection
@@ -307,10 +308,40 @@ internal fun AppleOnlineSourceMenuHooks.dialogWidth(context: android.content.Con
 internal fun AppleOnlineSourceMenuHooks.hairline(context: android.content.Context): Int =
     (context.resources.displayMetrics.density * 0.5f).roundToInt().coerceAtLeast(1)
 
+/**
+ * 「清除当前歌曲缓存歌词」：让核心清掉这首歌的全部在线缓存再重新检索。当前显示的是三方歌词时，
+ * 核心清理后按同一 requestId 重新取该来源，这里按一次普通的歌词来源切换等待结果（行显示获取中）。
+ */
+internal fun AppleOnlineSourceMenuHooks.requestSongCacheClear(songId: String) {
+    if (pendingSwitches.values.any { it.songId == songId }) return
+    val lyricsSource = currentSource(songId, "lyrics")?.takeIf { it != APPLE_NATIVE_SOURCE }
+    if (lyricsSource != null) {
+        requestOnlineSourceSwitch(
+            songId = songId,
+            contentType = "lyrics",
+            targetSource = lyricsSource,
+            binderContentType = AppleDirectBridgeContract.CONTENT_TYPE_CLEAR_CACHE,
+        )
+        return
+    }
+    val accepted = requestOnlineSource(
+        ++requestSequence,
+        songId,
+        AppleDirectBridgeContract.CONTENT_TYPE_CLEAR_CACHE,
+        "",
+    )
+    ProviderLogger.diagnostic("Apple Music 歌曲缓存清除请求投递: songId=$songId, accepted=$accepted")
+}
+
+/**
+ * @param binderContentType 发给核心的内容类型；默认与 [contentType] 相同，
+ *   清除缓存后重取歌词时为 [AppleDirectBridgeContract.CONTENT_TYPE_CLEAR_CACHE]。
+ */
 internal fun AppleOnlineSourceMenuHooks.requestOnlineSourceSwitch(
     songId: String,
     contentType: String,
     targetSource: String,
+    binderContentType: String = contentType,
 ) {
     val requestId = ++requestSequence
     val previousSource = currentSource(songId, contentType) ?: targetSource
@@ -341,7 +372,7 @@ internal fun AppleOnlineSourceMenuHooks.requestOnlineSourceSwitch(
         songId = songId,
         stage = "menu_refreshed_after_click",
     )
-    val accepted = requestOnlineSource(requestId, songId, contentType, targetSource)
+    val accepted = requestOnlineSource(requestId, songId, binderContentType, targetSource)
     AppleSourceSwitchPerformanceDiagnostics.stage(
         requestId = requestId,
         songId = songId,

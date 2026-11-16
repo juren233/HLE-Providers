@@ -690,6 +690,13 @@ internal class AppleOnlineSourceMenuHooks(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ),
         )
+        list.addView(
+            cacheClearRow(context, songId, groupColor, primaryColor, onSurfaceVariantColor),
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(context, 12) },
+        )
         val dialogRoot = FrameLayout(context).apply {
             background = roundedDrawable(context, surfaceColor, 28)
             addView(
@@ -729,6 +736,47 @@ internal class AppleOnlineSourceMenuHooks(
         )
         refreshActiveLyricsSourceDialog(songId)
         if (alwaysShowSourceSwitch()) requestSourceStatuses(songId)
+    }
+
+    /** 「清除当前歌曲缓存歌词」行：与来源行同一行高与字号，单独成组；本次弹窗内点一次后变灰。 */
+    private fun cacheClearRow(
+        context: android.content.Context,
+        songId: String,
+        groupColor: Int,
+        primaryColor: Int,
+        onSurfaceVariantColor: Int,
+    ): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = android.view.Gravity.CENTER_VERTICAL
+        minimumHeight = dp(context, 58)
+        setPadding(dp(context, 16), dp(context, 6), dp(context, 14), dp(context, 6))
+        background = roundedDrawable(context, groupColor, 18)
+        isClickable = true
+        isFocusable = true
+        addView(
+            TextView(context).apply {
+                text = AppleMenuText.pick("清除当前歌曲缓存歌词", "Clear Cached Lyrics for This Song")
+                textSize = 16f
+                setTextColor(primaryColor)
+            }
+        )
+        addView(
+            TextView(context).apply {
+                text = AppleMenuText.pick(
+                    "歌词需更新？清除缓存可重新获取",
+                    "Lyrics outdated? Clear the cache to fetch them again",
+                )
+                textSize = 12.5f
+                setTextColor(onSurfaceVariantColor)
+                setPadding(0, dp(context, 1), 0, 0)
+            }
+        )
+        setOnClickListener { row ->
+            row.isEnabled = false
+            row.isClickable = false
+            row.alpha = 0.52f
+            requestSongCacheClear(songId)
+        }
     }
 
     /** 来源弹窗打开时让核心检索全部已启用来源；各来源状态随在线内容载荷回传，没有单独的应答。 */
