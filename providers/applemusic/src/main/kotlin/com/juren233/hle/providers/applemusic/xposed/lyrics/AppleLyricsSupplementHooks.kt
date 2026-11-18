@@ -120,6 +120,7 @@ internal class AppleLyricsSupplementHooks(
     private val epoxyDataBindingFromHolderCallback: (Any?) -> Any?,
     internal val missingLyricsSupplement: () -> AppleMissingLyricsHooks,
 ) {
+    private val profiledNotifyItemChanged by lazy { runtime.profiledRecyclerNotifyItemChanged() }
     internal companion object {
         const val MAX_APPLE_SYSTEM_FONT_VARIATION_CACHE_ENTRIES = 64
         const val LEGACY_MODULE_PROMOTION_DELAY_MS = 1_000L
@@ -854,10 +855,15 @@ internal class AppleLyricsSupplementHooks(
             ?: return
         val count = range.last - range.first + 1
         runCatching {
-            AppleReflection.call(adapter, "notifyItemRangeChanged", range.first, count)
-        }.recoverCatching {
+            // Apple's androidx is R8-renamed: notifyItemChanged/notifyItemRangeChanged do not
+            // exist by name, so use the profiled notifyItemChanged(int) per visible row.
+            val notify = profiledNotifyItemChanged
             range.forEach { position ->
-                AppleReflection.call(adapter, "notifyItemChanged", position)
+                if (notify != null) {
+                    notify.invoke(adapter, position)
+                } else {
+                    AppleReflection.call(adapter, "notifyItemChanged", position)
+                }
             }
         }.onFailure {
             ProviderLogger.error(

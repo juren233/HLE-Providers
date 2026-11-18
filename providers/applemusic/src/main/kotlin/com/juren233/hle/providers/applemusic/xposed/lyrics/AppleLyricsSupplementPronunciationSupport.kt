@@ -6,9 +6,7 @@
 
 package com.juren233.hle.providers.applemusic.xposed
 
-import android.net.Uri
 import android.util.Log
-import com.juren233.hyperlyricsenhanced.contract.AppleMusicPreferenceKeys
 import com.juren233.hyperlyricsenhanced.common.lyric.RomanizationPolicy
 import kotlin.math.abs
 
@@ -446,20 +444,14 @@ internal fun AppleLyricsSupplementHooks.reportApplePronunciationRuntimeDiagnosti
         return
     }
     val message = "stage=$stage, id=$normalizedSongId, $details"
-    Log.i("ApplePronunciationDiag", message)
-    runCatching {
-        application.contentResolver.call(
-            Uri.parse("content://${AppleMusicPreferenceKeys.CLASSIC_AOD_FOCUS_REFRESH_AUTHORITY}"),
-            AppleMusicPreferenceKeys.DEBUG_APPLE_PRONUNCIATION_DIAGNOSTIC_METHOD,
-            message,
-            null,
-        )
-    }.onFailure {
-        ProviderLogger.debug(
-            "Apple 发音诊断回传失败: stage=$stage, reason=${it.message}"
-        )
-    }
+    Log.i(APPLE_PRONUNCIATION_DIAGNOSTIC_TAG, message)
+    // Apple Music cannot see the core package (Android package visibility), so a content
+    // provider call fails with "Unknown authority". The host's persistent module log reaches
+    // the core log page instead.
+    AppleProviderEnvironment.reportDiagnostic(APPLE_PRONUNCIATION_DIAGNOSTIC_TAG, message)
 }
+
+private const val APPLE_PRONUNCIATION_DIAGNOSTIC_TAG = "ApplePronunciationDiag"
 
 private fun AppleLyricsSupplementHooks.logApplePronunciationLineBinding(
     line: Any?,

@@ -31,11 +31,7 @@ internal class AppleDataBindingMetadataHooks(
     private companion object {
         const val MAX_GENERIC_RECYCLER_MEDIA_IDS = 512
     }
-    private val profiledNotifyItemChanged by lazy {
-        val point = AppleMusicHookPoint.RECYCLER_NOTIFY_ITEM_CHANGED
-        if (AppleMusicHookProfiles.exactTargets(runtime.hookResolver.version, point).isEmpty()) null
-        else runtime.hookResolver.resolveMethod(point).method
-    }
+    private val profiledNotifyItemChanged by lazy { runtime.profiledRecyclerNotifyItemChanged() }
 
     private val bindingRefs = WeakReferenceBuckets<String, Any>()
     private val bindingInstances = WeakIdentityMap<Any, Unit>()

@@ -54,6 +54,11 @@ class AppleMusicProfileBinaryTest {
         verify(AppleMusicVersion("7.0.0", 1614L), "HLE_APPLE_MUSIC_1614_APK", "HLE_APPLE_PROFILE_1614_EXPORT")
     }
 
+    @Test
+    fun `all current 1622 targets and member chains match the original APK`() {
+        verify(AppleMusicVersion("7.0.1", 1622L), "HLE_APPLE_MUSIC_1622_APK", "HLE_APPLE_PROFILE_1622_EXPORT")
+    }
+
     private fun verify(version: AppleMusicVersion, apkVariable: String, exportVariable: String) {
         val apk = System.getenv(apkVariable)
         assumeTrue("Set $apkVariable to the original ${version.displayName} base.apk", !apk.isNullOrBlank())

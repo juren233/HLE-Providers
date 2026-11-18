@@ -25,6 +25,7 @@ import android.graphics.drawable.Drawable
 import android.graphics.fonts.Font
 import android.graphics.fonts.FontFamily
 import android.graphics.fonts.FontStyle
+import org.xmlpull.v1.XmlPullParser
 import android.content.Intent
 import android.media.MediaDescription
 import android.media.MediaMetadata
@@ -278,17 +279,6 @@ internal fun AppleSystemFontHooks.createAppleWeightAdjustedTypeface(
     val usesCjkFallback = AppleSystemFontWeightPolicy.shouldUseSystemCjkFallback(
         text,
     )
-    val cjkComposite = if (usesCjkFallback) {
-        createAppleTypefaceWithSystemCjkFallback(
-            original = original,
-            semanticWeight = semanticWeight,
-            effectiveSfProWeight = effectiveWeight,
-            italic = italic,
-            textSizePx = textSizePx,
-        )
-    } else {
-        null
-    }
     // 资源文件派生仅用于 OS4（Android 17）回归环境；OS3 必须保持已验收的
     // cjkComposite → createFromTypefaceWithVariation 原顺序执行（用户约束：修 OS4 不得动 OS3 实现）。
     val resourceFile = if (Build.VERSION.SDK_INT >= 37) {
@@ -299,6 +289,20 @@ internal fun AppleSystemFontHooks.createAppleWeightAdjustedTypeface(
             text = text,
             textSizePx = textSizePx,
             semanticWeight = semanticWeight,
+        )
+    } else {
+        null
+    }
+    // OS3 上 resourceFile 恒为 null，cjkComposite 与原来一样总会计算。OS4 上资源文件结果优先，
+    // 而 fontFamilies 反射链在 Android 17 上已被 hiddenapi 拦截（AM-FONT-WEIGHT-003），
+    // 只在资源文件派生失败时才尝试，避免每次白算并报“中文系统字体 fallback 创建失败”。
+    val cjkComposite = if (usesCjkFallback && resourceFile == null) {
+        createAppleTypefaceWithSystemCjkFallback(
+            original = original,
+            semanticWeight = semanticWeight,
+            effectiveSfProWeight = effectiveWeight,
+            italic = italic,
+            textSizePx = textSizePx,
         )
     } else {
         null
@@ -359,9 +363,10 @@ internal fun AppleSystemFontHooks.createAppleTypefaceFromResourceFile(
     val packageName = application.packageName
     val recorded = appleSystemFontResourceNameByTypeface[original]
     val candidates = buildList {
-        if (recorded != null) add(recorded)
+        // Hook 记录的是字体族 XML（regular.xml 等），按 XML 里 <font android:font> 取实际 TTF。
+        if (recorded != null) add(appleSystemFontFamilyFileName(recorded, resources, packageName, italic) ?: recorded)
         add(AppleSystemFontHooks.APPLE_SF_PRO_FONT_RESOURCE)
-    }
+    }.distinct()
     val usesCjkFallback = AppleSystemFontWeightPolicy.shouldUseSystemCjkFallback(text)
     val cjkAxis = if (usesCjkFallback) {
         hyperOsFontWeightMethods?.let { methods ->
@@ -416,6 +421,43 @@ internal fun AppleSystemFontHooks.createAppleTypefaceFromResourceFile(
     }
     return null
 }
+
+/**
+ * 字体族 XML（如 Apple 的 regular.xml）指向的 TTF 资源名：取与 [italic] 匹配的第一个
+ * `<font android:font>`，没有匹配时取第一个。按名字与斜体缓存，每个只解析一次；
+ * 不是 XML（本身就是 TTF）或解析失败时返回 null。
+ */
+internal fun AppleSystemFontHooks.appleSystemFontFamilyFileName(
+    name: String,
+    resources: Resources,
+    packageName: String,
+    italic: Boolean,
+): String? {
+    val key = "$name:$italic"
+    appleSystemFontFamilyFileNames[key]?.let { return it.ifEmpty { null } }
+    val resolved = runCatching {
+        val resourceId = resources.getIdentifier(name, "font", packageName)
+        if (resourceId == 0) return@runCatching null
+        resources.getXml(resourceId).use { parser ->
+            var first = 0
+            var matching = 0
+            while (parser.next() != XmlPullParser.END_DOCUMENT) {
+                if (parser.eventType != XmlPullParser.START_TAG || parser.name != "font") continue
+                val fontId = parser.getAttributeResourceValue(ANDROID_RESOURCE_NAMESPACE, "font", 0)
+                if (fontId == 0) continue
+                // android:fontStyle 枚举：normal=0，italic=1。
+                val fontItalic = parser.getAttributeIntValue(ANDROID_RESOURCE_NAMESPACE, "fontStyle", 0) == 1
+                if (first == 0) first = fontId
+                if (matching == 0 && fontItalic == italic) matching = fontId
+            }
+            (if (matching != 0) matching else first).takeIf { it != 0 }?.let(resources::getResourceEntryName)
+        }
+    }.getOrNull()
+    appleSystemFontFamilyFileNames[key] = resolved.orEmpty()
+    return resolved
+}
+
+private const val ANDROID_RESOURCE_NAMESPACE = "http://schemas.android.com/apk/res/android"
 
 /**
  * 每个资源名只做一次 `getIdentifier` + `openRawResource` + 直接缓冲分配（SF Pro 约 1MB）。

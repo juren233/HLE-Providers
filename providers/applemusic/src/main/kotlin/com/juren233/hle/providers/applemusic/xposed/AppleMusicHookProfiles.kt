@@ -2651,7 +2651,8 @@ internal object AppleMusicHookProfiles {
     }
 
     /**
-     * Lyric share sheet "Save Image" / "Share Image" (1614 only; other versions skip the feature).
+     * Lyric share sheet "Save Image" / "Share Image" (1614, inherited by 1622 with renamed classes;
+     * other versions skip the feature).
      * Original 1614 DEX: U.<init>(Context,String,HashSet)V fills final ArrayList a with U$a
      * destinations built by U$a.<init>(J,String,String,String,String)V (size, id, title, package,
      * referrer); ShareLyricsActionSheetFragment$e.z(I,View,CollectionItemView)V handles taps; Q is
@@ -2779,6 +2780,183 @@ internal object AppleMusicHookProfiles {
                     "android.database.Cursor", false,
                 ),
             ),
+        )
+    }
+
+    private val APPLE_MUSIC_7_0_1_1622 by lazy {
+        AppleMusicHookProfile(
+            id = "am-7.0.1-1622",
+            versionName = "7.0.1",
+            versionCodes = setOf(1622L),
+            matchVersionName = false,
+            // SettingsViewModel still adds getDataCategory after login and preferences load only.
+            settingsDataCategoryHasNoSimGate = true,
+            hookTargets = verified7011622Targets(),
+        )
+    }
+
+    /**
+     * Original 1622 base.apk SHA-256: a77aa0d1e2bd8e3087dc3afff95bb6a65f64ef457ccfccb79b2e33d03b35f676.
+     * Descriptors come from the original four DEX files and are verified by AppleMusicProfileBinaryTest.
+     * 1622 renamed the obfuscated types below; every inherited 1614 class name, parameter type,
+     * return type and class-valued runtime member naming one of them is rewritten. Each pair was
+     * matched against the original 1622 DEX by role, not by name.
+     */
+    private fun verified7011622Targets(): Map<AppleMusicHookPoint, List<AppleMusicHookTarget>> {
+        val music = "com.apple.android.music"
+        val renamed = mapOf(
+            // OkHttp moved from kk/pk/ok to jk/ok/nk; the interceptor and cookie jar from rb to sb.
+            "pk.f" to "ok.f", "kk.D" to "jk.D", "kk.u" to "jk.u", "rb.a" to "sb.a", "rb.k" to "sb.k",
+            // Kotlin Continuation and function types.
+            "hi.c" to "gi.c", "pi.l" to "oi.l", "pi.p" to "oi.p", "pi.q" to "oi.q",
+            // Compose runtime: RecomposeScopeImpl, RecomposeScope, NeverEqualPolicy, State.
+            "z0.P0" to "z0.T0", "z0.N0" to "z0.R0", "z0.r0" to "z0.w0", "z0.p0" to "z0.t0",
+            // Album row parameter types and the row itself.
+            "Rb.D5" to "Sb.B5", "Vb.s" to "Wb.s", "Rb.C5" to "Sb.A5", "Rb.E5" to "Sb.C5", "y7.m" to "y7.n",
+            // Browse Compose rows; Compose text layout.
+            "Yb.f" to "Zb.f", "O9.e" to "O9.d", "oa.e" to "oa.f", "oa.n" to "oa.l", "Yb.n" to "Zb.n",
+            "A1.F" to "A1.E",
+            // Catalog request executors: search/search-query and editorial multiplex/multirooms.
+            "Fe.b" to "L3.p", "I.h1" to "pe.c",
+            "com.airbnb.epoxy.K" to "com.airbnb.epoxy.J",
+            "androidx.fragment.app.n" to "androidx.fragment.app.o",
+            "$music.A\$a" to "$music.C\$a",
+            "$music.q" to "$music.p",
+            "$music.common.P" to "$music.common.N",
+            "$music.common.V0" to "$music.common.S0",
+            "$music.library2.K" to "$music.library2.I",
+            "$music.player.c1" to "$music.player.f1",
+            "$music.player.M" to "$music.player.P",
+            "$music.player.fragment.a0" to "$music.player.fragment.Z",
+            "$music.utils.m1" to "$music.utils.l1",
+            "q8.r7" to "q8.q7",
+            // Lyrics adapters: A is the word adapter, V0 the active-line adapter (base player.i1).
+            "$music.player.x" to "$music.player.A",
+            "$music.player.S0" to "$music.player.V0",
+            // Library observeAsState is librarypin.j.m(LiveData, Composer).
+            "Rj.x0" to "androidx.lifecycle.I", "q3.b" to "$music.library3.librarypin.j",
+            "Oj.F" to "Nj.G",
+            // Lyric share sheet.
+            "$music.common.actionsheet.U" to "$music.common.actionsheet.V",
+            "$music.common.actionsheet.U\$a" to "$music.common.actionsheet.V\$a",
+            "$music.common.actionsheet.Q" to "$music.common.actionsheet.S",
+            "$music.utils.i1" to "$music.utils.h1",
+        )
+        fun String.renamedType() = renamed[this] ?: this
+        val inherited = AppleMusicHookPoint.entries.associateWith { point ->
+            APPLE_MUSIC_7_0_0_1614.targets(point).map { old ->
+                old.copy(
+                    className = old.className.renamedType(),
+                    parameterTypeNames = old.parameterTypeNames?.map { it?.renamedType() },
+                    returnTypeName = old.returnTypeName?.renamedType(),
+                    runtimeMemberNames = old.runtimeMemberNames.mapValues { (_, value) -> value.renamedType() },
+                )
+            }
+        }.filterValues { it.isNotEmpty() }
+        fun target(point: AppleMusicHookPoint, index: Int = 0) = inherited.getValue(point)[index]
+        fun members(point: AppleMusicHookPoint, index: Int = 0, vararg names: Pair<AppleMusicRuntimeMember, String>) =
+            target(point, index).let { it.copy(runtimeMemberNames = it.runtimeMemberNames + names) }
+        return inherited + mapOf(
+            // x9.P0.x builds /v1/catalog/{storefront}/songs/{id}/syllable-lyrics.
+            AppleMusicHookPoint.LYRICS_NETWORK_REQUEST to listOf(
+                target(AppleMusicHookPoint.LYRICS_NETWORK_REQUEST).copy(methodName = "x"),
+            ),
+            AppleMusicHookPoint.MEDIA_API_CATALOG_REQUEST_EXECUTOR to listOf(
+                target(AppleMusicHookPoint.MEDIA_API_CATALOG_REQUEST_EXECUTOR, 0),
+                target(AppleMusicHookPoint.MEDIA_API_CATALOG_REQUEST_EXECUTOR, 1),
+                target(AppleMusicHookPoint.MEDIA_API_CATALOG_REQUEST_EXECUTOR, 2),
+                target(AppleMusicHookPoint.MEDIA_API_CATALOG_REQUEST_EXECUTOR, 3),
+                // pe.c.d builds /multiplex/, pe.c.e /multirooms/.
+                target(AppleMusicHookPoint.MEDIA_API_CATALOG_REQUEST_EXECUTOR, 4).copy(methodName = "d"),
+                target(AppleMusicHookPoint.MEDIA_API_CATALOG_REQUEST_EXECUTOR, 5).copy(methodName = "e"),
+            ),
+            // z0.m.w()z0.T0 is the only scope getter; o(z0.R0)V the only scope-use method.
+            AppleMusicHookPoint.BROWSE_COMPOSER_SCOPE to listOf(
+                target(AppleMusicHookPoint.BROWSE_COMPOSER_SCOPE).copy(methodName = "w"),
+            ),
+            AppleMusicHookPoint.BROWSE_COMPOSER_USE_SCOPE to listOf(
+                target(AppleMusicHookPoint.BROWSE_COMPOSER_USE_SCOPE).copy(methodName = "o"),
+            ),
+            // LibraryComposeContentFragment.w1 observes getRecentItemsLiveResult through
+            // librarypin.j.m; j.l checks isInitialized and creates the state with Bh.b.j
+            // (z0.t1, policy field b: z0.u1).
+            AppleMusicHookPoint.COMPOSE_OBSERVE_AS_STATE to listOf(
+                target(AppleMusicHookPoint.COMPOSE_OBSERVE_AS_STATE).copy(methodName = "m"),
+            ),
+            // Fields shifted by one: binding m0 (q8.X4, recycler e0), view model n1; o0 is still the
+            // active adapter, typed as the shared base player.i1.
+            AppleMusicHookPoint.LYRICS_UI_ON_CREATE_VIEW to listOf(
+                members(
+                    AppleMusicHookPoint.LYRICS_UI_ON_CREATE_VIEW, 0,
+                    AppleMusicRuntimeMember.LYRICS_UI_BINDING_FIELD to "m0",
+                    AppleMusicRuntimeMember.LYRICS_UI_BINDING_RECYCLER_FIELD to "e0",
+                    AppleMusicRuntimeMember.LYRICS_UI_ADAPTER_FIELD to "o0",
+                    AppleMusicRuntimeMember.LYRICS_UI_VIEW_MODEL_FIELD to "n1",
+                ).copy(
+                    contract = AllOfContract(
+                        RequireFieldOfType("q8.X4", fieldName = "m0"),
+                        RequireFieldOfType(
+                            "com.apple.android.music.player.viewmodel.PlayerLyricsViewModel",
+                            fieldName = "n1",
+                        ),
+                    ),
+                ),
+            ),
+            // BaseActivity.onCreate stores the theme snapshot in I0; onRestart compares it with k.f.b.
+            AppleMusicHookPoint.ACTIVITY_THEME_CREATE to listOf(
+                members(
+                    AppleMusicHookPoint.ACTIVITY_THEME_CREATE, 0,
+                    AppleMusicRuntimeMember.ACTIVITY_THEME_MODE_FIELD to "I0",
+                ),
+            ),
+            // q8.t2 views shifted by one: playback item m0, lyrics button e0.
+            AppleMusicHookPoint.PLAYER_SONG_BINDING_EXECUTE to listOf(
+                members(
+                    AppleMusicHookPoint.PLAYER_SONG_BINDING_EXECUTE, 0,
+                    AppleMusicRuntimeMember.PLAYER_SONG_BINDING_PLAYBACK_ITEM_FIELD to "m0",
+                    AppleMusicRuntimeMember.PLAYER_SONG_BINDING_LYRICS_BUTTON_FIELD to "e0",
+                ),
+            ),
+            // Binding subclasses override l (executeBindings), j0 (setVariable), v and x (invalidateAll);
+            // n()V still executes pending bindings, n0(int,databinding.h) registers observables.
+            AppleMusicHookPoint.DATA_BINDING_RUNTIME_CLASSES to
+                inherited.getValue(AppleMusicHookPoint.DATA_BINDING_RUNTIME_CLASSES).map { old ->
+                    if (old.className == "androidx.databinding.ViewDataBinding") {
+                        old.copy(runtimeMemberNames = old.runtimeMemberNames + mapOf(
+                            AppleMusicRuntimeMember.DATA_BINDING_REGISTRATION_METHOD to "n0",
+                            AppleMusicRuntimeMember.DATA_BINDING_INVALIDATE_METHOD to "x",
+                            AppleMusicRuntimeMember.DATA_BINDING_EXECUTE_METHOD to "n",
+                            AppleMusicRuntimeMember.DATA_BINDING_SET_VARIABLE_METHOD to "j0",
+                        ))
+                    } else {
+                        old
+                    }
+                },
+            // w9.a.G(String,Map,Continuation<MediaApiResponse>) is the direct query (F is top charts).
+            AppleMusicHookPoint.MEDIA_API_REPOSITORY_HOLDER_CLASS to listOf(
+                members(
+                    AppleMusicHookPoint.MEDIA_API_REPOSITORY_HOLDER_CLASS, 0,
+                    AppleMusicRuntimeMember.MEDIA_API_DIRECT_QUERY_METHOD to "G",
+                ),
+            ),
+            // addSwipingChartItemA2 builds music.s1: caption H, title L, subtitle Q; b(int,Object)
+            // calls onModelBound.
+            AppleMusicHookPoint.ARTIST_SURFACE_CLASSES to
+                inherited.getValue(AppleMusicHookPoint.ARTIST_SURFACE_CLASSES).map { old ->
+                    if (old.runtimeMemberNames[AppleMusicRuntimeMember.ARTIST_RUNTIME_ROLE] == "top_song_model") {
+                        old.copy(
+                            className = "$music.s1",
+                            runtimeMemberNames = old.runtimeMemberNames + mapOf(
+                                AppleMusicRuntimeMember.ARTIST_MODEL_BIND_METHOD to "b",
+                                AppleMusicRuntimeMember.ARTIST_TOP_SONG_TITLE_FIELD to "L",
+                                AppleMusicRuntimeMember.ARTIST_TOP_SONG_SUBTITLE_FIELD to "Q",
+                                AppleMusicRuntimeMember.ARTIST_TOP_SONG_CAPTION_FIELD to "H",
+                            ),
+                        )
+                    } else {
+                        old
+                    }
+                },
         )
     }
 
@@ -3549,6 +3727,7 @@ internal object AppleMusicHookProfiles {
 
     /** 新版本档案必须放在前面，未知版本回退时优先尝试较新的目标。 */
     private val KNOWN_PROFILES = listOf(
+        APPLE_MUSIC_7_0_1_1622,
         APPLE_MUSIC_7_0_0_1614,
         APPLE_MUSIC_7_0_0_1613,
         APPLE_MUSIC_7_0_0_1611,
@@ -4748,34 +4927,40 @@ internal object AppleMusicHookProfiles {
         // Preserve the OLD compatibility pool within 6.5.0-6.5.2 (650 intentionally
         // borrows some 651 groups). Unknown APKs still try newest-first.
         val compatible = when (known) {
-            null, APPLE_MUSIC_7_0_0_1614 -> KNOWN_PROFILES
-            APPLE_MUSIC_7_0_0_1613 -> KNOWN_PROFILES.filterNot { it === APPLE_MUSIC_7_0_0_1614 }
+            null, APPLE_MUSIC_7_0_1_1622 -> KNOWN_PROFILES
+            APPLE_MUSIC_7_0_0_1614 -> KNOWN_PROFILES.filterNot { it === APPLE_MUSIC_7_0_1_1622 }
+            APPLE_MUSIC_7_0_0_1613 -> KNOWN_PROFILES.filterNot {
+                it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622
+            }
             APPLE_MUSIC_7_0_0_1611 -> KNOWN_PROFILES.filterNot {
-                it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614
+                it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
+                    it === APPLE_MUSIC_7_0_1_1622
             }
             APPLE_MUSIC_7_0_0_1609 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
-                    it === APPLE_MUSIC_7_0_0_1614
+                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622
             }
             APPLE_MUSIC_7_0_0_1607 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1609 || it === APPLE_MUSIC_7_0_0_1611 ||
-                    it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614
+                    it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
+                    it === APPLE_MUSIC_7_0_1_1622
             }
             APPLE_MUSIC_7_0_0 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1607 || it === APPLE_MUSIC_7_0_0_1609 ||
                     it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
-                    it === APPLE_MUSIC_7_0_0_1614
+                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622
             }
             APPLE_MUSIC_6_5_3 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0 || it === APPLE_MUSIC_7_0_0_1607 ||
                     it === APPLE_MUSIC_7_0_0_1609 || it === APPLE_MUSIC_7_0_0_1611 ||
-                    it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614
+                    it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
+                    it === APPLE_MUSIC_7_0_1_1622
             }
             else -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_6_5_3 || it === APPLE_MUSIC_7_0_0 ||
                     it === APPLE_MUSIC_7_0_0_1607 || it === APPLE_MUSIC_7_0_0_1609 ||
                     it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
-                    it === APPLE_MUSIC_7_0_0_1614
+                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622
             }
         }
         return (exact + compatible.flatMap { profile -> profile.targets(hookPoint) })
@@ -5464,7 +5649,7 @@ internal class AppleMusicHookResolver(
 
             AppleMusicHookPoint.MEDIA_API_REPOSITORY_HOLDER_CLASS -> true
 
-            // Exact 1614 descriptors (types, return, static) already pin these down.
+            // Exact 1614/1622 descriptors (types, return, static) already pin these down.
             AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_LIST,
             AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_ICON,
             AppleMusicHookPoint.LYRICS_SHARE_DESTINATION_CLICK,

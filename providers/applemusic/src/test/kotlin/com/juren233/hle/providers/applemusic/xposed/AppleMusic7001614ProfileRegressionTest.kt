@@ -33,7 +33,7 @@ class AppleMusic7001614ProfileRegressionTest {
     private val lyricsSharePoints = AppleMusicHookPoint.entries.filter { it.name.startsWith("LYRICS_SHARE_") }
 
     @Test
-    fun `lyrics share export targets exist only in the verified 1614 profile`() {
+    fun `lyrics share export targets exist in the verified 1614 profile but not 1613`() {
         assertEquals(8, lyricsSharePoints.size)
         lyricsSharePoints.forEach { point ->
             assertEquals("1614 $point", 1, AppleMusicHookProfiles.exactTargets(version, point).size)

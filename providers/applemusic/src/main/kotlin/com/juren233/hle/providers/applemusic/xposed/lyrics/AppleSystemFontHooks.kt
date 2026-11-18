@@ -191,6 +191,8 @@ internal class AppleSystemFontHooks(
     internal val appleSystemFontResourceBuffersByName = ConcurrentHashMap<String, ByteBuffer>()
 
     internal val appleSystemFontXmlResourceNames: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** 字体族 XML 名（含斜体）→ 实际 TTF 资源名；空串表示不是 XML 或无法解析。 */
+    internal val appleSystemFontFamilyFileNames = ConcurrentHashMap<String, String>()
     internal val appleFontDerivationWidthKeys = ConcurrentHashMap.newKeySet<String>()
     internal val appleFontDerivationFailureKeys = ConcurrentHashMap.newKeySet<String>()
     internal val appleSystemFontVariationMethods: AppleSystemFontVariationMethods? by lazy(

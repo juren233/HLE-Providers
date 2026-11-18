@@ -45,6 +45,17 @@ internal object ProviderLogger {
     }
 }
 
+/**
+ * The host's `RecyclerView.Adapter#notifyItemChanged(int)` from the version profile. Apple Music
+ * ships an R8-renamed androidx, so the public name does not exist at runtime. Null for versions
+ * without an exact target; callers then fall back to the public name.
+ */
+internal fun AppleMusicProviderRuntime.profiledRecyclerNotifyItemChanged(): Method? {
+    val point = AppleMusicHookPoint.RECYCLER_NOTIFY_ITEM_CHANGED
+    return if (AppleMusicHookProfiles.exactTargets(hookResolver.version, point).isEmpty()) null
+    else hookResolver.resolveMethod(point).method
+}
+
 internal object AppleReflection {
     private val methodsByClass =
         ConcurrentHashMap<Class<*>, Map<String, List<Method>>>()
