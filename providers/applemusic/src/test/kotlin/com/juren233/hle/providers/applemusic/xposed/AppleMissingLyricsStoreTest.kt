@@ -1178,6 +1178,52 @@ class AppleMissingLyricsStoreTest {
     }
 
     @Test
+    fun `raw AMLL TTML handed to Apple drops inline translations and romanization`() {
+        // Issue #77：行内多语言翻译被 Apple 原生解析器拼进正文。
+        val rawTtml = "<tt xmlns=\"http://www.w3.org/ns/ttml\" " +
+            "xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" " +
+            "xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\"><body dur=\"0:03.000\"><div>" +
+            "<p begin=\"1.000\" end=\"2.000\" itunes:key=\"L1\" ttm:agent=\"v1\">" +
+            "<span begin=\"1.000\" end=\"1.500\">your</span> <span begin=\"1.500\" end=\"2.000\">name</span>" +
+            "<span ttm:role=\"x-translation\" xml:lang=\"zh-Hans\">你的名字</span>" +
+            "<span ttm:role=\"x-translation\" xml:lang=\"de\">deinen Namen</span>" +
+            "<span ttm:role=\"x-roman\">your name</span></p></div></body></tt>"
+        val store = AppleMissingLyricsStore()
+        assertTrue(
+            store.update(
+                Song(
+                    id = "amll-raw",
+                    duration = 3_000L,
+                    metadata = lyricMetadataOf(
+                        LyricMetadataKeys.APPLE_MISSING_LYRICS_SOURCE to "AMLL",
+                        LyricMetadataKeys.TTML_SOURCE_RAW to rawTtml,
+                        LyricMetadataKeys.TTML_SOURCE_SHA256 to sha256(rawTtml),
+                    ),
+                    lyrics = listOf(
+                        RichLyricLine(
+                            begin = 1_000L,
+                            end = 2_000L,
+                            text = "your name",
+                            words = listOf(
+                                LyricWord(1_000L, 1_500L, text = "your "),
+                                LyricWord(1_500L, 2_000L, text = "name"),
+                            ),
+                        )
+                    ),
+                )
+            )
+        )
+
+        val selected = requireNotNull(store.nativeTtml("amll-raw"))
+
+        assertEquals(AppleMissingLyricsNativeTtmlKind.TTML_CATALOG_RAW, selected.kind)
+        assertTrue(selected.content.contains(">your</span> <span begin=\"1.500\" end=\"2.000\">name</span></p>"))
+        assertFalse(selected.content.contains("x-translation"))
+        assertFalse(selected.content.contains("x-roman"))
+        assertFalse(selected.content.contains("deinen Namen"))
+    }
+
+    @Test
     fun `non TtmlCatalog sources still use generated TTML`() {
         val rawTtml = "<tt><body>must not be used</body></tt>"
         val store = AppleMissingLyricsStore()

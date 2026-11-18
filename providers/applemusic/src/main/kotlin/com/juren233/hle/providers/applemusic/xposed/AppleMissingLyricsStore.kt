@@ -621,7 +621,8 @@ internal class AppleMissingLyricsStore {
         val current = content?.takeIf { it.songId == songId } ?: return null
         current.rawAppleTtml?.let { rawTtml ->
             return AppleMissingLyricsNativeTtml(
-                content = rawTtml,
+                // Store 保留原文（SHA-256 校验依赖它），只在交给 Apple 解析时去掉行内注释。
+                content = AppleTtmlInlineAnnotations.strip(rawTtml),
                 kind = AppleMissingLyricsNativeTtmlKind.TTML_CATALOG_RAW,
             )
         }
