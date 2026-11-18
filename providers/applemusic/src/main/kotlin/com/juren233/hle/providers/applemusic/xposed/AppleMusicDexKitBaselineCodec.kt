@@ -161,6 +161,13 @@ internal data class MethodDescriptor(
             .filterNot { it.isSynthetic && it.name == "\$values" }
             .toList()
 
+    /**
+     * 成员由与 [owner] 同一类加载器的类声明，即宿主 APK 自己的类（含其自带的 androidx/kotlin）。
+     * `java.lang.Object`、`android.view.View` 等框架类来自启动类加载器，不算。
+     */
+    fun isHostDeclared(member: java.lang.reflect.Member, owner: Class<*>): Boolean =
+        member.declaringClass.classLoader === owner.classLoader
+
     fun methodShape(method: Method): String {
         val returnType = method.returnType.name.takeIf(::isStableRuntimeType).orEmpty()
         val stableParameters = method.parameterTypes.joinToString(",") {

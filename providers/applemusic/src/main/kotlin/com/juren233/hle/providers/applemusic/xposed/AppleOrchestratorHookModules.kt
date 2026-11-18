@@ -65,6 +65,7 @@ import com.juren233.hle.providers.applemusic.xposed.hooks.AppleDebugNetworkHooks
 import com.juren233.hle.providers.applemusic.xposed.hooks.AppleAtmosVolumeDiagnostics
 import com.juren233.hle.providers.applemusic.xposed.hooks.AppleFrameworkMetadataHooks
 import com.juren233.hle.providers.applemusic.xposed.hooks.ApplePlaybackHooks
+import com.juren233.hle.providers.applemusic.xposed.hooks.AppleMusicHookModule
 import com.juren233.hle.providers.applemusic.xposed.hooks.FunctionalAppleMusicHookModule
 import com.juren233.hle.providers.applemusic.xposed.lyrics.AppleOnlineSourceMenuHooks
 import com.juren233.hle.providers.applemusic.xposed.lyrics.AppleLyricsShareExportHooks
@@ -95,11 +96,14 @@ import kotlin.math.roundToInt
 
 internal fun AppleMusicProviderOrchestrator.startHooks() {
     val costs = if (AppleProviderEnvironment.diagnosticsEnabled) mutableListOf<StartupHookModuleCost>() else null
-    hookModules().asSequence()
-        .filter { hookModule -> !hookModule.debugOnly || AppleProviderEnvironment.diagnosticsEnabled }
-        .forEach { hookModule ->
-            val startNs = if (costs != null) System.nanoTime() else 0L
+    installHookModulesIsolated(
+        hookModules().asSequence()
+            .filter { hookModule -> !hookModule.debugOnly || AppleProviderEnvironment.diagnosticsEnabled },
+    ) { hookModule ->
+        val startNs = if (costs != null) System.nanoTime() else 0L
+        try {
             hookRegistrar.withModule(hookModule.id, hookModule::installHooks)
+        } finally {
             costs?.add(
                 StartupHookModuleCost(
                     id = hookModule.id,
@@ -109,7 +113,29 @@ internal fun AppleMusicProviderOrchestrator.startHooks() {
                 )
             )
         }
+    }
     costs?.let(::logStartupHookCosts)
+}
+
+/**
+ * 逐个安装 Hook 模块；某个模块抛出异常（含 `LinkageError` 等 Error）时记录并跳过，后续模块照常安装。
+ * 1622 未适配时，`hookSettingsCellularDataEntry` 找不到目标抛出异常，其后 19 个模块（含全部歌词 Hook）都没装。
+ * 返回失败的模块 ID。
+ */
+internal fun installHookModulesIsolated(
+    modules: Sequence<AppleMusicHookModule>,
+    install: (AppleMusicHookModule) -> Unit,
+): List<String> {
+    val failed = mutableListOf<String>()
+    modules.forEach { hookModule ->
+        try {
+            install(hookModule)
+        } catch (throwable: Throwable) {
+            failed += hookModule.id
+            ProviderLogger.error("Apple Music Hook 模块安装失败，已跳过: module=${hookModule.id}", throwable)
+        }
+    }
+    return failed
 }
 
 private class StartupHookModuleCost(

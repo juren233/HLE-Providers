@@ -5068,6 +5068,12 @@ internal class AppleMusicHookResolver(
                     includeSynthetic = target.includeSynthetic,
                 )
                     .filter { method -> methodMatches(hookPoint, target, method) }
+                    // 其他版本的候选在本版本只是猜测：档案成员都由原包 DEX 里的类声明，
+                    // 继承链上的框架方法（Object/View 等）不可能是正确目标。精确档案不受影响。
+                    .filter { method ->
+                        target in exactTargets ||
+                            isHostDeclared(method, clazz)
+                    }
                     .toList()
             }
             if (matchingMethods.size == 1 || target.allowFirstMatch && matchingMethods.isNotEmpty()) {

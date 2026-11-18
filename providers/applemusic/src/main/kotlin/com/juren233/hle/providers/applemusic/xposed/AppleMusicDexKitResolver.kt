@@ -508,6 +508,8 @@ internal class AppleMusicDexKitResolver(
             candidateClasses.flatMap { clazz ->
                 val methods = allMethods(clazz)
                 methods.filter { method ->
+                    // 只要宿主声明的方法：继承链上的框架方法不是宿主改名后的目标。
+                    isHostDeclared(method, clazz) &&
                     (template.methodName == null || method.name == template.methodName) &&
                         (template.parameterCount == null || method.parameterCount == template.parameterCount) &&
                         (template.returnTypeName == null || !isStableRuntimeType(template.returnTypeName) ||
@@ -781,18 +783,35 @@ internal class AppleMusicDexKitResolver(
         val returnTypeName: String?,
         val ordinal: Int,
     ) {
+        /**
+         * 原名仍在且形状相符时沿用原名；否则按记录基线时的分组与序号改名。
+         *
+         * 改名只在宿主自己声明的成员里找：档案成员都在原包 DEX 里核对过，框架类成员不会被
+         * 宿主混淆改名。1622 的 `player.O` 变成枚举后，这里曾沿继承链选中
+         * `Object.identityHashCodeNative(Object)`，Hook 回调里再算 hashCode 就无限重入，主线程卡死。
+         * 分组条件与 [from] 计算序号时一致，否则序号会落到别的分组里。
+         */
         fun resolveName(clazz: Class<*>, kind: MemberKind): String? {
             if (type != kind) return null
             if (kind == MemberKind.FIELD) {
                 val fields = allFields(clazz)
                 fields.firstOrNull { it.name == name && matches(it) }?.let { return it.name }
-                val candidates = fields.filter { matches(it) }
-                return candidates.getOrNull(ordinal)?.name ?: candidates.singleOrNull()?.name
+                val group = fields.filter { field ->
+                    isHostDeclared(field, clazz) &&
+                        Modifier.isStatic(field.modifiers) == static &&
+                        field.type.name.takeIf(::isStableRuntimeType) == fieldTypeName
+                }
+                return (group.getOrNull(ordinal) ?: group.singleOrNull())?.name
             }
             val methods = allMethods(clazz)
             methods.firstOrNull { it.name == name && matches(it) }?.let { return it.name }
-            val candidates = methods.filter { matches(it) }
-            return candidates.getOrNull(ordinal)?.name ?: candidates.singleOrNull()?.name
+            val group = methods.filter { method ->
+                isHostDeclared(method, clazz) &&
+                    Modifier.isStatic(method.modifiers) == static &&
+                    method.parameterCount == parameterCount &&
+                    method.returnType.name.takeIf(::isStableRuntimeType) == returnTypeName
+            }
+            return (group.getOrNull(ordinal)?.takeIf(::matches) ?: group.filter(::matches).singleOrNull())?.name
         }
 
         private fun matches(field: Field): Boolean =
