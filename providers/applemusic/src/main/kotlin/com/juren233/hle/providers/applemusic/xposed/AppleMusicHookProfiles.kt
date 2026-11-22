@@ -2960,6 +2960,111 @@ internal object AppleMusicHookProfiles {
         )
     }
 
+    private val APPLE_MUSIC_7_0_2_1624 by lazy {
+        AppleMusicHookProfile(
+            id = "am-7.0.2-1624",
+            versionName = "7.0.2",
+            versionCodes = setOf(1624L),
+            matchVersionName = false,
+            // SettingsViewModel still adds getDataCategory after login and preferences load only.
+            settingsDataCategoryHasNoSimGate = true,
+            hookTargets = verified7021624Targets(),
+        )
+    }
+
+    /**
+     * Original 1624 base.apk SHA-256: c53c914f4d5ac91dda8b7faa6d65ebcd60b76c8774d0425ab91d856259dc42b5.
+     * Descriptors come from the original four DEX files and are verified by AppleMusicProfileBinaryTest.
+     * Baseline is 1622. 1624 renamed the Compose runtime and LiveData types and moved several
+     * members; each pair below was matched against the original 1624 DEX by role, not by name.
+     */
+    private fun verified7021624Targets(): Map<AppleMusicHookPoint, List<AppleMusicHookTarget>> {
+        val music = "com.apple.android.music"
+        val renamed = mapOf(
+            // Compose runtime: Composer, RecomposeScopeImpl, RecomposeScope, NeverEqualPolicy.
+            "z0.m" to "z0.n", "z0.T0" to "z0.S0", "z0.R0" to "z0.Q0", "z0.w0" to "z0.v0",
+            // LiveData.
+            "androidx.lifecycle.I" to "androidx.lifecycle.H",
+            // Compose text layout (A1.D constructor takes CharSequence + TextPaint; A1.q is its intrinsics).
+            "A1.E" to "A1.D", "A1.r" to "A1.q",
+            // Browse renderer family (oa.n is the fifth row) and the album row with its parameter types.
+            "oa.l" to "oa.n", "y7.n" to "y7.m", "Sb.B5" to "Sb.A5", "Sb.A5" to "Sb.z5", "Sb.C5" to "Sb.B5",
+            // Text style helper (typeface factory B, explicit title s) and the lyric-share story composer.
+            "$music.utils.l1" to "$music.utils.i1",
+            "$music.utils.h1" to "$music.utils.e1",
+        )
+        fun String.renamedType() = renamed[this] ?: this
+        val inherited = AppleMusicHookPoint.entries.associateWith { point ->
+            APPLE_MUSIC_7_0_1_1622.targets(point).map { old ->
+                old.copy(
+                    className = old.className.renamedType(),
+                    parameterTypeNames = old.parameterTypeNames?.map { it?.renamedType() },
+                    returnTypeName = old.returnTypeName?.renamedType(),
+                    runtimeMemberNames = old.runtimeMemberNames.mapValues { (_, value) -> value.renamedType() },
+                )
+            }
+        }.filterValues { it.isNotEmpty() }
+        fun target(point: AppleMusicHookPoint, index: Int = 0) = inherited.getValue(point)[index]
+        fun members(point: AppleMusicHookPoint, index: Int = 0, vararg names: Pair<AppleMusicRuntimeMember, String>) =
+            target(point, index).let { it.copy(runtimeMemberNames = it.runtimeMemberNames + names) }
+        val catalogExecutors = AppleMusicHookPoint.MEDIA_API_CATALOG_REQUEST_EXECUTOR
+        val searchHost = "com.google.android.gms.internal.cast.f0"
+        return inherited + mapOf(
+            // Search and editorial executors moved into R8-merged classes. Callers (original coroutine
+            // names): getSearchResults -> f0.b (/search), getSearchByQueryResults -> f0.a
+            // (/search/query), getMultiplex -> E8.g.d, its multirooms sibling -> E8.g.e.
+            // L3.p.b is the second /search/query channel, called by getSearchByQuery.
+            catalogExecutors to listOf(
+                target(catalogExecutors, 0),
+                target(catalogExecutors, 1),
+                target(catalogExecutors, 2).copy(className = searchHost, methodName = "b"),
+                target(catalogExecutors, 3).copy(className = searchHost, methodName = "a"),
+                target(catalogExecutors, 4).copy(className = "E8.g", methodName = "d"),
+                target(catalogExecutors, 5).copy(className = "E8.g", methodName = "e"),
+                target(catalogExecutors, 3).copy(className = "L3.p", methodName = "b"),
+            ),
+            // librarypin.j.g(LiveData, Composer) delegates to j.f, which checks isInitialized and
+            // creates the state through C4.f.h (z0.s1, policy field b: z0.t1).
+            AppleMusicHookPoint.COMPOSE_OBSERVE_AS_STATE to listOf(
+                target(AppleMusicHookPoint.COMPOSE_OBSERVE_AS_STATE).copy(methodName = "g"),
+            ),
+            // Binding l0 (q8.X4, recycler d0), view model m1; n0 is the active adapter typed as the
+            // shared base player.i1 (o0 is now the active-line adapter V0, p0 the word adapter A).
+            AppleMusicHookPoint.LYRICS_UI_ON_CREATE_VIEW to listOf(
+                members(
+                    AppleMusicHookPoint.LYRICS_UI_ON_CREATE_VIEW, 0,
+                    AppleMusicRuntimeMember.LYRICS_UI_BINDING_FIELD to "l0",
+                    AppleMusicRuntimeMember.LYRICS_UI_BINDING_RECYCLER_FIELD to "d0",
+                    AppleMusicRuntimeMember.LYRICS_UI_ADAPTER_FIELD to "n0",
+                    AppleMusicRuntimeMember.LYRICS_UI_VIEW_MODEL_FIELD to "m1",
+                ).copy(
+                    contract = AllOfContract(
+                        RequireFieldOfType("q8.X4", fieldName = "l0"),
+                        RequireFieldOfType(
+                            "com.apple.android.music.player.viewmodel.PlayerLyricsViewModel",
+                            fieldName = "m1",
+                        ),
+                    ),
+                ),
+            ),
+            // BaseActivity.onCreate stores the theme snapshot in H0; onRestart compares it with k.f.b.
+            AppleMusicHookPoint.ACTIVITY_THEME_CREATE to listOf(
+                members(
+                    AppleMusicHookPoint.ACTIVITY_THEME_CREATE, 0,
+                    AppleMusicRuntimeMember.ACTIVITY_THEME_MODE_FIELD to "H0",
+                ),
+            ),
+            // q8.t2 views: playback item l0, lyrics button d0 (listener 4 = lyricsButtonOnClickListener).
+            AppleMusicHookPoint.PLAYER_SONG_BINDING_EXECUTE to listOf(
+                members(
+                    AppleMusicHookPoint.PLAYER_SONG_BINDING_EXECUTE, 0,
+                    AppleMusicRuntimeMember.PLAYER_SONG_BINDING_PLAYBACK_ITEM_FIELD to "l0",
+                    AppleMusicRuntimeMember.PLAYER_SONG_BINDING_LYRICS_BUTTON_FIELD to "d0",
+                ),
+            ),
+        )
+    }
+
     /** Verified against all four original 1606 DEX files, SHA-256 recorded in docs. */
     private fun verified700Targets(): Map<AppleMusicHookPoint, List<AppleMusicHookTarget>> {
         val inherited = AppleMusicHookPoint.entries.associateWith(APPLE_MUSIC_6_5_3::targets)
@@ -3727,6 +3832,7 @@ internal object AppleMusicHookProfiles {
 
     /** 新版本档案必须放在前面，未知版本回退时优先尝试较新的目标。 */
     private val KNOWN_PROFILES = listOf(
+        APPLE_MUSIC_7_0_2_1624,
         APPLE_MUSIC_7_0_1_1622,
         APPLE_MUSIC_7_0_0_1614,
         APPLE_MUSIC_7_0_0_1613,
@@ -4927,40 +5033,47 @@ internal object AppleMusicHookProfiles {
         // Preserve the OLD compatibility pool within 6.5.0-6.5.2 (650 intentionally
         // borrows some 651 groups). Unknown APKs still try newest-first.
         val compatible = when (known) {
-            null, APPLE_MUSIC_7_0_1_1622 -> KNOWN_PROFILES
-            APPLE_MUSIC_7_0_0_1614 -> KNOWN_PROFILES.filterNot { it === APPLE_MUSIC_7_0_1_1622 }
+            null, APPLE_MUSIC_7_0_2_1624 -> KNOWN_PROFILES
+            APPLE_MUSIC_7_0_1_1622 -> KNOWN_PROFILES.filterNot { it === APPLE_MUSIC_7_0_2_1624 }
+            APPLE_MUSIC_7_0_0_1614 -> KNOWN_PROFILES.filterNot {
+                it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624
+            }
             APPLE_MUSIC_7_0_0_1613 -> KNOWN_PROFILES.filterNot {
-                it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622
+                it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622 ||
+                    it === APPLE_MUSIC_7_0_2_1624
             }
             APPLE_MUSIC_7_0_0_1611 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
-                    it === APPLE_MUSIC_7_0_1_1622
+                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624
             }
             APPLE_MUSIC_7_0_0_1609 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
-                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622
+                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622 ||
+                    it === APPLE_MUSIC_7_0_2_1624
             }
             APPLE_MUSIC_7_0_0_1607 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1609 || it === APPLE_MUSIC_7_0_0_1611 ||
                     it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
-                    it === APPLE_MUSIC_7_0_1_1622
+                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624
             }
             APPLE_MUSIC_7_0_0 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1607 || it === APPLE_MUSIC_7_0_0_1609 ||
                     it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
-                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622
+                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622 ||
+                    it === APPLE_MUSIC_7_0_2_1624
             }
             APPLE_MUSIC_6_5_3 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0 || it === APPLE_MUSIC_7_0_0_1607 ||
                     it === APPLE_MUSIC_7_0_0_1609 || it === APPLE_MUSIC_7_0_0_1611 ||
                     it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
-                    it === APPLE_MUSIC_7_0_1_1622
+                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624
             }
             else -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_6_5_3 || it === APPLE_MUSIC_7_0_0 ||
                     it === APPLE_MUSIC_7_0_0_1607 || it === APPLE_MUSIC_7_0_0_1609 ||
                     it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
-                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622
+                    it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622 ||
+                    it === APPLE_MUSIC_7_0_2_1624
             }
         }
         return (exact + compatible.flatMap { profile -> profile.targets(hookPoint) })

@@ -160,8 +160,11 @@ def verify_1607_semantics(ctx, points, profile_id=''):
     routes = [('/v1/catalog/', '/'), ('/v1/catalog/', 'ids['),
               ('/v1/catalog/', '/search'), ('/v1/catalog/', '/search/query'),
               ('/v1/editorial/', '/multiplex/'), ('/v1/editorial/', '/multirooms/')]
+    if profile_id.endswith('-1624'):
+        # getSearchByQuery reaches /search/query through a second executor, L3.p.b.
+        routes = routes + [('/v1/catalog/', '/search/query')]
     executors = points['MEDIA_API_CATALOG_REQUEST_EXECUTOR']
-    require(len(executors) == len(routes), '1607: all six catalogue request paths are required')
+    require(len(executors) == len(routes), '1607: all catalogue request paths are required')
     for target, route in zip(executors, routes):
         require(set(route) <= references(target)['strings'],
                 f'{target["className"]}#{target["methodName"]}: wrong catalogue route, expected {route}')
@@ -198,6 +201,16 @@ def verify_1607_semantics(ctx, points, profile_id=''):
             ('z0/S;' in owner and name == 'h') or ('z0/v1;' in owner and name == '<init>')
             for owner, name, _, _ in helper.dex.code_references(helper)['methods'])
             for helper in helpers), '1613/1614: observeAsState does not create the Compose state')
+    elif profile_id.endswith('-1624'):
+        # librarypin.j.g delegates to j.f, which checks isInitialized and allocates the
+        # Compose state through C4.f.h (z0.s1, policy field b: z0.t1).
+        require(any(helper.dex and any(
+            owner == 'LC4/f;' and name == 'h'
+            for owner, name, _, _ in helper.dex.code_references(helper)['methods'])
+            for helper in helpers), '1624: observeAsState does not create the Compose state')
+        require(any(helper.dex and any(name == 'isInitialized'
+                                      for _, name, _, _ in helper.dex.code_references(helper)['methods'])
+                    for helper in helpers), '1624: observeAsState lost its initialization check')
     elif profile_id.endswith('-1622'):
         # librarypin.j.m delegates to j.l, which checks isInitialized and allocates the
         # Compose state through Bh.b.j (mutableStateOf -> z0.t1).
@@ -427,7 +440,7 @@ def verify_profile(ctx, profile):
         row_owner = row['parameterTypeNames'][1]
         names = row['runtimeMemberNames']
         key_owner = field(row_owner, names['ALBUM_COMPOSE_ROW_KEY_FIELD'],
-                          'D7.s' if profile['id'].endswith(('-1611', '-1613', '-1614', '-1622')) else 'D7.q')
+                          'D7.s' if profile['id'].endswith(('-1611', '-1613', '-1614', '-1622', '-1624')) else 'D7.q')
         if key_owner:
             field(key_owner, names['ALBUM_COMPOSE_KEY_ID_FIELD'], 'java.lang.String')
 
@@ -447,7 +460,7 @@ def verify_profile(ctx, profile):
         field(section, names['RADIO_SEARCH_ARTISTS_KIND_FIELD'], section)
         field(catalogue, names['RADIO_SEARCH_CATALOG_KIND_FIELD'], catalogue)
         method(scope, names['RADIO_SEARCH_SCOPE_CONTEXT_METHOD'], [],
-               'ei.e' if profile['id'].endswith('-1622') else
+               'ei.e' if profile['id'].endswith(('-1622', '-1624')) else
                'fi.f' if profile['id'].endswith(('-1611', '-1613', '-1614')) else 'fi.e', False)
 
     names = ui['runtimeMemberNames']
@@ -457,7 +470,7 @@ def verify_profile(ctx, profile):
           'com.apple.android.music.player.viewmodel.PlayerLyricsViewModel')
     adapter = field(ui['className'], names['LYRICS_UI_ADAPTER_FIELD'])
     adapters = points['LYRICS_RECYCLER_ADAPTER']
-    if profile['id'].endswith(('-1613', '-1614', '-1622')):
+    if profile['id'].endswith(('-1613', '-1614', '-1622', '-1624')):
         # 1613 moved the active-line adapter next to the word adapter as siblings,
         # and the fragment field still references only the active-line one.
         require(any(adapter in [c.binary_name for c in lineage(ctx, item['className'])]
@@ -613,7 +626,7 @@ def verify_profile(ctx, profile):
     semantic_checks = 0
     if profile['id'] in ('am-7.0.0-beta-1607', 'am-7.0.0-beta-1609',
                          'am-7.0.0-beta-1611', 'am-7.0.0-beta-1613',
-                         'am-7.0.0-beta-1614', 'am-7.0.1-1622'):
+                         'am-7.0.0-beta-1614', 'am-7.0.1-1622', 'am-7.0.2-1624'):
         from verify_apple_music_1607_members import verify_consumer_members
         verify_consumer_members(ctx, points, field, method, require,
                                 version_code=int(profile['id'].rsplit('-', 1)[1]))

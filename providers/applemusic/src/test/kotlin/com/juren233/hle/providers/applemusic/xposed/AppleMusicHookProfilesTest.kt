@@ -634,11 +634,11 @@ class AppleMusicHookProfilesTest {
         )
         assertEquals(
             listOf(
+                "com.apple.android.music.utils.i1",
                 "com.apple.android.music.utils.l1",
                 "com.apple.android.music.utils.m1",
                 "com.apple.android.music.utils.f1",
                 "com.apple.android.music.utils.g1",
-                "com.apple.android.music.utils.i1",
                 "com.apple.android.music.utils.d1\$a",
                 "com.apple.android.music.utils.j1\$a",
                 "com.apple.android.music.utils.i1\$a",
@@ -657,7 +657,7 @@ class AppleMusicHookProfilesTest {
             ).map(AppleMusicHookTarget::className).distinct(),
         )
         assertEquals(
-            listOf("z0.w0", "z0.r0", "z0.v0", "z0.t0", "z0.p0", "z0.s0"),
+            listOf("z0.v0", "z0.w0", "z0.r0", "z0.t0", "z0.p0", "z0.s0"),
             AppleMusicHookProfiles.candidates(
                 version,
                 AppleMusicHookPoint.COMPOSE_NEVER_EQUAL_POLICY,
@@ -682,7 +682,7 @@ class AppleMusicHookProfilesTest {
             ).map(AppleMusicHookTarget::className).distinct(),
         )
         assertEquals(
-            listOf("A1.E", "A1.r", "A1.F", "A1.q", "A1.D", "z1.x", "z1.m", "z1.q", "z1.i", "z1.k", "z1.s", "z1.l", "z1.t"),
+            listOf("A1.D", "A1.q", "A1.E", "A1.r", "A1.F", "z1.x", "z1.m", "z1.q", "z1.i", "z1.k", "z1.s", "z1.l", "z1.t"),
             AppleMusicHookProfiles.candidates(
                 version,
                 AppleMusicHookPoint.COMPOSE_TEXT_LAYOUT,
