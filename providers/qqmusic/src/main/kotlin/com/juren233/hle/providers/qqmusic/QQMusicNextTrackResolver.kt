@@ -27,6 +27,11 @@ internal data class QQMusicQueueSnapshot(
     val next: QQMusicTrackSnapshot?,
 )
 
+/** 播放器当前曲/下一首的采集来源：DexKit 定位的队列管理器，或 QQ 音乐 OpenAPI SDK。 */
+internal fun interface QQMusicQueueSnapshotSource {
+    fun resolve(): QQMusicQueueSnapshot?
+}
+
 internal data class QQMusicNextTrackProfile(
     val packageName: String,
     val versionName: String,
@@ -148,8 +153,8 @@ internal class QQMusicNextTrackResolver private constructor(
     private val songIdMethod: Method,
     private val songTitleMethod: Method,
     private val songArtistMethod: Method,
-) {
-    fun resolve(): QQMusicQueueSnapshot? {
+) : QQMusicQueueSnapshotSource {
+    override fun resolve(): QQMusicQueueSnapshot? {
         val manager = singletonMethod.invoke(null) ?: return null
         val current = currentSongMethod.invoke(manager)?.let(::toTrack) ?: return null
         val next = nextSongMethod.invoke(manager)?.let(::toTrack)

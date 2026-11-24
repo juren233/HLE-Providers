@@ -3,15 +3,16 @@
   "pluginApiVersion": 3,
   "pluginId": "qqmusic",
   "displayName": "QQ 音乐",
-  "versionName": "1.0.38",
-  "versionCode": 39,
+  "versionName": "1.0.39",
+  "versionCode": 40,
   "minCoreVersionCode": 240050,
   "entryClass": "com.juren233.hle.providers.qqmusic.QQMusicPluginEntry",
   "providerPackageName": "com.juren233.hyperlyricsenhanced.provider.qqmusic",
   "targetPackages": [
     "com.tencent.qqmusic",
     "com.tencent.qqmusicpad",
-    "com.miui.player"
+    "com.miui.player",
+    "com.tencent.freemusic"
   ],
   "classesSha256": ""
 }

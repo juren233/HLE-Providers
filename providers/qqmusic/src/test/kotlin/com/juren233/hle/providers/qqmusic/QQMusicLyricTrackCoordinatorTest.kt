@@ -329,6 +329,121 @@ class QQMusicLyricTrackCoordinatorTest {
         )
     }
 
+    @Test
+    fun `free edition waits for OpenAPI snapshot then loads its identity`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.FREE_PACKAGE)
+
+        // 会话没有 MEDIA_ID：先发占位，不按会话标题取词
+        val first = coordinator.onMetadata(freeMetadata("晴天", "周杰伦", 269_000L))
+        assertTrue(first is QQMusicLyricTrackDecision.AwaitingVerifiedId)
+
+        val load = coordinator.onQueueSnapshot(snapshot("97773", "晴天", "周杰伦"))
+            as QQMusicLyricTrackDecision.Load
+        assertEquals("97773", load.track.id)
+        assertEquals("晴天", load.track.title)
+        assertEquals("周杰伦", load.track.artist)
+        // 快照没给时长、会话与快照同曲：用会话时长
+        assertEquals(269_000L, load.track.duration)
+        assertNull(load.track.sessionMediaId)
+        // 简洁版 ID 来源未经真机验证，交给换算器用详情接口核对
+        assertFalse(load.track.idTrusted)
+    }
+
+    @Test
+    fun `free edition ignores lyric lines written into session metadata`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.FREE_PACKAGE)
+        coordinator.onQueueSnapshot(snapshot("97773", "晴天", "周杰伦", duration = 269_000L))
+        coordinator.onMetadata(freeMetadata("晴天", "周杰伦", 269_000L))
+
+        // App 自带的状态栏/蓝牙歌词把标题改成歌词行、歌手改成「歌名-歌手」
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onMetadata(freeMetadata("故事的小黄花", "晴天-周杰伦", 0L)),
+        )
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("97773", "晴天", "周杰伦", duration = 269_000L)),
+        )
+    }
+
+    @Test
+    fun `free edition follows snapshot to the next song`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.FREE_PACKAGE)
+        coordinator.onMetadata(freeMetadata("晴天", "周杰伦", 269_000L))
+        coordinator.onQueueSnapshot(snapshot("97773", "晴天", "周杰伦"))
+
+        // 快照先切到下一首、会话还停在上一首：按快照取词，时长不能借上一首的
+        val next = coordinator.onQueueSnapshot(snapshot("102065756", "稻香", "周杰伦"))
+            as QQMusicLyricTrackDecision.Load
+        assertEquals("102065756", next.track.id)
+        assertEquals("稻香", next.track.title)
+        assertEquals(0L, next.track.duration)
+    }
+
+    @Test
+    fun `free edition starts from snapshot when no session metadata arrived yet`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.FREE_PACKAGE)
+
+        val load = coordinator.onQueueSnapshot(
+            snapshot("97773", "晴天", "周杰伦", duration = 269_000L),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("97773", load.track.id)
+        assertEquals(269_000L, load.track.duration)
+    }
+
+    @Test
+    fun `free edition does not load from unusable snapshot`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.FREE_PACKAGE)
+
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("0", "晴天", "周杰伦")),
+        )
+        assertTrue(
+            coordinator.onMetadata(freeMetadata("晴天", "周杰伦", 269_000L))
+                is QQMusicLyricTrackDecision.AwaitingVerifiedId,
+        )
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("97773", "", "周杰伦")),
+        )
+    }
+
+    @Test
+    fun `free edition keeps the full session artist list when snapshot has only the first singer`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.FREE_PACKAGE)
+        coordinator.onMetadata(freeMetadata("武设姑娘", "喻志博/李雅戈", 192_641L))
+
+        // getSingerName() 只给第一位歌手；SystemUI 按会话歌手核对身份，必须发会话写法
+        val load = coordinator.onQueueSnapshot(
+            snapshot("214981323", "武设姑娘", "喻志博", duration = 192_000L),
+        ) as QQMusicLyricTrackDecision.Load
+        assertEquals("喻志博/李雅戈", load.track.artist)
+
+        // 会话随后被蓝牙歌词改写：沿用已确认的写法，不切回快照歌手重新发布
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onMetadata(freeMetadata("想拍成电影", "武设姑娘-喻志博/李雅戈", 0L)),
+        )
+        assertEquals(
+            QQMusicLyricTrackDecision.Unchanged,
+            coordinator.onQueueSnapshot(snapshot("214981323", "武设姑娘", "喻志博", duration = 192_000L)),
+        )
+    }
+
+    @Test
+    fun `free edition ignores session artist of a different singer group`() {
+        val coordinator = QQMusicLyricTrackCoordinator(QQMusicRuntimePlan.FREE_PACKAGE)
+        coordinator.onMetadata(freeMetadata("晴天", "群星", 269_000L))
+
+        val load = coordinator.onQueueSnapshot(snapshot("97773", "晴天", "周杰伦"))
+            as QQMusicLyricTrackDecision.Load
+        assertEquals("周杰伦", load.track.artist)
+    }
+
+    private fun freeMetadata(title: String, artist: String, duration: Long) =
+        QQMusicLyricTrack(id = "", title = title, artist = artist, duration = duration)
+
     private fun track(id: String, title: String, artist: String, duration: Long = 202_000L) =
         QQMusicLyricTrack(
             id = id,

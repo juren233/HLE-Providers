@@ -70,6 +70,9 @@ internal sealed interface QQMusicLyricTrackDecision {
  * QQ Music mobile keeps the MediaSession ID as the track ID (for local songs it is a local
  * library number); the main-process queue snapshot only adds candidate online IDs
  * ([QQMusicLyricTrack.appLinkedSongIds]), which the resolver verifies one by one before use.
+ * QQ 音乐简洁版（com.tencent.freemusic）的会话没有 MEDIA_ID，App 自带的状态栏/车载/蓝牙歌词
+ * 还会把会话标题、歌手改成歌词行：曲目身份、歌名、歌手全部取 OpenAPI 快照当前曲，会话元数据
+ * 只在与快照同曲时补时长。没有可用快照时先发会话占位，等快照到了再取词。
  */
 internal class QQMusicLyricTrackCoordinator(
     private val playerPackage: String,
@@ -98,6 +101,12 @@ internal class QQMusicLyricTrackCoordinator(
         }
         if (playerPackage == QQMusicRuntimePlan.MIUI_PACKAGE) {
             return mediaTrack?.let(::decide) ?: QQMusicLyricTrackDecision.Unchanged
+        }
+        if (playerPackage == QQMusicRuntimePlan.FREE_PACKAGE) {
+            val track = mediaTrack
+                ?: freeTrackFrom(snapshot.current, null)
+                ?: return QQMusicLyricTrackDecision.Unchanged
+            return decide(track)
         }
         val current = snapshot.current
         if (current.id.toLongOrNull()?.let { it > 0L } != true ||
@@ -148,6 +157,9 @@ internal class QQMusicLyricTrackCoordinator(
                 }
                 ?: track
             QQMusicRuntimePlan.MOBILE_PACKAGE -> track.copy(appLinkedSongIds = appLinkedSongIds())
+            QQMusicRuntimePlan.FREE_PACKAGE -> queueSnapshot?.current
+                ?.let { current -> freeTrackFrom(current, track) }
+                ?: return emit(null, track)
             else -> track
         }
         return emit(resolved, track)
@@ -181,6 +193,38 @@ internal class QQMusicLyricTrackCoordinator(
             .map { it.id }
             .filter { id -> id.toLongOrNull()?.let { it > 0L } == true }
             .distinct()
+    }
+
+    /**
+     * 简洁版：快照当前曲有正数 ID 和歌名才可用。ID 仍按不可信处理（idTrusted=false），
+     * 换算器先用详情接口核对歌名/歌手，对不上再按歌名匹配。
+     */
+    /** 简洁版：快照曲目 ID 与会话确认过的完整歌手串。 */
+    private var freeSessionArtist: Pair<String, String>? = null
+
+    private fun freeTrackFrom(
+        current: QQMusicTrackSnapshot,
+        metadata: QQMusicLyricTrack?,
+    ): QQMusicLyricTrack? {
+        if (current.id.toLongOrNull()?.let { it > 0L } != true) return null
+        if (normalize(current.title).isEmpty()) return null
+        // 会话元数据可能是歌词行或上一首：只有标题与快照一致时才拿来补歌手、时长
+        val sameSong = metadata?.takeIf { normalize(it.title) == normalize(current.title) }
+        val snapshotArtist = current.artist.takeIf { normalize(it).isNotEmpty() }
+        // 快照只给第一位歌手，会话是全部歌手：同曲且歌手组一致时用会话写法，
+        // SystemUI 按会话歌手核对身份。之后会话被蓝牙歌词改写也沿用这次确认的写法，不来回切。
+        val sessionArtist = sameSong?.artist
+            ?.takeIf { snapshotArtist == null || QQMusicArtistNames.compatible(it, snapshotArtist) }
+            ?.also { freeSessionArtist = current.id to it }
+            ?: freeSessionArtist?.takeIf { it.first == current.id }?.second
+        return QQMusicLyricTrack(
+            id = current.id,
+            title = current.title,
+            artist = sessionArtist ?: snapshotArtist ?: sameSong?.artist,
+            duration = current.duration.takeIf { it > 0L }
+                ?: sameSong?.duration?.takeIf { it > 0L }
+                ?: 0L,
+        )
     }
 
     private fun sameIdentity(

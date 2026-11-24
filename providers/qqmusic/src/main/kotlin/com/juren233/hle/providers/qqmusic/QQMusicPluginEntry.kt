@@ -86,6 +86,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         require(QQMusicRuntimePlan.supports(host.packageName)) {
             "Unsupported QQ Music package: ${host.packageName}"
         }
+        if (host.packageName == QQMusicRuntimePlan.FREE_PACKAGE) {
+            // 要赶在 App 建会话、发第一条播放通知之前装上，所以不放进 hookApplication
+            QQMusicFreeMediaNotificationPatch(host).install()
+        }
         host.hookApplication { application ->
             val processName = Application.getProcessName()
             val features = QQMusicRuntimePlan.resolve(host.packageName, processName)
@@ -324,8 +328,11 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
 
         @Synchronized
         fun onMetadata(value: MediaMetadata?) {
-            val id = value?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.trim()
-                ?.takeIf(String::isNotEmpty) ?: return
+            if (value == null) return
+            // 简洁版的两个会话都不写 MEDIA_ID：歌曲身份由 OpenAPI 快照提供，元数据只触发判定
+            val id = value.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)?.trim()
+                ?.takeIf(String::isNotEmpty)
+                ?: if (playerPackage == QQMusicRuntimePlan.FREE_PACKAGE) "" else return
             refreshDisplayPreference(provider)
             val rawTitle = value.getString(MediaMetadata.METADATA_KEY_TITLE)
             val rawArtist = value.getString(MediaMetadata.METADATA_KEY_ARTIST)
@@ -358,7 +365,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             diagLogger.log(TAG, "meta_heartbeat", 15_000L) {
                 "QQ 会话元数据到达: id=$id, title=$rawTitle"
             }
-            latestSessionMediaId = id
+            latestSessionMediaId = id.takeIf(String::isNotEmpty)
             // 小米音乐与 QQ 音乐本体都存在车载歌词改写元数据的形态，
             // 策略只在拿到正向污染证据时才改写
             val normalized = carLyricsPolicy.normalize(id, rawTitle, rawArtist)
@@ -367,7 +374,7 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 title = share?.title?.takeIf(String::isNotBlank) ?: normalized.title,
                 artist = share?.artist?.takeIf(String::isNotBlank) ?: normalized.artist,
                 duration = value.getLong(MediaMetadata.METADATA_KEY_DURATION),
-                sessionMediaId = id,
+                sessionMediaId = id.takeIf(String::isNotEmpty),
             )
             applyTrackDecision(trackCoordinator.onMetadata(track))
         }
@@ -1019,6 +1026,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private var provider: LyriconProvider? = null
 
         fun start() {
+            if (playerPackage == QQMusicRuntimePlan.FREE_PACKAGE) {
+                startOpenApi()
+                return
+            }
             val queries = QQMusicNextTrackResolver.queries(application)
             if (queries == null) {
                 Log.w(TAG, "QQ 音乐包名不受支持，跳过下一首适配")
@@ -1049,13 +1060,6 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                 )
                 return
             }
-            val sharedProvider = runtime?.provider
-            provider = sharedProvider ?: LyriconFactory.createProvider(
-                context = application,
-                providerPackageName = PROVIDER_PACKAGE,
-                playerPackageName = playerPackage,
-            ).also { it.register() }
-            nextTrackRuntime = this
             if (BuildConfig.DEBUG) {
                 Log.i(
                     TAG,
@@ -1063,10 +1067,32 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
                         targets.joinToString { "${it.className}.${it.methodName}():${it.returnTypeName}" },
                 )
             }
+            startPolling(resolver)
+        }
+
+        /** 简洁版：类名、方法名未混淆，直接反射 OpenAPI SDK，不走 DexKit。 */
+        private fun startOpenApi() {
+            val reader = runCatching { QQMusicOpenApiQueueReader.create(application.classLoader) }
+                .getOrElse { error ->
+                    Log.w(TAG, "QQ 音乐简洁版 OpenAPI 入口不可用，跳过当前曲/下一首采集", error)
+                    return
+                }
+            mainHandler.post { startPolling(reader) }
+        }
+
+        @Synchronized
+        private fun startPolling(source: QQMusicQueueSnapshotSource) {
+            val sharedProvider = runtime?.provider
+            provider = sharedProvider ?: LyriconFactory.createProvider(
+                context = application,
+                providerPackageName = PROVIDER_PACKAGE,
+                playerPackageName = playerPackage,
+            ).also { it.register() }
+            nextTrackRuntime = this
             pollingTask?.cancel(false)
             val generation = resolverGeneration.incrementAndGet()
             pollingTask = scheduler.scheduleWithFixedDelay(
-                { capture(resolver, generation) },
+                { capture(source, generation) },
                 0L,
                 NEXT_TRACK_POLL_INTERVAL_MS,
                 TimeUnit.MILLISECONDS,
@@ -1085,10 +1111,10 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
         private var lastSnapshotCurrentId: String? = null
         private val nextTrackDiagLogger = ThrottledLogger()
 
-        private fun capture(resolver: QQMusicNextTrackResolver, generation: Long) {
+        private fun capture(source: QQMusicQueueSnapshotSource, generation: Long) {
             if (resolverGeneration.get() != generation) return
             runCatching {
-                val snapshot = resolver.resolve()
+                val snapshot = source.resolve()
                 if (resolverGeneration.get() != generation) return
                 runtime?.onQueueSnapshot(snapshot)
                 forwardQueueHint(snapshot)
@@ -1357,11 +1383,26 @@ object QQMusicPluginEntry : OfficialProviderPlugin {
             // 小米音乐车载歌词会把歌词行写进 MediaSession 标题；换算接口返回的
             // name/singer 是权威曲目信息，能用时优先于本地 MediaSession 元数据。
             name = payload.name ?: track.title
-            artist = payload.singer ?: track.artist
+            artist = sessionArtistFor(track, payload) ?: payload.singer ?: track.artist
             duration = track.duration.takeIf { it > 0 } ?: rich.lastOrNull()?.end ?: 0L
             lyrics = rich.takeIf { it.isNotEmpty() }
             attachSessionMediaId(track)
         }
+    }
+
+    /**
+     * 详情接口的 singer 只有第一位歌手：曲目与接口同名、歌手组一致时沿用曲目（会话）里的完整写法，
+     * 否则 SystemUI 按会话歌手核对身份会丢掉整首歌词。
+     */
+    private fun sessionArtistFor(track: QQMusicLyricTrack, payload: QQPayload): String? {
+        val artist = track.artist?.takeIf(String::isNotBlank) ?: return null
+        val name = payload.name ?: return null
+        if (QQMusicSongMidResolver.normalizeForMatch(name) !=
+            QQMusicSongMidResolver.normalizeForMatch(track.title.orEmpty())
+        ) {
+            return null
+        }
+        return artist.takeIf { QQMusicArtistNames.compatible(it, payload.singer) }
     }
 
     private fun toEmbeddedSong(track: QQMusicLyricTrack, document: LocalLyricsDocument): Song {
@@ -1422,11 +1463,15 @@ internal object QQMusicRuntimePlan {
     const val MOBILE_PACKAGE = "com.tencent.qqmusic"
     const val HD_PACKAGE = "com.tencent.qqmusicpad"
     const val MIUI_PACKAGE = "com.miui.player"
+
+    /** QQ 音乐简洁版：播放、MediaSession 都在主进程（另两个进程是 :heap_analysis、:pushservice）。 */
+    const val FREE_PACKAGE = "com.tencent.freemusic"
     private const val MOBILE_PLAYER_PROCESS = "$MOBILE_PACKAGE:QQPlayerService"
     private const val MIUI_REMOTE_PROCESS = "$MIUI_PACKAGE:remote"
 
     fun supports(packageName: String): Boolean =
-        packageName == MOBILE_PACKAGE || packageName == HD_PACKAGE || packageName == MIUI_PACKAGE
+        packageName == MOBILE_PACKAGE || packageName == HD_PACKAGE || packageName == MIUI_PACKAGE ||
+            packageName == FREE_PACKAGE
 
     fun resolve(packageName: String, processName: String): Set<QQMusicRuntimeFeature> = when {
         packageName == MOBILE_PACKAGE && processName == MOBILE_PACKAGE ->
@@ -1444,6 +1489,9 @@ internal object QQMusicRuntimePlan {
             setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK)
         packageName == MIUI_PACKAGE && processName == MIUI_REMOTE_PROCESS ->
             setOf(QQMusicRuntimeFeature.LYRICS)
+        // 简洁版没有 QQ 本体的缓冲边界方法可 Hook（播放内核是 OpenAPI SDK），不启用缓冲态合成
+        packageName == FREE_PACKAGE && processName == FREE_PACKAGE ->
+            setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK)
         else -> emptySet()
     }
 }

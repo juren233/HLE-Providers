@@ -84,6 +84,31 @@ class QQMusicRuntimePlanTest {
     }
 
     @Test
+    fun `routes free edition main process to lyrics and next track`() {
+        assertEquals(
+            setOf(QQMusicRuntimeFeature.LYRICS, QQMusicRuntimeFeature.NEXT_TRACK),
+            QQMusicRuntimePlan.resolve(
+                QQMusicRuntimePlan.FREE_PACKAGE,
+                QQMusicRuntimePlan.FREE_PACKAGE,
+            ),
+        )
+    }
+
+    @Test
+    fun `free edition helper processes get nothing`() {
+        assertTrue(QQMusicRuntimePlan.supports(QQMusicRuntimePlan.FREE_PACKAGE))
+        assertEquals("com.tencent.freemusic", QQMusicRuntimePlan.FREE_PACKAGE)
+        for (processName in listOf(":heap_analysis", ":pushservice")) {
+            assertTrue(
+                QQMusicRuntimePlan.resolve(
+                    QQMusicRuntimePlan.FREE_PACKAGE,
+                    QQMusicRuntimePlan.FREE_PACKAGE + processName,
+                ).isEmpty(),
+            )
+        }
+    }
+
+    @Test
     fun `rejects unsupported packages and undeclared processes`() {
         assertTrue(QQMusicRuntimePlan.supports(QQMusicRuntimePlan.MOBILE_PACKAGE))
         assertTrue(QQMusicRuntimePlan.supports(QQMusicRuntimePlan.HD_PACKAGE))
