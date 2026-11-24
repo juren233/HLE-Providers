@@ -2973,6 +2973,22 @@ internal object AppleMusicHookProfiles {
     }
 
     /**
+     * 1626 的目标与 1624 逐项相同：1624 档案对 1626 原包（SHA-256
+     * d56b8cfbda542474e77bdc3d7f7a037714e143a27107123fda824ab352541518）校验 0 错误，并已用 1609
+     * 原包的代码指纹复核角色。两个版本共用同一份目标定义，避免出现两份会各自漂移的拷贝。
+     */
+    private val APPLE_MUSIC_7_0_3_1626 by lazy {
+        AppleMusicHookProfile(
+            id = "am-7.0.3-1626",
+            versionName = "7.0.3",
+            versionCodes = setOf(1626L),
+            matchVersionName = false,
+            settingsDataCategoryHasNoSimGate = true,
+            hookTargets = verified7021624Targets(),
+        )
+    }
+
+    /**
      * Original 1624 base.apk SHA-256: c53c914f4d5ac91dda8b7faa6d65ebcd60b76c8774d0425ab91d856259dc42b5.
      * Descriptors come from the original four DEX files and are verified by AppleMusicProfileBinaryTest.
      * Baseline is 1622. 1624 renamed the Compose runtime and LiveData types and moved several
@@ -3832,6 +3848,7 @@ internal object AppleMusicHookProfiles {
 
     /** 新版本档案必须放在前面，未知版本回退时优先尝试较新的目标。 */
     private val KNOWN_PROFILES = listOf(
+        APPLE_MUSIC_7_0_3_1626,
         APPLE_MUSIC_7_0_2_1624,
         APPLE_MUSIC_7_0_1_1622,
         APPLE_MUSIC_7_0_0_1614,
@@ -5033,47 +5050,50 @@ internal object AppleMusicHookProfiles {
         // Preserve the OLD compatibility pool within 6.5.0-6.5.2 (650 intentionally
         // borrows some 651 groups). Unknown APKs still try newest-first.
         val compatible = when (known) {
-            null, APPLE_MUSIC_7_0_2_1624 -> KNOWN_PROFILES
-            APPLE_MUSIC_7_0_1_1622 -> KNOWN_PROFILES.filterNot { it === APPLE_MUSIC_7_0_2_1624 }
+            null, APPLE_MUSIC_7_0_3_1626 -> KNOWN_PROFILES
+            APPLE_MUSIC_7_0_2_1624 -> KNOWN_PROFILES.filterNot { it === APPLE_MUSIC_7_0_3_1626 }
+            APPLE_MUSIC_7_0_1_1622 -> KNOWN_PROFILES.filterNot {
+                it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
+            }
             APPLE_MUSIC_7_0_0_1614 -> KNOWN_PROFILES.filterNot {
-                it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624
+                it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
             }
             APPLE_MUSIC_7_0_0_1613 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622 ||
-                    it === APPLE_MUSIC_7_0_2_1624
+                    it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
             }
             APPLE_MUSIC_7_0_0_1611 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
-                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624
+                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
             }
             APPLE_MUSIC_7_0_0_1609 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
                     it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622 ||
-                    it === APPLE_MUSIC_7_0_2_1624
+                    it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
             }
             APPLE_MUSIC_7_0_0_1607 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1609 || it === APPLE_MUSIC_7_0_0_1611 ||
                     it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
-                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624
+                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
             }
             APPLE_MUSIC_7_0_0 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0_1607 || it === APPLE_MUSIC_7_0_0_1609 ||
                     it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
                     it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622 ||
-                    it === APPLE_MUSIC_7_0_2_1624
+                    it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
             }
             APPLE_MUSIC_6_5_3 -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_7_0_0 || it === APPLE_MUSIC_7_0_0_1607 ||
                     it === APPLE_MUSIC_7_0_0_1609 || it === APPLE_MUSIC_7_0_0_1611 ||
                     it === APPLE_MUSIC_7_0_0_1613 || it === APPLE_MUSIC_7_0_0_1614 ||
-                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624
+                    it === APPLE_MUSIC_7_0_1_1622 || it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
             }
             else -> KNOWN_PROFILES.filterNot {
                 it === APPLE_MUSIC_6_5_3 || it === APPLE_MUSIC_7_0_0 ||
                     it === APPLE_MUSIC_7_0_0_1607 || it === APPLE_MUSIC_7_0_0_1609 ||
                     it === APPLE_MUSIC_7_0_0_1611 || it === APPLE_MUSIC_7_0_0_1613 ||
                     it === APPLE_MUSIC_7_0_0_1614 || it === APPLE_MUSIC_7_0_1_1622 ||
-                    it === APPLE_MUSIC_7_0_2_1624
+                    it === APPLE_MUSIC_7_0_2_1624 || it === APPLE_MUSIC_7_0_3_1626
             }
         }
         return (exact + compatible.flatMap { profile -> profile.targets(hookPoint) })

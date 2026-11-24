@@ -8,7 +8,7 @@ The checks establish member compatibility, not execution or visual acceptance.
 
 
 def verify_consumer_members(ctx, points, field, method, require, version_code=1607):
-    # Consumer roles are unchanged in 1609/1611/1613/1614/1622/1624; their Media3, lifecycle and Compose
+    # Consumer roles are unchanged in 1609/1611/1613/1614/1622/1624/1626; their Media3, lifecycle and Compose
     # binary types moved. Keep the old APK contracts isolated from the new maps.
     renamed = {
         1609: {'z3.v': 'z3.w', 'z0.y0': 'z0.A0', 'z0.o1': 'z0.r1',
@@ -24,6 +24,9 @@ def verify_consumer_members(ctx, points, field, method, require, version_code=16
                'androidx.lifecycle.G': 'androidx.lifecycle.I', 'kk.l': 'jk.l'},
         # 1624 renamed the Compose state to z0.s1 with policy z0.t1 and the LiveData to H.
         1624: {'z3.v': 'z3.w', 'z0.y0': 'z0.s1', 'z0.o1': 'z0.t1',
+               'androidx.lifecycle.G': 'androidx.lifecycle.H', 'kk.l': 'jk.l'},
+        # 1626 keeps the 1624 binary names for every mapped type (verified against the original DEX).
+        1626: {'z3.v': 'z3.w', 'z0.y0': 'z0.s1', 'z0.o1': 'z0.t1',
                'androidx.lifecycle.G': 'androidx.lifecycle.H', 'kk.l': 'jk.l'},
     }.get(version_code)
     if renamed:
