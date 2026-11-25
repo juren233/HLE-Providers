@@ -411,9 +411,11 @@ internal class AppleLyricsShareExportHooks(
     private fun exportComposed(current: Session, source: File, storyBackground: File?): Boolean {
         val startedAt = SystemClock.elapsedRealtime()
         var backgroundKind = ""
+        var cardShadow = false
         val saved = writeToGallery(current, "jpg", "image/jpeg") { output ->
             val background = background(storyBackground)
             backgroundKind = background.label
+            cardShadow = background.cardShadow
             AppleLyricsShareCardComposer.compose(
                 source = source,
                 background = background,
@@ -425,7 +427,7 @@ internal class AppleLyricsShareExportHooks(
         } ?: return exportRaw(current) { source.inputStream() }
         ProviderLogger.diagnostic(
             "Apple Music 歌词图片已生成: ${SystemClock.elapsedRealtime() - startedAt}ms, " +
-                "background=$backgroundKind",
+                "background=$backgroundKind, cardShadow=$cardShadow",
         )
         return saved
     }
@@ -433,7 +435,8 @@ internal class AppleLyricsShareExportHooks(
     /**
      * Background chosen in the core settings. The custom image falls back to Apple's story
      * background when it is missing or unreadable (no image picked yet, or a core without
-     * Remote File access); Apple's story background falls back to the cover colour.
+     * Remote File access); Apple's story background falls back to the cover colour. Only the
+     * custom colour and custom image carry the card shadow, each with its own switch.
      */
     private fun background(storyBackground: File?): AppleLyricsShareCardComposer.Background {
         val prefs = preferences()
@@ -446,10 +449,13 @@ internal class AppleLyricsShareExportHooks(
                 AppleLyricsShareCardComposer.Background.CoverColor(storyBackground)
             AppleMusicPreferenceKeys.APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_CUSTOM_COLOR ->
                 AppleLyricsShareCardComposer.Background.Flat(
-                    prefs?.getInt(
+                    color = prefs?.getInt(
                         AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_COLOR,
                         AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_COLOR,
                     ) ?: AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_COLOR,
+                    cardShadow = cardShadowEnabled(
+                        AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LYRICS_IMAGE_CUSTOM_COLOR_CARD_SHADOW,
+                    ),
                 )
             AppleMusicPreferenceKeys.APPLE_MUSIC_LYRICS_IMAGE_BACKGROUND_CUSTOM_IMAGE ->
                 customImageBackground() ?: storyImageBackground(storyBackground)
@@ -468,7 +474,20 @@ internal class AppleLyricsShareExportHooks(
             ?.use { AppleLyricsShareCardComposer.decode(it.fileDescriptor) }
     }.onFailure {
         ProviderLogger.error("Apple Music 歌词图片自定义背景读取失败", it)
-    }.getOrNull()?.let { AppleLyricsShareCardComposer.Background.Image(it, "custom_image") }
+    }.getOrNull()?.let {
+        AppleLyricsShareCardComposer.Background.Image(
+            bitmap = it,
+            label = "custom_image",
+            cardShadow = cardShadowEnabled(
+                AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LYRICS_IMAGE_CUSTOM_IMAGE_CARD_SHADOW,
+            ),
+        )
+    }
+
+    private fun cardShadowEnabled(key: String): Boolean = preferences()?.getBoolean(
+        key,
+        AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_CARD_SHADOW,
+    ) ?: AppleMusicPreferenceKeys.DEFAULT_HOOK_APPLE_MUSIC_LYRICS_IMAGE_CARD_SHADOW
 
     private fun qrCodeEnabled(): Boolean = preferences()?.getBoolean(
         AppleMusicPreferenceKeys.KEY_HOOK_APPLE_MUSIC_LYRICS_IMAGE_QR_CODE,

@@ -2,6 +2,7 @@ package com.juren233.hle.providers.applemusic.xposed.lyrics
 
 import com.juren233.hyperlyricsenhanced.contract.AppleLyricsSharePoster
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -117,5 +118,19 @@ class AppleLyricsShareCardComposerTest {
         // 1614 vector: apple top at 0.5 / 80.9, "music" baseline at 79.1 / 80.9.
         assertEquals(100f - capHeight, top + height * 0.5f / 80.9f, 0.01f)
         assertEquals(100f, top + height * 79.1f / 80.9f, 0.01f)
+    }
+
+    @Test
+    fun `cover backgrounds never draw the card shadow and flat colour defaults to none`() {
+        assertFalse(AppleLyricsShareCardComposer.Background.CoverColor(null).cardShadow)
+        assertFalse(AppleLyricsShareCardComposer.Background.Flat(0xFF2C2C2E.toInt()).cardShadow)
+        assertTrue(AppleLyricsShareCardComposer.Background.Flat(0xFF2C2C2E.toInt(), cardShadow = true).cardShadow)
+    }
+
+    @Test
+    fun `card shadow drops a third of its blur radius`() {
+        val spec = AppleLyricsSharePoster.layout(cardWidth = 962, cardHeight = 800, withQr = true)
+
+        assertEquals(spec.shadowRadius / 3f, spec.shadowOffsetY, 0.001f)
     }
 }

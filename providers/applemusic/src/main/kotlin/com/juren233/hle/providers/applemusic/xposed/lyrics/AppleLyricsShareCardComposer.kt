@@ -31,7 +31,8 @@ import java.io.OutputStream
 import kotlin.math.roundToInt
 
 /**
- * Wraps Apple's rendered lyric card into a poster: a background behind the card, a soft shadow
+ * Wraps Apple's rendered lyric card into a poster: a background behind the card, optionally a
+ * soft card shadow (custom colour and custom image backgrounds only, when the user enables it)
  * and, optionally, a footer whose QR code points at the song. Geometry and colours come from
  * [AppleLyricsSharePoster], shared with the core's background preview.
  *
@@ -44,8 +45,15 @@ internal object AppleLyricsShareCardComposer {
         /** Short name for diagnostics (class names are obfuscated in release Packs). */
         val label: String
 
+        /** Whether a soft shadow is drawn under the card. */
+        val cardShadow: Boolean
+
         /** Cover-cropped image; [bitmap] is recycled by [compose]. */
-        class Image(val bitmap: Bitmap, override val label: String) : Background
+        class Image(
+            val bitmap: Bitmap,
+            override val label: String,
+            override val cardShadow: Boolean = false,
+        ) : Background
 
         /**
          * The artwork's dominant colour, darkened. Taken from the artwork thumbnail inside
@@ -54,10 +62,11 @@ internal object AppleLyricsShareCardComposer {
          */
         class CoverColor(val storyBackground: File?) : Background {
             override val label = "cover_color"
+            override val cardShadow = false
         }
 
         /** A flat colour; alpha is ignored so JPEG never sees transparency. */
-        data class Flat(val color: Int) : Background {
+        data class Flat(val color: Int, override val cardShadow: Boolean = false) : Background {
             override val label = "custom_color"
         }
     }
@@ -133,14 +142,16 @@ internal object AppleLyricsShareCardComposer {
                 (spec.cardLeft + card.width).toFloat(),
                 (spec.cardTop + card.height).toFloat(),
             )
-            // Blur-only shadow (no solid fill), so Apple's transparent card corners stay clean
-            // over any backdrop; the rounded rect approximates the card outline.
-            val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = AppleLyricsSharePoster.SHADOW_COLOR
-                maskFilter = BlurMaskFilter(spec.shadowRadius.coerceAtLeast(1f), BlurMaskFilter.Blur.NORMAL)
+            if (background.cardShadow) {
+                // Blur-only shadow (no solid fill), so Apple's transparent card corners stay clean
+                // over any backdrop; the rounded rect approximates the card outline.
+                val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = AppleLyricsSharePoster.SHADOW_COLOR
+                    maskFilter = BlurMaskFilter(spec.shadowRadius.coerceAtLeast(1f), BlurMaskFilter.Blur.NORMAL)
+                }
+                val shadowRect = RectF(cardRect).apply { offset(0f, spec.shadowOffsetY) }
+                canvas.drawRoundRect(shadowRect, spec.cardCornerRadius, spec.cardCornerRadius, shadowPaint)
             }
-            val shadowRect = RectF(cardRect).apply { offset(0f, spec.shadowRadius / 3f) }
-            canvas.drawRoundRect(shadowRect, spec.cardCornerRadius, spec.cardCornerRadius, shadowPaint)
             canvas.drawBitmap(card, spec.cardLeft.toFloat(), spec.cardTop.toFloat(), null)
 
             if (qr != null) drawFooter(canvas, spec, qr, foreground, footer)
